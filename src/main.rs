@@ -10,7 +10,7 @@ use utils::SeededRng;
 use rhythm::{gen_rythm2, transform_rhythm};
 use harmonizer::{gen_voice, harmonise2, HarmonizerState};
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::time::Instant;
 
 fn main() -> std::io::Result<()> {
@@ -104,15 +104,27 @@ fn main() -> std::io::Result<()> {
 }
 
 fn append_to_js_file(notes: &[Note]) -> std::io::Result<()> {
-    let json = serde_json::to_string(notes)?;
+    let path = "/Users/roland/Code/harmonizer/harmonize.js";
     let mut file = OpenOptions::new()
+        .read(true)
         .write(true)
-        .append(true)
-        // Note: This path must exist.
-        .open("/Users/roland/Code/harmonizer/harmonize.js")?;
+        .open(path)?;
+
+    let mut content = String::new();
+    file.read_to_string(&mut content)?;
+
+    if let Some(idx) = content.find("//REPLACE") {
+        // Truncate file and write from the beginning up to the marker + new content
+        let new_content = format!("{}{}\n\n{}\n.writeMidi();",
+            &content[..idx + "//REPLACE".len()],
+            "\n", // Just a newline after REPLACE
+            serde_json::to_string(notes)?
+        );
         
-    writeln!(file, "\n{}", json)?;
-    writeln!(file, "writeMIdi();")?;
+        // Re-open in truncate mode to overwrite
+        let mut file = File::create(path)?;
+        file.write_all(new_content.as_bytes())?;
+    }
     
     Ok(())
 }

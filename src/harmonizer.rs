@@ -454,7 +454,7 @@ fn score_lookahead(
 fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState) -> Vec<Note> {
     let grouped_notes = group_by_start_array(income);
     let beam_width = 5;
-    let lookahead = 5;
+    let lookahead = 1;
 
     let mut beam = vec![BeamCandidate {
         notes: Vec::new(),
