@@ -1,8 +1,8 @@
 use crate::utils::{mod_shim, ArrayExt};
 
 pub fn gen_scale(ap: &[i32], center_octave: i32) -> Vec<i32> {
-    let start = if center_octave - 1 < 0 { 0 } else { center_octave - 1 };
-    let end = center_octave + 1;
+    let start = if center_octave - 1 < 0 { 0 } else { 0 };
+    let end = if center_octave + 1 > 8 { 0 } else { 8 };
     let mut ar = Vec::new();
 
     for i in start..end {
@@ -23,10 +23,10 @@ pub fn get_harmonic_score_adjusted(note_a: i32, note_b: i32) -> f64 {
         effective_dist = 12 + (dist % 12);
     }
 
-    if dist % 12 == 1 || dist % 12 == 11 {
+    if dist % 12 == 1 || dist % 12 == 11 || dist % 12 == 6{
         // "Clash" penalty in JS was -100000000, here we return 0.0 or handle it in mapping
-        // JS returned -100000000. 
-        return -100000000.0;
+        // JS returned -100000000.
+        //return -100000000.0;
     }
 
     let score: f64 = match effective_dist {
@@ -56,30 +56,30 @@ pub fn get_harmonic_score_adjusted(note_a: i32, note_b: i32) -> f64 {
         23 => 0.6,  // Maj 14th
         _ => 0.0,
     };
-    
+
     // JS: return Math.max(0.0, Math.min(1.0, score));
     // But wait, if it returns -100000000 above, the clamp would make it 0.0.
     // The JS code has `if (dist % 12 === 1 || ...)` return -big;
     // THEN `var score = harmonyMap...`
     // THEN `return Math.max(...)`.
-    // So the -big IS Clamped to 0.0? 
+    // So the -big IS Clamped to 0.0?
     // Wait, let's re-read JS.
     // if (...) return -100000000;
     // ...
     // return Math.max(...)
     // The return -100000000 is an EARLY return. So it returns negative.
     // My previous assumption was correct, it returns negative.
-    // The clamp is only for the map lookup part effectively? 
+    // The clamp is only for the map lookup part effectively?
     // No, if it returns early, the clamp isn't reached.
     // So distinct behavior.
-    
+
     score.clamp(0.0, 1.0)
 }
 
 
 pub fn generate_mode_from_steps(root: i32, mode: i32) -> Vec<i32> {
     let step_pattern = vec![2, 2, 1, 2, 2, 2, 1];
-    
+
     // rotate
     let steps_rot = if mode > 0 {
          let split_idx = mode as usize % step_pattern.len();
@@ -88,7 +88,7 @@ pub fn generate_mode_from_steps(root: i32, mode: i32) -> Vec<i32> {
     } else {
         step_pattern.clone()
     };
-    
+
     // remove last? JS: modePattern.pop();
     // Actually we need to walk it.
     let mut mode_pattern = steps_rot;

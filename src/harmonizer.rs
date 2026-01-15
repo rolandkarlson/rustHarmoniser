@@ -3,6 +3,8 @@ use crate::utils::{SeededRng, ArrayExt, mod_shim, sin};
 use crate::music_theory::{get_harmonic_score_adjusted, gen_scale};
 use std::collections::HashMap;
 use crate::schillinger;
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 
 // Helper to get permutations of notes
 pub fn get_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
@@ -33,7 +35,7 @@ pub fn get_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
 pub fn get_distance_score(prev_note: i32, current_note: i32) -> f64 {
     let dist = (prev_note - current_note).abs() as f64;
     if dist == 0.0 {
-        return 10.0;
+        return 1.0;
     }
     let max_jump = 7.0;
     if dist > max_jump {
@@ -178,10 +180,19 @@ pub fn get_harmony_scores(current_note: &Note, notes: &[Note], no_same_note_pena
     if current_lasts.is_empty() {
         current_lasts.push(current_note.pitch);
     }
-    
+
+    let mut no_same_note_penalty = no_same_note_penalty;
+    if current_lasts.len() >= 5 {
+        let first_val = current_lasts[0];
+        if current_lasts.iter().all(|&x| x == first_val) {
+            no_same_note_penalty = false;
+        }
+    }
+
+
     // JS `lastHarmonySum` unused really?
     
-    let sch_scale = get_schillinger_scale(current_note, state);
+    let sch_scale =[0,1,2,3,4,5,6,7,8,9,10,11];// get_schillinger_scale(current_note, state);
     let center_octave = (current_lasts[0] as f64 / 12.0).floor() as i32;
     let sc = gen_scale(&sch_scale, center_octave);
     
@@ -267,13 +278,14 @@ pub fn get_harmony_scores(current_note: &Note, notes: &[Note], no_same_note_pena
 
         // Boundries
         let d = bounds_p.max - note_candidate;
-        // JS: `var channelBoundryMax = [2].get(currentNote.channel)` -> 2
-        if d < 2 {
+        let channel_boundry_max = [2,2,2,2,7][current_note.channel as usize];
+        if d < channel_boundry_max {
              score -= config.no_crossing;
              crossing = true;
         }
         let d2 = note_candidate - bounds_p.min;
-        if d2 < 2 {
+        let channel_boundry_min = [2,2,2,7,1][current_note.channel as usize];
+        if d2 < channel_boundry_min {
             score -= config.no_crossing;
             crossing = true;
         }
@@ -292,14 +304,14 @@ pub fn get_harmony_scores(current_note: &Note, notes: &[Note], no_same_note_pena
                   score -= config.last_note_same;
              }
              
-             let base_dist = (note_candidate - current_note.pitch).abs() as f64;
-             score -= (base_dist / 7.0).powf(10.0);
+             // let base_dist = (note_candidate - current_note.pitch).abs() as f64;
+             // score -= (base_dist / 7.0).powf(3.0);
              
              distance_score = get_distance_score(last_note, note_candidate);
         }
-        
-        let w_harmony = 0.5;
-        let w_smooth = 0.5;
+        let r = 0.0;
+        let w_harmony = 0.5+r;
+        let w_smooth = 0.5-r;
         let sum_score = (harmony_score * w_harmony) + (distance_score * w_smooth) + score;
         
         scores.push(NoteScore {
@@ -393,6 +405,7 @@ fn score_note_group(
     group_score
 }
 
+
 fn score_lookahead(
     grouped_notes: &[Vec<Note>],
     start_idx: usize,
@@ -400,29 +413,25 @@ fn score_lookahead(
     context: &[Note],
     config: &Config,
     state: &HarmonizerState,
-    cache: &mut HashMap<String, f64>,
+    cache: &mut HashMap<u64, f64>,
 ) -> f64 {
     if depth == 0 || start_idx >= grouped_notes.len() {
         return 0.0;
     }
 
-    // Cache key generation
-    // We need a key that uniquely identifies the "state" from the perspective of future scoring.
-    // Future scoring depends on:
-    // 1. Current position (start_idx)
-    // 2. Depth remaining
-    // 3. Context (recent notes affecting harmony/distance)
-    // To be safe, we hash the last few notes of context.
-    // JS used slice(-4).
-    
+    // Cache key generation using Hash
     let context_len = context.len();
     let suffix_len = if context_len > 4 { 4 } else { context_len };
     let suffix = &context[context_len - suffix_len..];
     
-    let mut key = format!("{}_{}_", start_idx, depth);
+    let mut hasher = DefaultHasher::new();
+    start_idx.hash(&mut hasher);
+    depth.hash(&mut hasher);
     for n in suffix {
-        key.push_str(&format!("{},{};", n.pitch, n.channel));
+        n.pitch.hash(&mut hasher);
+        n.channel.hash(&mut hasher);
     }
+    let key = hasher.finish();
     
     if let Some(&val) = cache.get(&key) {
         return val;
@@ -430,20 +439,37 @@ fn score_lookahead(
 
     let current_group = &grouped_notes[start_idx];
     let permutations = get_permutations(current_group);
+    
+    // 1. Calculate local scores for all permutations
+    let mut candidates = Vec::with_capacity(permutations.len());
+    
+    // Optimization: Limit lookahead check to a subset of permutations to avoid factorial explosion
+    // Taking first 20 permutations is enough to get a heuristic estimate
+    for perm in permutations.iter().take(20) {
+        let mut temp_notes = Vec::new();
+        let score = score_note_group(perm, context, &mut temp_notes, false, config, state);
+        candidates.push((score, temp_notes));
+    }
+
+    // 2. Prune: Sort and take top K
+    // Sort descending
+    candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    
+    let k = 2; // Pruning width for lookahead (Reduced from 5 for performance)
+    let top_candidates = candidates.into_iter().take(k);
+
     let mut best_score = -f64::INFINITY;
 
-    for perm in permutations {
-        let mut temp_notes = Vec::new();
-        let mut score = score_note_group(&perm, context, &mut temp_notes, false, config, state);
-        
+    // 3. Recurse only on top K
+    for (local_score, temp_notes) in top_candidates {
         let mut next_context = context.to_vec();
         next_context.extend(temp_notes);
         
         // Recurse
-        score += score_lookahead(grouped_notes, start_idx + 1, depth - 1, &next_context, config, state, cache);
+        let total_score = local_score + score_lookahead(grouped_notes, start_idx + 1, depth - 1, &next_context, config, state, cache);
 
-        if score > best_score {
-            best_score = score;
+        if total_score > best_score {
+            best_score = total_score;
         }
     }
 
@@ -454,16 +480,17 @@ fn score_lookahead(
 fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState) -> Vec<Note> {
     let grouped_notes = group_by_start_array(income);
     let beam_width = 5;
-    let lookahead = 1;
+    let lookahead = 5; // Lookahead depth
 
     let mut beam = vec![BeamCandidate {
         notes: Vec::new(),
         score: 0.0,
     }];
-    
+    let mut ccc = 0.0;
     // JS: candidates loop through groups
     for (i, current_group) in grouped_notes.iter().enumerate() {
         let permutations = get_permutations(current_group);
+        let grouped_notes_ref = &grouped_notes;
         let mut candidates = Vec::new();
         
         // Cache for this step's lookahead to share across beam candidates if they converge?
@@ -474,7 +501,7 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState)
         // OR share it?
         // Contexts will be different for each beam candidate.
         // But if they converge (same last notes), we hit cache.
-        let mut cache = HashMap::new();
+        let mut cache: HashMap<u64, f64> = HashMap::new();
 
         for beam_state in &beam {
             // trim notes to last 30
@@ -504,7 +531,8 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState)
         candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         beam = candidates.into_iter().take(beam_width).collect();
         
-        println!("Processed group {}/{}, best score: {}", i, grouped_notes.len(), beam[0].score);
+        println!("Processed group {}/{}, best score: {}", i, grouped_notes.len(), beam[0].score - ccc);
+        ccc = beam[0].score;
     }
     
     if beam.is_empty() {

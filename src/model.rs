@@ -42,7 +42,7 @@ impl Default for Config {
             last_note_exist_in_voice: 100.0,
             same_direction: 0.0,
             consecutive_octav_fift: 0.0,
-            no_crossing: 0.0,
+            no_crossing: 2000.0,
             last_note_same: 100.0,
             mode: 0,
             interval_exists_in_harmony: 0.0,
