@@ -128,10 +128,7 @@ fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState) -> Vec<i3
     let safe_bar = mod_shim(bar, state.schillinger_notes.len() as i32) as usize;
     let notes = &state.schillinger_notes[safe_bar];
 
-    if notes.len() < 2 {
-        println!("Schillinger scale < 2: {:?}", notes);
-    }
-    
+
     // if current_note.channel > 2 {
     //     // JS: `return [notes[0], notes[2], notes[2]];`
     //     if notes.len() >= 3 {
@@ -182,7 +179,7 @@ pub fn get_harmony_scores(current_note: &Note, notes: &[Note], no_same_note_pena
     }
 
     let mut no_same_note_penalty = no_same_note_penalty;
-    if current_lasts.len() >= 5 {
+    if current_lasts.len() >= 4 {
         let first_val = current_lasts[0];
         if current_lasts.iter().all(|&x| x == first_val) {
             no_same_note_penalty = false;
@@ -191,8 +188,8 @@ pub fn get_harmony_scores(current_note: &Note, notes: &[Note], no_same_note_pena
 
 
     // JS `lastHarmonySum` unused really?
-    
-    let sch_scale =[0,1,2,3,4,5,6,7,8,9,10,11];// get_schillinger_scale(current_note, state);
+    // let sch_scale =[0,1,2,3,4,5,6,7,8,9,10,11];//[0,1,2,3,4,5,6,7,8,9,10,11];// get_schillinger_scale(current_note, state);
+    let sch_scale =get_schillinger_scale(current_note, state);
     let center_octave = (current_lasts[0] as f64 / 12.0).floor() as i32;
     let sc = gen_scale(&sch_scale, center_octave);
     
@@ -326,17 +323,17 @@ pub fn get_harmony_scores(current_note: &Note, notes: &[Note], no_same_note_pena
 }
 
 
-pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channel: i32, muted: i32, rng: &mut SeededRng) -> Vec<Note> {
+pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channel: i32, muted: i32) -> Vec<Note> {
     let mut ar = Vec::new();
     let clip_len = schillinger::CLIP_LEN as f64; 
     let mut pos = 0.0;
     let mut counter = 0;
-    let sf = (rng.random_int(60) + 1) as f64;
+    let sf = (SeededRng::random_int(60) + 1) as f64;
     
     while pos < clip_len {
         let n = base + pitch_shifts[mod_shim(counter, pitch_shifts.len() as i32) as usize];
         let d = rhythm_data[mod_shim(counter, rhythm_data.len() as i32) as usize];
-        let v = 1 + rng.random_int(10) + sin(counter as f64, sf, 10.0) as i32;
+        let v = 1 + SeededRng::random_int(10) + sin(counter as f64, sf, 10.0) as i32;
         ar.push(Note::new(n, pos, d, v, muted, channel));
         pos += d;
         counter += 1;

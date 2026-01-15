@@ -33,7 +33,7 @@ pub fn euclid(steps: i32, pulses: i32, rotate: i32) -> Vec<i32> {
 }
 
 
-pub fn transform_rhythm(rhythm: &[f64], split_chance: f64, merge_chance: f64, rng: &mut SeededRng) -> Vec<f64> {
+pub fn transform_rhythm(rhythm: &[f64], split_chance: f64, merge_chance: f64) -> Vec<f64> {
     let mut new_rhythm = Vec::new();
     let mut skip_next = false;
     let max_duration = 4.0;
@@ -51,7 +51,7 @@ pub fn transform_rhythm(rhythm: &[f64], split_chance: f64, merge_chance: f64, rn
         if i < rhythm.len() - 1 {
              if (rhythm[i+1] - note).abs() < 0.001 { // compare floats equality
                  if (note * 2.0) <= max_duration {
-                     if rng.seeded_random(1.0, 0.0) < merge_chance {
+                     if SeededRng::seeded_random(1.0, 0.0) < merge_chance {
                          new_rhythm.push(note * 2.0);
                          skip_next = true;
                          continue;
@@ -62,7 +62,7 @@ pub fn transform_rhythm(rhythm: &[f64], split_chance: f64, merge_chance: f64, rn
 
         // Split Logic
         if (note / 2.0) >= min_duration {
-            if rng.seeded_random(1.0, 0.0) < split_chance {
+            if SeededRng::seeded_random(1.0, 0.0) < split_chance {
                 let half = note / 2.0;
                 new_rhythm.push(half);
                 new_rhythm.push(half);
@@ -75,11 +75,11 @@ pub fn transform_rhythm(rhythm: &[f64], split_chance: f64, merge_chance: f64, rn
     new_rhythm
 }
 
-pub fn gen_rythm2(len: f64, pn: &Vec<f64>, rng: &mut SeededRng) -> Vec<f64> {
+pub fn gen_rythm2(len: f64, pn: &Vec<f64>) -> Vec<f64> {
     let mut ret = Vec::new();
     let mut current_len = len;
     for _ in 0..300 {
-        let r_idx = rng.random_int(10) as usize; 
+        let r_idx = SeededRng::random_int(10) as usize; 
         // pn.get(randomInt) -> checks bound? JS array.get is mod.
         // We need to handle mod access manually or use a helper
         let r_val = pn[ (r_idx as i32 % pn.len() as i32) as usize ]; // simplistic mod

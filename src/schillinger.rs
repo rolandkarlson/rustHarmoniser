@@ -6,7 +6,7 @@ const PL: i32 = 8;
 pub(crate) const CLIP_LEN: i32 = 8 * 4 * 10; // JS `var CLIP_LEN = PL;`
 const EXP: i32 = 2;
 
-fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32, rng: &mut SeededRng) -> Option<Vec<i32>> {
+fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32) -> Option<Vec<i32>> {
     let max_attempts = 1000000;
     let mut attempts = 0;
 
@@ -16,7 +16,7 @@ fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32, rn
         let mut last_value = -999;
 
         for _ in 1..sequence_length {
-            let random_index = (rng.seeded_random(1.0, 0.0) * possible_steps.len() as f64).floor() as usize;
+            let random_index = (SeededRng::seeded_random(1.0, 0.0) * possible_steps.len() as f64).floor() as usize;
             let mut step = possible_steps[random_index] * EXP;
 
             if last_value + step == 0 {
@@ -75,8 +75,8 @@ fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32, rn
     None
 }
 
-pub fn gen_schillinger_progression(rng: &mut SeededRng) -> Vec<Vec<i32>> {
-    let bars = CLIP_LEN / 4; // 8 / 4 = 2 bars?
+pub fn gen_schillinger_progression() -> Vec<Vec<i32>> {
+    let bars = 4 * PL;
     // Wait, JS: `var CLIP_LEN = PL;` -> 8.
     // `var bars = CLIP_LEN / 4;` -> 2.
     // Loop `for (var i = 0; i < bars; i++)`.
@@ -88,7 +88,7 @@ pub fn gen_schillinger_progression(rng: &mut SeededRng) -> Vec<Vec<i32>> {
     // JS `srm` init:
     // `var srm = [ findSequenceWithCondition([-2, -2, -2, -1, -3], PL) ];`
     
-    let seq_opt = find_sequence_with_condition(&[-2, -2, -2, -1, -3], PL, rng);
+    let seq_opt = find_sequence_with_condition(&[-2, -2, -2, -1, -3], PL);
     let seq = seq_opt.unwrap_or(vec![0; PL as usize]); // Fallback? JS logs error and returns null.
     // We'll trust RNG seed matches or just handle it.
 
@@ -98,7 +98,7 @@ pub fn gen_schillinger_progression(rng: &mut SeededRng) -> Vec<Vec<i32>> {
     let scale = generate_mode_from_steps(0, 0);
     
     // JS `get` is wrap around access.
-    let n_struct_base = vec![0, 1, 2];
+    let n_struct_base = vec![0, 1, 2,4,6];
     let ex_base = vec![2]; // `var ex = [2].get(i);`
 
     for i in 0..bars {
@@ -110,15 +110,15 @@ pub fn gen_schillinger_progression(rng: &mut SeededRng) -> Vec<Vec<i32>> {
         let n_struct = &n_struct_base;
         
         // `var ex = [2].get(i)` -> always 2.
-        let ex = 2;
+        let ex = [2,4,5,2][mod_shim(i, 4) as usize];
 
         let notes: Vec<i32> = n_struct.iter().map(|&itm| {
              let idx = (itm * ex) + root_sequence;
              // scale.get(idx)
              scale[mod_shim(idx, scale.len() as i32) as usize]
         }).collect();
-        
-        root_sequence = mod_shim(root_sequence - 4, scale.len() as i32);
+        let root = seq[i as usize%seq.len()];
+        root_sequence = mod_shim(root_sequence - root, scale.len() as i32);
         chord_notes.push(notes);
     }
     

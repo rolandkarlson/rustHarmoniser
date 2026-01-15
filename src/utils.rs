@@ -1,4 +1,8 @@
 use std::cell::RefCell;
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+static GLOBAL_RNG: Lazy<Mutex<SeededRng>> = Lazy::new(|| Mutex::new(SeededRng::new(5443343433.0)));
 
 pub struct SeededRng {
     seed: f64,
@@ -9,33 +13,37 @@ impl SeededRng {
         Self { seed }
     }
 
-    pub fn random(&mut self) -> f64 {
+    // Instance methods
+    fn _random(&mut self) -> f64 {
         // Math.seed = (Math.seed * 9301 + 49297) % 233280;
         // var rnd = Math.seed / 233280.0;
         self.seed = (self.seed * 9301.0 + 49297.0) % 233280.0;
         self.seed / 233280.0
     }
 
-    pub fn seeded_random(&mut self, max: f64, min: f64) -> f64 {
+    fn _seeded_random(&mut self, max: f64, min: f64) -> f64 {
         let max = if max == 0.0 { 1.0 } else { max };
-        // min default is 0.0 in JS if falsy, but here we pass it explicitly
-        
-        // Ensure deterministic behavior matching JS:
-        // Math.seed = (Math.seed * 9301 + 49297) % 233280;
-        // var rnd = Math.seed / 233280.0;
-        // return min + rnd * (max - min);
-        
-        let rnd = self.random();
+        let rnd = self._random();
         min + rnd * (max - min)
     }
 
-    pub fn random_int(&mut self, max: i32) -> i32 {
-        (self.seeded_random(max as f64, 0.0)).floor() as i32
+    fn _random_int(&mut self, max: i32) -> i32 {
+        (self._seeded_random(max as f64, 0.0)).floor() as i32
     }
-}
 
-// Global thread-local RNG to mimic the global `Math.seed` in JS if needed,
-// or we can pass it around. JS uses a global.
+    // Static implementations accessing GLOBAL_RNG
+    pub fn random() -> f64 {
+        GLOBAL_RNG.lock().unwrap()._random()
+    }
+
+    pub fn seeded_random(max: f64, min: f64) -> f64 {
+        GLOBAL_RNG.lock().unwrap()._seeded_random(max, min)
+    }
+
+    pub fn random_int(max: i32) -> i32 {
+        GLOBAL_RNG.lock().unwrap()._random_int(max)
+    }
+}// or we can pass it around. JS uses a global.
 // Let's try to pass it around for better Rust practice, or use a RefCell thread local if it gets too hairy.
 
 pub fn mod_shim(x: i32, m: i32) -> i32 {

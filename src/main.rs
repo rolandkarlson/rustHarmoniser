@@ -6,7 +6,7 @@ mod harmonizer;
 mod schillinger;
 
 use model::{Config, Note};
-use utils::SeededRng;
+
 use rhythm::{gen_rythm2, transform_rhythm};
 use harmonizer::{gen_voice, harmonise2, HarmonizerState};
 use std::fs::{File, OpenOptions};
@@ -16,7 +16,7 @@ use std::time::Instant;
 fn main() -> std::io::Result<()> {
     let start_time = Instant::now();
     // 1. Setup
-    let mut rng = SeededRng::new(5443343433.0);
+
     let config = Config::default();
     
     // 2. Rhythm Generation Rules (Simplified port)
@@ -43,7 +43,7 @@ fn main() -> std::io::Result<()> {
         // Wait, `genRythm2` takes `pn` (pattern notes).
         
         for _ in 0..80 { 
-            let ss = gen_rythm2(4.0, &vec![1.0], &mut rng);
+            let ss = gen_rythm2(4.0, &vec![1.0]);
             // JS: for (var i=0; i<PL; i++) rrr.push(ss); PL=8
             for _ in 0..8 {
                 rrr.extend(ss.clone());
@@ -63,14 +63,14 @@ fn main() -> std::io::Result<()> {
     
     let mut income = Vec::new();
     
-    income.extend(gen_voice(70, &rythm_for_voice[0], &[0], 0, 1, &mut rng));
-    income.extend(gen_voice(65, &rythm_for_voice[1], &[0], 1, 1, &mut rng));
-    income.extend(gen_voice(60, &rythm_for_voice[2], &[0], 2, 1, &mut rng));
+    income.extend(gen_voice(70, &rythm_for_voice[0], &[0], 0, 1));
+    income.extend(gen_voice(65, &rythm_for_voice[1], &[0], 1, 1));
+    income.extend(gen_voice(60, &rythm_for_voice[2], &[0], 2, 1));
     
     // Voices 3 and 4 have static rhythm [4] in JS code
     let simple_four = vec![4.0];
-    income.extend(gen_voice(50, &simple_four, &[0], 3, 1, &mut rng));
-    income.extend(gen_voice(40, &simple_four, &[0], 4, 1, &mut rng));
+    income.extend(gen_voice(50, &simple_four, &[0], 3, 1));
+    income.extend(gen_voice(40, &simple_four, &[0], 4, 1));
 
     // Sort income by start time then pitch
     income.sort_by(|a, b| {
@@ -82,7 +82,7 @@ fn main() -> std::io::Result<()> {
     });
 
     // 4. Harmonize
-    let schillinger_notes = schillinger::gen_schillinger_progression(&mut rng);
+    let schillinger_notes = schillinger::gen_schillinger_progression();
     let state = HarmonizerState {
         schillinger_notes,
     };
