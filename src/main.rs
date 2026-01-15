@@ -43,7 +43,7 @@ fn main() -> std::io::Result<()> {
         // Wait, `genRythm2` takes `pn` (pattern notes).
         
         for _ in 0..80 { 
-            let ss = gen_rythm2(4.0, &vec![1.0]);
+            let ss = gen_rythm2(4.0, &vec![4.0]);
             // JS: for (var i=0; i<PL; i++) rrr.push(ss); PL=8
             for _ in 0..8 {
                 rrr.extend(ss.clone());
@@ -104,7 +104,7 @@ fn main() -> std::io::Result<()> {
 }
 
 fn append_to_js_file(notes: &[Note]) -> std::io::Result<()> {
-    let path = "/Users/roland/Code/harmonizer/harmonize.js";
+    let path = "C:\\Users\\rolan\\Documents\\Ableton\\User Library\\Presets\\MIDI Effects\\Max MIDI Effect\\harmonizer\\harmonize.js";
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)

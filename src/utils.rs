@@ -1,8 +1,8 @@
 use std::cell::RefCell;
-use std::sync::Mutex;
-use once_cell::sync::Lazy;
 
-static GLOBAL_RNG: Lazy<Mutex<SeededRng>> = Lazy::new(|| Mutex::new(SeededRng::new(5443343433.0)));
+thread_local! {
+    static THREAD_RNG: RefCell<SeededRng> = RefCell::new(SeededRng::new(5443343433.0));
+}
 
 pub struct SeededRng {
     seed: f64,
@@ -15,8 +15,6 @@ impl SeededRng {
 
     // Instance methods
     fn _random(&mut self) -> f64 {
-        // Math.seed = (Math.seed * 9301 + 49297) % 233280;
-        // var rnd = Math.seed / 233280.0;
         self.seed = (self.seed * 9301.0 + 49297.0) % 233280.0;
         self.seed / 233280.0
     }
@@ -31,17 +29,17 @@ impl SeededRng {
         (self._seeded_random(max as f64, 0.0)).floor() as i32
     }
 
-    // Static implementations accessing GLOBAL_RNG
+    // Static implementations using thread-local RNG (no mutex contention)
     pub fn random() -> f64 {
-        GLOBAL_RNG.lock().unwrap()._random()
+        THREAD_RNG.with(|rng| rng.borrow_mut()._random())
     }
 
     pub fn seeded_random(max: f64, min: f64) -> f64 {
-        GLOBAL_RNG.lock().unwrap()._seeded_random(max, min)
+        THREAD_RNG.with(|rng| rng.borrow_mut()._seeded_random(max, min))
     }
 
     pub fn random_int(max: i32) -> i32 {
-        GLOBAL_RNG.lock().unwrap()._random_int(max)
+        THREAD_RNG.with(|rng| rng.borrow_mut()._random_int(max))
     }
 }// or we can pass it around. JS uses a global.
 // Let's try to pass it around for better Rust practice, or use a RefCell thread local if it gets too hairy.

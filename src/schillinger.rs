@@ -3,7 +3,7 @@ use crate::music_theory::{generate_mode_from_steps};
 
 // PL = 8 in JS
 const PL: i32 = 8;
-pub(crate) const CLIP_LEN: i32 = 8 * 4 * 10; // JS `var CLIP_LEN = PL;`
+pub(crate) const CLIP_LEN: i32 = 8 * 4 * 10 ; // JS `var CLIP_LEN = PL;`
 const EXP: i32 = 2;
 
 fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32) -> Option<Vec<i32>> {
