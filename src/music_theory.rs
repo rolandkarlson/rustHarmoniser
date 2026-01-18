@@ -26,7 +26,7 @@ pub fn get_harmonic_score_adjusted(note_a: i32, note_b: i32) -> f64 {
     if dist % 12 == 1 || dist % 12 == 11 || dist % 12 == 6{
         // "Clash" penalty in JS was -100000000, here we return 0.0 or handle it in mapping
         // JS returned -100000000.
-        //return -100000000.0;
+        return -100000000.0;
     }
 
     let score: f64 = match effective_dist {

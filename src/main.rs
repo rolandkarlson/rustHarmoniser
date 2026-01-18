@@ -104,7 +104,9 @@ fn main() -> std::io::Result<()> {
 }
 
 fn append_to_js_file(notes: &[Note]) -> std::io::Result<()> {
-    let path = "C:\\Users\\rolan\\Documents\\Ableton\\User Library\\Presets\\MIDI Effects\\Max MIDI Effect\\harmonizer\\harmonize.js";
+   // let path = "C:\\Users\\rolan\\Documents\\Ableton\\User Library\\Presets\\MIDI Effects\\Max MIDI Effect\\harmonizer\\harmonize.js";
+    let path = "/Users/roland/Code/harmonizer/harmonize.js";
+
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
