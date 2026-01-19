@@ -172,7 +172,7 @@ pub fn get_harmony_scores(current_note: &Note, notes: &[Note], no_same_note_pena
     let current_on_same_start_harmony = get_chords_on_exact_position(notes, current_note.start);
     let current_on_same_end_harmony = get_chords_on_exact_end_position(notes, current_note.start);
     let last_harmony = get_chords_on_position(notes, current_note.start - 1.0);
-    let mut current_lasts = get_last_on_channel(notes, current_note.start, current_note.channel, 6);
+    let mut current_lasts = get_last_on_channel(notes, current_note.start, current_note.channel, 3);
     let bounds_p = get_chords_on_position_boundries(notes, current_note.start - 0.1, current_note.channel);
     let is_outer_voice = current_note.channel == 0 || current_note.channel == 3;
 
@@ -188,6 +188,9 @@ pub fn get_harmony_scores(current_note: &Note, notes: &[Note], no_same_note_pena
         }
     }
 
+
+    let seq = [[0,3,12,1], [0,3,-5,1], [0,3,4,1], [0,3,4,1],[0,3,4,1]].get_wrapped(current_note.channel as usize).get_wrapped((current_note.start / (4.0*8.0)) as usize);
+
     // OPTIMIZATION: Only consider notes within ±7 semitones of last note
     // This reduces candidates from ~96 to ~15, dramatically reducing scoring work
     let last_note = if !current_lasts.is_empty() { current_lasts[0] } else { current_note.pitch };
@@ -195,8 +198,10 @@ pub fn get_harmony_scores(current_note: &Note, notes: &[Note], no_same_note_pena
     let min_pitch = (last_note - range).max(24); // Don't go below MIDI 24
     let max_pitch = (last_note + range).min(96); // Don't go above MIDI 96
 
-    let sc: Vec<i32> = (min_pitch..=max_pitch).collect();
-
+   // let sc: Vec<i32> = (min_pitch..=max_pitch).collect();
+    let sch_scale =get_schillinger_scale(current_note, state);
+    let center_octave = (current_lasts[0] as f64 / 12.0).floor() as i32;
+    let sc = gen_scale(&sch_scale, center_octave);
     // Pre-allocate scores vector
     let mut scores = Vec::with_capacity(sc.len());
 
@@ -304,25 +309,28 @@ pub fn get_harmony_scores(current_note: &Note, notes: &[Note], no_same_note_pena
             crossing = true;
         }
 
+
         // Distance score with last note
         if !current_lasts.is_empty() {
             if current_lasts.contains(&note_candidate) && !no_same_note_penalty {
                 let count = current_lasts.iter().filter(|&&x| x == note_candidate).count();
-                score -= config.last_note_exist_in_voice * count as f64;
+                if(count>=2){
+                    score -=config.last_note_exist_in_voice
+                }
             }
 
             if last_note == note_candidate && !no_same_note_penalty {
                 score -= config.last_note_same;
             }
 
-            let base_dist = (note_candidate - current_note.pitch).abs() as f64;
+            let base_dist = (note_candidate - current_note.pitch + seq).abs() as f64;
             // OPTIMIZATION: Use multiplication instead of powf(3.0)
-            let normalized = base_dist / 7.0;
+            let normalized = base_dist / 8.0;
             score -= normalized * normalized * normalized;
 
             distance_score = get_distance_score(last_note, note_candidate);
         }
-        let r = -0.2;
+        let r = 0.1;
 
         let w_harmony = 0.5+r;
         let w_smooth = 0.5-r;
@@ -445,7 +453,7 @@ fn score_lookahead(
 
     // Cache key generation using Hash
     let context_len = context.len();
-    let suffix_len = if context_len > 4 { 4 } else { context_len };
+    let suffix_len = if context_len > 10 { 10 } else { context_len };
     let suffix = &context[context_len - suffix_len..];
 
     let mut hasher = FxHasher64::default();
@@ -476,7 +484,7 @@ fn score_lookahead(
     // 2. Prune: Sort and take top K
     let mut sorted_candidates = candidates;
     sorted_candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-
+    //
     let k = 2; // Pruning width for lookahead
     let top_candidates: Vec<_> = sorted_candidates.into_iter().take(k).collect();
 

@@ -59,7 +59,7 @@ pub trait ArrayExt<T> {
     fn find_closest(&self, target: i32, exclude_list: &[i32]) -> i32 where T: Into<i32> + Copy;
 }
 
-impl<T> ArrayExt<T> for Vec<T> {
+impl<T> ArrayExt<T> for [T] {
     fn get_wrapped(&self, index: usize) -> &T {
         &self[mod_shim(index as i32, self.len() as i32) as usize]
     }

@@ -1,3 +1,4 @@
+use std::cmp::min;
 use crate::utils::{mod_shim, ArrayExt};
 
 pub fn gen_scale(ap: &[i32], center_octave: i32) -> Vec<i32> {
@@ -22,8 +23,8 @@ pub fn get_harmonic_score_adjusted(note_a: i32, note_b: i32) -> f64 {
     if dist > 23 {
         effective_dist = 12 + (dist % 12);
     }
-
-    if dist % 12 == 1 || dist % 12 == 11 || dist % 12 == 6{
+    //
+    if dist % 12 == 1 || dist % 12 == 11 {
         // "Clash" penalty in JS was -100000000, here we return 0.0 or handle it in mapping
         // JS returned -100000000.
         return -100000000.0;
@@ -31,7 +32,7 @@ pub fn get_harmonic_score_adjusted(note_a: i32, note_b: i32) -> f64 {
 
     let score: f64 = match effective_dist {
         0 => 1.0,   // Unison
-        1 => 0.0,   // Min 2nd
+        1 => -1.0,   // Min 2nd
         2 => 0.2,   // Maj 2nd
         3 => 0.6,   // Min 3rd
         4 => 0.8,   // Maj 3rd
@@ -43,7 +44,7 @@ pub fn get_harmonic_score_adjusted(note_a: i32, note_b: i32) -> f64 {
         10 => 0.3,  // Min 7th
         11 => 0.4,  // Maj 7th
         12 => 1.0,  // Octave
-        13 => 0.0,  // Min 9th
+        13 => -1.0,  // Min 9th
         14 => 0.85, // Maj 9th
         15 => 0.7,  // Min 10th
         16 => 0.9,  // Maj 10th

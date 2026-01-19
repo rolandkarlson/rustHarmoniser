@@ -98,7 +98,7 @@ pub fn gen_schillinger_progression() -> Vec<Vec<i32>> {
     let scale = generate_mode_from_steps(0, 0);
     
     // JS `get` is wrap around access.
-    let n_struct_base = vec![0, 1, 2,4,6];
+    let n_struct_base = vec![0, 1, 2,3];
     let ex_base = vec![2]; // `var ex = [2].get(i);`
 
     for i in 0..bars {
@@ -108,9 +108,10 @@ pub fn gen_schillinger_progression() -> Vec<Vec<i32>> {
         // `[[...]].get(i)` where length is 1. So it always gets `[0, 1, 2, 4, 6]`.
         // My bad, `[[0, 1, 2, 4, 6]]` has length 1.
         let n_struct = &n_struct_base;
-        
+
         // `var ex = [2].get(i)` -> always 2.
-        let ex = [2,4,5,2][mod_shim(i, 4) as usize];
+
+        let ex = [2][mod_shim(i, 1) as usize];
 
         let notes: Vec<i32> = n_struct.iter().map(|&itm| {
              let idx = (itm * ex) + root_sequence;
