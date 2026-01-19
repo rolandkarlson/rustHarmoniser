@@ -172,7 +172,7 @@ pub fn get_harmony_scores(current_note: &Note, notes: &[Note], no_same_note_pena
     let current_on_same_start_harmony = get_chords_on_exact_position(notes, current_note.start);
     let current_on_same_end_harmony = get_chords_on_exact_end_position(notes, current_note.start);
     let last_harmony = get_chords_on_position(notes, current_note.start - 1.0);
-    let mut current_lasts = get_last_on_channel(notes, current_note.start, current_note.channel, 3);
+    let mut current_lasts = get_last_on_channel(notes, current_note.start, current_note.channel, 5);
     let bounds_p = get_chords_on_position_boundries(notes, current_note.start - 0.1, current_note.channel);
     let is_outer_voice = current_note.channel == 0 || current_note.channel == 3;
 
@@ -198,16 +198,17 @@ pub fn get_harmony_scores(current_note: &Note, notes: &[Note], no_same_note_pena
     let min_pitch = (last_note - range).max(24); // Don't go below MIDI 24
     let max_pitch = (last_note + range).min(96); // Don't go above MIDI 96
 
-   // let sc: Vec<i32> = (min_pitch..=max_pitch).collect();
-    let sch_scale =get_schillinger_scale(current_note, state);
-    let center_octave = (current_lasts[0] as f64 / 12.0).floor() as i32;
-    let sc = gen_scale(&sch_scale, center_octave);
+    let sc: Vec<i32> = (min_pitch..=max_pitch).collect();
+    // let sch_scale =get_schillinger_scale(current_note, state);
+    // let center_octave = (current_lasts[0] as f64 / 12.0).floor() as i32;
+    // let sc = gen_scale(&sch_scale, center_octave);
     // Pre-allocate scores vector
     let mut scores = Vec::with_capacity(sc.len());
 
     // OPTIMIZATION: Compute intervals ONCE outside the candidate loop
     let last_harmony_intervals: Vec<i32> = if !last_harmony.is_empty() {
-        let mut intervals = Vec::with_capacity(last_harmony.len() * (last_harmony.len() - 1) / 2);
+        let len = last_harmony.len();
+        let mut intervals = Vec::with_capacity(if len > 0 { len * (len - 1) / 2 } else { 0 });
         for i in 0..last_harmony.len() {
             for j in (i+1)..last_harmony.len() {
                 intervals.push((last_harmony[i] - last_harmony[j]).abs() % 12);
@@ -219,7 +220,8 @@ pub fn get_harmony_scores(current_note: &Note, notes: &[Note], no_same_note_pena
     };
 
     let current_harmony_intervals: Vec<i32> = {
-        let mut intervals = Vec::with_capacity(current_harmony.len() * (current_harmony.len() - 1) / 2);
+        let len = current_harmony.len();
+        let mut intervals = Vec::with_capacity(if len > 0 { len * (len - 1) / 2 } else { 0 });
         for i in 0..current_harmony.len() {
             for j in (i+1)..current_harmony.len() {
                 intervals.push((current_harmony[i] - current_harmony[j]).abs() % 12);
