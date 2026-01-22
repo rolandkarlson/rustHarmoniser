@@ -25,6 +25,19 @@ impl Note {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct VoiceState {
+    pub pitches: [u8; 16], // 0 = rest, 1-127 = midi pitch
+}
+
+impl Default for VoiceState {
+    fn default() -> Self {
+        Self {
+            pitches: [0; 16],
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Config {
     pub last_note_exist_in_voice: f64,
@@ -40,12 +53,12 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             last_note_exist_in_voice: 100.0,
-            same_direction: 1.0,
+            same_direction: 0.0,
             consecutive_octav_fift: 0.0,
             no_crossing: 2000.0,
             last_note_same: 100.0,
             mode: 0,
-            interval_exists_in_harmony: 30.0,
+            interval_exists_in_harmony: 0.0,
         }
     }
 }

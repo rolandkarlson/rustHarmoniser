@@ -12,6 +12,7 @@ use harmonizer::{gen_voice, harmonise2, HarmonizerState};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::time::Instant;
+use crate::harmonizer::viterbi_harmonise;
 
 fn main() -> std::io::Result<()> {
     let start_time = Instant::now();

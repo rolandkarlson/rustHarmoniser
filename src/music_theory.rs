@@ -14,67 +14,54 @@ pub fn gen_scale(ap: &[i32], center_octave: i32) -> Vec<i32> {
     ar
 }
 
+// Cost of intervals 0..23. Access is O(1).
+// Special "Clash" penalty of -100,000,000.0 is encoded directly at indices 1, 11, 13, 23.
+pub const INTERVAL_SCORES: [f32; 24] = [
+    1.0,           // 0: Unison
+    -100_000_000.0, // 1: Min 2nd (Clash)
+    0.2,           // 2: Maj 2nd
+    0.6,           // 3: Min 3rd
+    0.8,           // 4: Maj 3rd
+    0.7,           // 5: P4
+    0.0,           // 6: Tritone
+    1.0,           // 7: P5
+    0.7,           // 8: Min 6th
+    0.8,           // 9: Maj 6th
+    0.3,           // 10: Min 7th
+    -100_000_000.0, // 11: Maj 7th (Clash)
+    1.0,           // 12: Octave
+    -100_000_000.0, // 13: Min 9th (Clash - 1 % 12 == 1)
+    0.85,          // 14: Maj 9th
+    0.7,           // 15: Min 10th
+    0.9,           // 16: Maj 10th
+    0.7,           // 17: P11
+    0.2,           // 18: #11
+    1.0,           // 19: P12
+    0.7,           // 20: Min 13th
+    0.85,          // 21: Maj 13th
+    0.5,           // 22: Min 14th
+    -100_000_000.0, // 23: Maj 14th (Clash - 23 % 12 == 11)
+];
+
 pub fn get_harmonic_score_adjusted(note_a: i32, note_b: i32) -> f64 {
-    let low_note = note_a.min(note_b);
-    let high_note = note_a.max(note_b);
-    let dist = high_note - low_note;
+    let dist = (note_a - note_b).abs();
 
-    let mut effective_dist = dist;
-    if dist > 23 {
-        effective_dist = 12 + (dist % 12);
-    }
-    //
-    if dist % 12 == 1 || dist % 12 == 11 {
-        // "Clash" penalty in JS was -100000000, here we return 0.0 or handle it in mapping
-        // JS returned -100000000.
-        return -100000000.0;
-    }
-
-    let score: f64 = match effective_dist {
-        0 => 1.0,   // Unison
-        1 => -1.0,   // Min 2nd
-        2 => 0.2,   // Maj 2nd
-        3 => 0.6,   // Min 3rd
-        4 => 0.8,   // Maj 3rd
-        5 => 0.7,   // P4
-        6 => 0.0,   // Tritone
-        7 => 1.0,   // P5
-        8 => 0.7,   // Min 6th
-        9 => 0.8,   // Maj 6th
-        10 => 0.3,  // Min 7th
-        11 => 0.4,  // Maj 7th
-        12 => 1.0,  // Octave
-        13 => -1.0,  // Min 9th
-        14 => 0.85, // Maj 9th
-        15 => 0.7,  // Min 10th
-        16 => 0.9,  // Maj 10th
-        17 => 0.7,  // P11
-        18 => 0.2,  // #11
-        19 => 1.0,  // P12
-        20 => 0.7,  // Min 13th
-        21 => 0.85, // Maj 13th
-        22 => 0.5,  // Min 14th
-        23 => 0.6,  // Maj 14th
-        _ => 0.0,
+    let effective_dist = if dist > 23 {
+        12 + (dist % 12)
+    } else {
+        dist
+    };
+    
+    // Safety clamp to 23 not strictly needed if logic is sound, but good for rust panic avoidance
+    let idx = if effective_dist > 23 { 
+        // fallback logic for very large distances if any?
+        // Logic says 12 + (dist % 12), so max is 12 + 11 = 23.
+        effective_dist 
+    } else { 
+        effective_dist 
     };
 
-    // JS: return Math.max(0.0, Math.min(1.0, score));
-    // But wait, if it returns -100000000 above, the clamp would make it 0.0.
-    // The JS code has `if (dist % 12 === 1 || ...)` return -big;
-    // THEN `var score = harmonyMap...`
-    // THEN `return Math.max(...)`.
-    // So the -big IS Clamped to 0.0?
-    // Wait, let's re-read JS.
-    // if (...) return -100000000;
-    // ...
-    // return Math.max(...)
-    // The return -100000000 is an EARLY return. So it returns negative.
-    // My previous assumption was correct, it returns negative.
-    // The clamp is only for the map lookup part effectively?
-    // No, if it returns early, the clamp isn't reached.
-    // So distinct behavior.
-
-    score.clamp(0.0, 1.0)
+    INTERVAL_SCORES[idx as usize] as f64
 }
 
 
@@ -105,4 +92,3 @@ pub fn generate_mode_from_steps(root: i32, mode: i32) -> Vec<i32> {
     mode_notes.sort();
     mode_notes
 }
-
