@@ -30,33 +30,45 @@ pub fn get_harmonic_score_adjusted(note_a: i32, note_b: i32) -> f64 {
         return -100000000.0;
     }
 
-    let score: f64 = match effective_dist {
+    let score: f64 = match effective_dist%6 {
         0 => 1.0,   // Unison
         1 => -1.0,   // Min 2nd
         2 => 0.2,   // Maj 2nd
         3 => 0.6,   // Min 3rd
         4 => 0.8,   // Maj 3rd
-        5 => 0.7,   // P4
-        6 => 0.0,   // Tritone
-        7 => 1.0,   // P5
-        8 => 0.7,   // Min 6th
-        9 => 0.8,   // Maj 6th
-        10 => 0.3,  // Min 7th
-        11 => 0.4,  // Maj 7th
-        12 => 1.0,  // Octave
-        13 => -1.0,  // Min 9th
-        14 => 0.85, // Maj 9th
-        15 => 0.7,  // Min 10th
-        16 => 0.9,  // Maj 10th
-        17 => 0.7,  // P11
-        18 => 0.2,  // #11
-        19 => 1.0,  // P12
-        20 => 0.7,  // Min 13th
-        21 => 0.85, // Maj 13th
-        22 => 0.5,  // Min 14th
-        23 => 0.6,  // Maj 14th
+        5 => 1.0,   // P4
+        6 => -3.0,   // Tritone
+
         _ => 0.0,
     };
+
+    // let score: f64 = match effective_dist {
+    //     0 => 1.0,   // Unison
+    //     1 => -1.0,   // Min 2nd
+    //     2 => 0.2,   // Maj 2nd
+    //     3 => 0.6,   // Min 3rd
+    //     4 => 0.8,   // Maj 3rd
+    //     5 => 0.7,   // P4
+    //     6 => 0.0,   // Tritone
+    //     7 => 1.0,   // P5
+    //     8 => 0.7,   // Min 6th
+    //     9 => 0.8,   // Maj 6th
+    //     10 => 0.3,  // Min 7th
+    //     11 => 0.4,  // Maj 7th
+    //     12 => 1.0,  // Octave
+    //     13 => -1.0,  // Min 9th
+    //     14 => 0.85, // Maj 9th
+    //     15 => 0.7,  // Min 10th
+    //     16 => 0.9,  // Maj 10th
+    //     17 => 0.7,  // P11
+    //     18 => 0.2,  // #11
+    //     19 => 1.0,  // P12
+    //     20 => 0.7,  // Min 13th
+    //     21 => 0.85, // Maj 13th
+    //     22 => 0.5,  // Min 14th
+    //     23 => 0.6,  // Maj 14th
+    //     _ => 0.0,
+    // };
 
     // JS: return Math.max(0.0, Math.min(1.0, score));
     // But wait, if it returns -100000000 above, the clamp would make it 0.0.

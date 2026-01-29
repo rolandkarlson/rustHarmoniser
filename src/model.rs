@@ -25,7 +25,7 @@ impl Note {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Config {
     pub last_note_exist_in_voice: f64,
     pub same_direction: f64,
@@ -34,6 +34,11 @@ pub struct Config {
     pub last_note_same: f64,
     pub mode: i32,
     pub interval_exists_in_harmony: f64,
+    // New fields
+    pub voice_rhythm: Vec<f64>,
+    pub harmony_distance_balance: f64,
+    pub lookahead_depth: i32,
+    pub render_length: i32,
 }
 
 impl Default for Config {
@@ -46,6 +51,10 @@ impl Default for Config {
             last_note_same: 100.0,
             mode: 0,
             interval_exists_in_harmony: 30.0,
+            voice_rhythm: vec![4.0],
+            harmony_distance_balance: -0.1,
+            lookahead_depth: 20,
+            render_length: 10,
         }
     }
 }

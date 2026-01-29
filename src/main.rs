@@ -62,15 +62,14 @@ fn main() -> std::io::Result<()> {
     // `gen_voice` in my Rust implementation takes `rhythm_data`.
     
     let mut income = Vec::new();
+
+    income.extend(gen_voice(70, &config.voice_rhythm, &[0], 0, 1, &config));
+    income.extend(gen_voice(65, &config.voice_rhythm, &[0], 1, 1, &config));
+    income.extend(gen_voice(60, &config.voice_rhythm, &[0], 2, 1, &config));
     
-    income.extend(gen_voice(70, &rythm_for_voice[0], &[0], 0, 1));
-    income.extend(gen_voice(65, &rythm_for_voice[1], &[0], 1, 1));
-    income.extend(gen_voice(60, &rythm_for_voice[2], &[0], 2, 1));
-    
-    // Voices 3 and 4 have static rhythm [4] in JS code
-    let simple_four = vec![4.0];
-    income.extend(gen_voice(50, &simple_four, &[0], 3, 1));
-    income.extend(gen_voice(40, &simple_four, &[0], 4, 1));
+
+    income.extend(gen_voice(50, &config.voice_rhythm, &[0], 3, 1, &config));
+    income.extend(gen_voice(40, &config.voice_rhythm, &[0], 4, 1, &config));
 
     // Sort income by start time then pitch
     income.sort_by(|a, b| {
@@ -104,8 +103,8 @@ fn main() -> std::io::Result<()> {
 }
 
 fn append_to_js_file(notes: &[Note]) -> std::io::Result<()> {
-   // let path = "C:\\Users\\rolan\\Documents\\Ableton\\User Library\\Presets\\MIDI Effects\\Max MIDI Effect\\harmonizer\\harmonize.js";
-    let path = "/Users/roland/Code/harmonizer/harmonize.js";
+    //let path = "C:\\Users\\rolan\\Documents\\Ableton\\User Library\\Presets\\MIDI Effects\\Max MIDI Effect\\harmonizer\\harmonize.js";
+    let path = "/Users/roland/Music/Ableton/User Library/Presets/Instruments/Max Instrument/harmonize.js";
 
     let mut file = OpenOptions::new()
         .read(true)

@@ -1,7 +1,7 @@
 use crate::model::{Note, Config};
 use crate::utils::{SeededRng, ArrayExt, mod_shim, sin};
 use crate::music_theory::{get_harmonic_score_adjusted, gen_scale};
-use crate::schillinger;
+
 use dashmap::DashMap;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -37,7 +37,7 @@ pub fn get_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
 pub fn get_distance_score(prev_note: i32, current_note: i32) -> f64 {
     let dist = (prev_note - current_note).abs() as f64;
     if dist == 0.0 {
-        return 1.0;
+        return 1.5;
     }
     let max_jump = 7.0;
     if dist > max_jump {
@@ -349,7 +349,7 @@ let channel_idx = current_note.channel as usize;
 
             distance_score = get_distance_score(last_note, note_candidate);
         }
-        let r = 0.1;
+        let r = config.harmony_distance_balance;
 
         let w_harmony = 0.5+r;
         let w_smooth = 0.5-r;
@@ -368,9 +368,9 @@ let channel_idx = current_note.channel as usize;
 }
 
 
-pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channel: i32, muted: i32) -> Vec<Note> {
+pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channel: i32, muted: i32, config: &Config) -> Vec<Note> {
     let mut ar = Vec::new();
-    let clip_len = schillinger::CLIP_LEN as f64;
+    let clip_len = (8 * 4 * config.render_length) as f64;
     let mut pos = 0.0;
     let mut counter = 0;
     let sf = (SeededRng::random_int(60) + 1) as f64;
@@ -520,7 +520,7 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState)
         .collect();
 
     let beam_width = 5;
-    let lookahead = 3;
+    let lookahead = config.lookahead_depth;
 
     let mut beam = vec![BeamCandidate {
         notes: Vec::new(),
