@@ -41,6 +41,10 @@ impl SeededRng {
     pub fn random_int(max: i32) -> i32 {
         THREAD_RNG.with(|rng| rng.borrow_mut()._random_int(max))
     }
+
+    pub fn set_seed(new_seed: f64) {
+        THREAD_RNG.with(|rng| rng.borrow_mut().seed = new_seed);
+    }
 }// or we can pass it around. JS uses a global.
 // Let's try to pass it around for better Rust practice, or use a RefCell thread local if it gets too hairy.
 

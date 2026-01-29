@@ -27,6 +27,7 @@ impl Note {
 
 #[derive(Clone)]
 pub struct Config {
+    pub schillinger_progression: bool,
     pub last_note_exist_in_voice: f64,
     pub same_direction: f64,
     pub consecutive_octav_fift: f64,
@@ -39,22 +40,25 @@ pub struct Config {
     pub harmony_distance_balance: f64,
     pub lookahead_depth: i32,
     pub render_length: i32,
+    pub rng_seed: f64,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
+            schillinger_progression: true,
             last_note_exist_in_voice: 100.0,
             same_direction: 1.0,
             consecutive_octav_fift: 0.0,
-            no_crossing: 2000.0,
-            last_note_same: 100.0,
+            no_crossing: 100.0,
+            last_note_same: 10.0,
             mode: 0,
-            interval_exists_in_harmony: 30.0,
+            interval_exists_in_harmony: 1.0,
             voice_rhythm: vec![4.0],
             harmony_distance_balance: -0.1,
             lookahead_depth: 20,
-            render_length: 10,
+            render_length: 1,
+            rng_seed: 5443343433.0,
         }
     }
 }

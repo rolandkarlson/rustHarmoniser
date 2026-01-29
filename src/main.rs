@@ -4,6 +4,7 @@ mod music_theory;
 mod rhythm;
 mod harmonizer;
 mod schillinger;
+mod tui;
 
 use model::{Config, Note};
 
@@ -14,11 +15,15 @@ use std::io::{Read, Write};
 use std::time::Instant;
 
 fn main() -> std::io::Result<()> {
-    let start_time = Instant::now();
-    // 1. Setup
+    tui::run_tui()?;
+    Ok(())
+}
 
-    let config = Config::default();
-    
+use std::sync::mpsc::Sender;
+
+pub fn run_generation(config: &Config, progress_sender: Option<Sender<(usize, usize)>>) -> std::io::Result<String> {
+    utils::SeededRng::set_seed(config.rng_seed);
+    let start_time = Instant::now();
     // 2. Rhythm Generation Rules (Simplified port)
     // In JS, `baseRythm` and `rules` match `transformRhythm`.
     // Let's create `rythmForVoice` similar to JS logic.
@@ -62,7 +67,9 @@ fn main() -> std::io::Result<()> {
     // `gen_voice` in my Rust implementation takes `rhythm_data`.
     
     let mut income = Vec::new();
-
+    
+   
+    
     income.extend(gen_voice(70, &config.voice_rhythm, &[0], 0, 1, &config));
     income.extend(gen_voice(65, &config.voice_rhythm, &[0], 1, 1, &config));
     income.extend(gen_voice(60, &config.voice_rhythm, &[0], 2, 1, &config));
@@ -86,7 +93,7 @@ fn main() -> std::io::Result<()> {
         schillinger_notes,
     };
 
-    let notes = harmonise2(income, &config, &state);
+    let notes = harmonise2(income, &config, &state, progress_sender.as_ref());
 
     // 5. Output
     let json = serde_json::to_string_pretty(&notes)?;
@@ -96,10 +103,10 @@ fn main() -> std::io::Result<()> {
     // Append to JS file
     append_to_js_file(&notes)?;
     
-    println!("Generated {} notes to output.json", notes.len());
-    println!("Execution time: {:?}", start_time.elapsed());
+    // println!("Generated {} notes to output.json", notes.len());
+    // println!("Execution time: {:?}", start_time.elapsed());
 
-    Ok(())
+    Ok(format!("Generated {} notes in {:?}", notes.len(), start_time.elapsed()))
 }
 
 fn append_to_js_file(notes: &[Note]) -> std::io::Result<()> {

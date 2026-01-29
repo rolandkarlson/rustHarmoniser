@@ -70,6 +70,10 @@ fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState) -> Vec<i3
     let bar = (current_note.start / 4.0).floor() as i32;
     let safe_bar = mod_shim(bar, state.schillinger_notes.len() as i32) as usize;
     let notes = &state.schillinger_notes[safe_bar];
+    if(current_note.channel == 4){
+        return vec![notes[0]];
+    }
+    let notes = &state.schillinger_notes[safe_bar];
     notes.clone()
 }
 
@@ -264,12 +268,28 @@ let channel_idx = current_note.channel as usize;
 
     let current_harmony_len = current_harmony.len();
     let mut scores = Vec::with_capacity((max_pitch - min_pitch + 1) as usize);
+    let mut sp = 0.0;
+    let mut sc:Vec<i32> = vec![];
+    if(config.schillinger_progression){
+        let sch_scale = get_schillinger_scale(current_note, state);
+       // let sch_scale =[0,1,2,3,4,5,6,7,8,9,10,11];// get_schillinger_scale(current_note, state);
+        let center_octave = (current_lasts[0] as f64 / 12.0).floor() as i32;
+         sc = gen_scale(&sch_scale, center_octave);
+         sp = 0.0;
+    }else{
+        sc =  (min_pitch..=max_pitch).collect();
+    }
 
-    for note_candidate in min_pitch..=max_pitch {
+    for (idx, note_candidate) in sc.into_iter().enumerate() {
         let mut score = 0.0;
         let mut distance_score = 0.0;
         let mut harmony_score = 0.0;
         let mut crossing = false;
+        if config.schillinger_progression {
+            if idx > 2 {
+                //sp = 2.0;
+            }
+        }
 
         // Same direction check
         if !current_on_same_end_harmony.is_empty() && !current_on_same_start_harmony.is_empty() && !current_lasts.is_empty() {
@@ -353,7 +373,7 @@ let channel_idx = current_note.channel as usize;
 
         let w_harmony = 0.5+r;
         let w_smooth = 0.5-r;
-        let sum_score = (harmony_score * w_harmony) + (distance_score * w_smooth) + score;
+        let sum_score = ((harmony_score-sp) * w_harmony) + (distance_score * w_smooth) + score;
         
 
         scores.push(NoteScore {
@@ -512,7 +532,9 @@ fn score_lookahead(
     best_score
 }
 
-fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState) -> Vec<Note> {
+use std::sync::mpsc::Sender;
+
+fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState, progress_sender: Option<&Sender<(usize, usize)>>) -> Vec<Note> {
     let grouped_notes = group_by_start_array(income);
 
     let all_permutations: Vec<Vec<Vec<Note>>> = grouped_notes.par_iter()
@@ -529,6 +551,10 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState)
     let mut ccc = 0.0;
 
     for (i, _) in grouped_notes.iter().enumerate() {
+        if let Some(sender) = progress_sender {
+             let _ = sender.send((i, grouped_notes.len()));
+        }
+
         let permutations = &all_permutations[i];
 
         let cache: DashMap<u64, f64> = DashMap::new();
@@ -583,17 +609,17 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState)
             }
         }).collect();
 
-        println!("Processed group {}/{}, best score: {}", i, grouped_notes.len(), beam[0].score - ccc);
+        // println!("Processed group {}/{}, best score: {}", i, grouped_notes.len(), beam[0].score - ccc);
         ccc = beam[0].score;
     }
 
     if beam.is_empty() {
         return Vec::new();
     }
-    println!("Final Score: {}", beam[0].score);
+    // println!("Final Score: {}", beam[0].score);
     beam[0].notes.clone()
 }
 
-pub fn harmonise2(income: Vec<Note>, config: &Config, state: &HarmonizerState) -> Vec<Note> {
-    score_group_beam(income, config, state)
+pub fn harmonise2(income: Vec<Note>, config: &Config, state: &HarmonizerState, progress_sender: Option<&Sender<(usize, usize)>>) -> Vec<Note> {
+    score_group_beam(income, config, state, progress_sender)
 }
