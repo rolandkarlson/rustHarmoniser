@@ -16,7 +16,7 @@ fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32) ->
 
         for _ in 1..sequence_length {
             let random_index = (SeededRng::seeded_random(1.0, 0.0) * possible_steps.len() as f64).floor() as usize;
-            let mut step = possible_steps[random_index] * EXP;
+            let mut step = possible_steps[random_index];
 
             if last_value + step == 0 {
                 step *= -1;
@@ -57,14 +57,14 @@ fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32) ->
             // The second check is effectively never true unless step=0.
             // I will copy it verbatim to be safe.
             
-            sequence.push(current_sum);
+            sequence.push(mod_shim(current_sum, 7));
         }
 
         let last_element = sequence.last().unwrap();
-        let modulo_result = mod_shim(*last_element % 7 + 7, 7);
+        let modulo_result = mod_shim(*last_element, 7);
         // JS: `var moduloResult = ((lastElement % 7) + 7) % 7;`
         
-        let target = mod_shim(2 * EXP, 7);
+        let target = mod_shim(4, 7);
 
         if modulo_result == target {
             return Some(sequence);
@@ -87,7 +87,7 @@ pub fn gen_schillinger_progression() -> Vec<Vec<i32>> {
     // JS `srm` init:
     // `var srm = [ findSequenceWithCondition([-2, -2, -2, -1, -3], PL) ];`
     
-    let seq_opt = find_sequence_with_condition(&[-2, -2, -2, -1, -3], PL);
+    let seq_opt = find_sequence_with_condition(&[-4, -4, -4, -2, -2], PL);
     let seq = seq_opt.unwrap_or(vec![0; PL as usize]); // Fallback? JS logs error and returns null.
     // We'll trust RNG seed matches or just handle it.
 
@@ -97,7 +97,7 @@ pub fn gen_schillinger_progression() -> Vec<Vec<i32>> {
     let scale = generate_mode_from_steps(0, 0);
     
     // JS `get` is wrap around access.
-    let n_struct_base = vec![0, 1, 2,3];
+    let n_struct_base = vec![0, 1, 2, 3,4,5];
     let ex_base = vec![2]; // `var ex = [2].get(i);`
 
     for i in 0..bars {
@@ -113,7 +113,7 @@ pub fn gen_schillinger_progression() -> Vec<Vec<i32>> {
         let ex = [2][mod_shim(i, 1) as usize];
 
         let notes: Vec<i32> = n_struct.iter().map(|&itm| {
-             let idx = (itm * ex) + root_sequence;
+             let idx = (itm * ex) + seq[i as usize%seq.len()];
              // scale.get(idx)
              scale[mod_shim(idx, scale.len() as i32) as usize]
         }).collect();

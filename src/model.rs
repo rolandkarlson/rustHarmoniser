@@ -46,7 +46,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            schillinger_progression: true,
+            schillinger_progression: false,
             last_note_exist_in_voice: 100.0,
             same_direction: 1.0,
             consecutive_octav_fift: 0.0,

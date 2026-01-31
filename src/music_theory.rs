@@ -30,15 +30,20 @@ pub fn get_harmonic_score_adjusted(note_a: i32, note_b: i32) -> f64 {
         return -100000000.0;
     }
 
-    let score: f64 = match effective_dist%6 {
-        0 => 1.0,   // Unison
-        1 => -1.0,   // Min 2nd
-        2 => 0.2,   // Maj 2nd
-        3 => 0.6,   // Min 3rd
-        4 => 0.8,   // Maj 3rd
-        5 => 1.0,   // P4
-        6 => -3.0,   // Tritone
-
+    let score: f64 = match dist%12 {
+            0 => 1.0,   // Unison
+            1 => -10000.0,   // Min 2nd
+            2 => -10000.2,   // Maj 2nd
+            3 => 0.6,   // Min 3rd
+            4 => 0.8,   // Maj 3rd
+            5 => 0.7,   // P4
+            6 => -1000.0,   // Tritone
+            7 => 1.0,   // P5
+            8 => 0.7,   // Min 6th
+            9 => 0.8,   // Maj 6th
+            10 => -10000.2,  // Min 7th
+            11 => 0.4,  // Maj 7th
+            12 => 1.0,  // Octave
         _ => 0.0,
     };
 
