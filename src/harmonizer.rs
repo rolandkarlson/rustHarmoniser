@@ -64,6 +64,8 @@ pub struct Boundries {
 
 pub struct HarmonizerState {
     pub schillinger_notes: Vec<Vec<i32>>,
+    pub voice_contour: Option<Vec<Vec<f64>>>,
+    pub contour_resolution: f64,
 }
 
 fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState) -> Vec<i32> {
@@ -237,6 +239,20 @@ let channel_idx = current_note.channel as usize;
         }
     }
 
+    let mut target_offset: f64 = 0.0;
+    let mut use_contour = false;
+
+    if let Some(ref contours) = state.voice_contour {
+         if !contours.is_empty() {
+             let contour = &contours[mod_shim(channel_idx as i32, contours.len() as i32) as usize];
+             if !contour.is_empty() {
+                  let idx = (current_note.start / state.contour_resolution).floor() as usize;
+                  target_offset = *contour.get_wrapped(idx);
+                  use_contour = true;
+             }
+         }
+    }
+
     // Inline seq array
     let seq_arr = [
         [0,3,12,1], [0,3,-5,1], [0,3,4,1], [0,3,4,1],[0,3,4,1]
@@ -363,7 +379,11 @@ let channel_idx = current_note.channel as usize;
                 score -= config.last_note_same;
             }
 
-            let base_dist = (note_candidate - current_note.pitch + seq).abs() as f64;
+            let base_dist = if use_contour {
+                (note_candidate as f64 - current_note.pitch as f64 + target_offset).abs()
+            } else {
+                (note_candidate - current_note.pitch + seq).abs() as f64
+            };
             let normalized = base_dist / 8.0;
             score -= normalized * normalized * normalized;
 

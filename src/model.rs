@@ -41,6 +41,8 @@ pub struct Config {
     pub lookahead_depth: i32,
     pub render_length: i32,
     pub rng_seed: f64,
+    pub voice_contour: Option<Vec<Vec<f64>>>,
+    pub voice_contour_resolution: f64,
 }
 
 impl Default for Config {
@@ -59,6 +61,8 @@ impl Default for Config {
             lookahead_depth: 1,
             render_length: 10,
             rng_seed: 5443343433.0,
+            voice_contour: None,
+            voice_contour_resolution: 4.0,
         }
     }
 }
