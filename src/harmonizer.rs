@@ -318,7 +318,7 @@ let channel_idx = current_note.channel as usize;
             score += -10000.0;
         }
 
-        if current_harmony_len < 0 {
+        if current_harmony_len < 3 {
             for ch in &current_harmony {
                 if ch % 12 == note_candidate % 12 {
                     score += -10000.0;
@@ -609,14 +609,14 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
             }
         }).collect();
 
-        println!("Processed group {}/{}, best score: {}", i, grouped_notes.len(), beam[0].score - ccc);
+      //  println!("Processed group {}/{}, best score: {}", i, grouped_notes.len(), beam[0].score - ccc);
         ccc = beam[0].score;
     }
 
     if beam.is_empty() {
         return Vec::new();
     }
-    println!("Final Score: {}", beam[0].score);
+ //   println!("Final Score: {}", beam[0].score);
     beam[0].notes.clone()
 }
 

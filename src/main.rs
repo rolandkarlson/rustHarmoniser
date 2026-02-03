@@ -68,12 +68,12 @@ pub fn run_generation(config: &Config, progress_sender: Option<Sender<(usize, us
     
     let mut income = Vec::new();
     
-   
+
     
     income.extend(gen_voice(70, &config.voice_rhythm, &[0], 0, 1, &config));
     income.extend(gen_voice(65, &config.voice_rhythm, &[0], 1, 1, &config));
     income.extend(gen_voice(60, &config.voice_rhythm, &[0], 2, 1, &config));
-    
+
 
     income.extend(gen_voice(50, &config.voice_rhythm, &[0], 3, 1, &config));
     income.extend(gen_voice(40, &config.voice_rhythm, &[0], 4, 1, &config));
@@ -110,7 +110,10 @@ pub fn run_generation(config: &Config, progress_sender: Option<Sender<(usize, us
 }
 
 fn append_to_js_file(notes: &[Note]) -> std::io::Result<()> {
-    //let path = "C:\\Users\\rolan\\Documents\\Ableton\\User Library\\Presets\\MIDI Effects\\Max MIDI Effect\\harmonizer\\harmonize.js";
+   // let path = "C:\\Users\\rolan\\Documents\\Ableton\\User Library\\Presets\\MIDI Effects\\Max MIDI Effect\\harmonizer\\harmonize.js";
+    #[cfg(windows)]
+    let path = "C:\\Users\\rolan\\Documents\\Ableton\\User Library\\Presets\\MIDI Effects\\Max MIDI Effect\\harmonizer\\harmonize.js";
+    #[cfg(not(windows))]
     let path = "/Users/roland/Music/Ableton/User Library/Presets/Instruments/Max Instrument/harmonize.js";
 
     let mut file = OpenOptions::new()

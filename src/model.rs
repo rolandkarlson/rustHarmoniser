@@ -56,8 +56,8 @@ impl Default for Config {
             interval_exists_in_harmony: 1.0,
             voice_rhythm: vec![4.0],
             harmony_distance_balance: -0.1,
-            lookahead_depth: 20,
-            render_length: 1,
+            lookahead_depth: 1,
+            render_length: 10,
             rng_seed: 5443343433.0,
         }
     }
