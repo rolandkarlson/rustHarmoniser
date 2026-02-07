@@ -37,7 +37,7 @@ pub fn get_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
 pub fn get_distance_score(prev_note: i32, current_note: i32) -> f64 {
     let dist = (prev_note - current_note).abs() as f64;
     if dist == 0.0 {
-        return 1.5;
+        return 30.0;
     }
     let max_jump = 7.0;
     if dist > max_jump {
