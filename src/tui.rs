@@ -42,11 +42,13 @@ pub struct App {
     // Contour editor state
     pub selected_voice: usize,
     pub chart_area: Rect,
+    pub last_mouse_pos: Option<(usize, f64)>,
 }
 
 impl App {
     pub fn new() -> Self {
-        let config = Config::default();
+        let mut config = Config::default();
+        config.randomize_contours();
         let keys = vec![
             "schillinger_progression",
             "last_note_exist_in_voice",
@@ -78,6 +80,7 @@ impl App {
             rx: None,
             selected_voice: 0,
             chart_area: Rect::default(),
+            last_mouse_pos: None,
         }
     }
 
@@ -303,47 +306,78 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                 },
                 Event::Mouse(mouse) => {
                     if app.input_mode == InputMode::Contour {
-                        if mouse.kind == MouseEventKind::Down(MouseButton::Left) || mouse.kind == MouseEventKind::Drag(MouseButton::Left) {
-                             let x = mouse.column as f64;
-                             let y = mouse.row as f64;
-                             let area = app.chart_area;
-                             
-                             if x >= area.x as f64 && x < (area.x + area.width) as f64 &&
-                                y >= area.y as f64 && y < (area.y + area.height) as f64 {
-                                    
+                        match mouse.kind {
+                            MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
+                                let x = mouse.column as f64;
+                                let y = mouse.row as f64;
+                                let area = app.chart_area;
+
+                                if x >= area.x as f64 && x < (area.x + area.width) as f64 &&
+                                   y >= area.y as f64 && y < (area.y + area.height) as f64 {
+
                                     // Map screen coords to chart coords
-                                    // Chart X: 0..render_length * 32 (approx 8*4)
-                                    // Chart Y: -12..12
-                                    
                                     let chart_x_min = 0.0;
                                     let chart_x_max = (app.config.render_length * 32) as f64;
                                     let chart_y_min = -12.0;
                                     let chart_y_max = 12.0;
-                                    
-                                    // Need to account for potential axis labels/borders? 
-                                    // Inner area is smaller. Ratatui doesn't expose inner area easily without rendering.
-                                    // Let's assume a margin of 1 or 2.
-                                    // For a quick hack, just map linearly over the whole rect, user will adjust.
-                                    
+
                                     let rel_x = (x - area.x as f64) / area.width as f64;
                                     let rel_y = 1.0 - (y - area.y as f64) / area.height as f64; // Invert Y
-                                    
+
                                     let data_x = chart_x_min + rel_x * (chart_x_max - chart_x_min);
                                     let data_y = chart_y_min + rel_y * (chart_y_max - chart_y_min);
-                                    
+
                                     // Quantize X to index
                                     let idx = (data_x / app.config.voice_contour_resolution).round() as usize;
-                                    
+
                                     if let Some(contours) = &mut app.config.voice_contour {
                                         if app.selected_voice < contours.len() {
                                             let vec = &mut contours[app.selected_voice];
                                             if idx >= vec.len() {
                                                 vec.resize(idx + 1, 0.0);
                                             }
+                                            
+                                            // Ensure we fill the gap if this is a drag
+                                            if let MouseEventKind::Drag(_) = mouse.kind {
+                                                if let Some((prev_idx, prev_val)) = app.last_mouse_pos {
+                                                    // Interpolate from prev_idx to idx
+                                                    let start = std::cmp::min(prev_idx, idx);
+                                                    let end = std::cmp::max(prev_idx, idx);
+                                                    
+                                                    if end > start {
+                                                        for i in start..=end {
+                                                            if i >= vec.len() {
+                                                                vec.resize(i + 1, 0.0);
+                                                            }
+                                                            let t = (i - start) as f64 / (end - start) as f64;
+                                                            let val = if idx > prev_idx {
+                                                                prev_val + t * (data_y - prev_val)
+                                                            } else {
+                                                                // if we moved backwards (idx < prev_idx), start=idx, end=prev_idx
+                                                                // so i goes from idx to prev_idx.
+                                                                // if i=start=idx -> t=0 -> should be data_y
+                                                                // if i=end=prev_idx -> t=1 -> should be prev_val
+                                                                data_y + t * (prev_val - data_y)
+                                                            };
+                                                            vec[i] = val;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            
                                             vec[idx] = data_y;
+                                            app.last_mouse_pos = Some((idx, data_y));
                                         }
                                     }
-                             }
+                                } else {
+                                    // Outside area, reset?
+                                    app.last_mouse_pos = None;
+                                }
+                            },
+                            MouseEventKind::Up(_) => {
+                                app.last_mouse_pos = None;
+                            },
+                            _ => {}
                         }
                     }
                 },

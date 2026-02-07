@@ -66,3 +66,69 @@ impl Default for Config {
         }
     }
 }
+
+impl Config {
+    pub fn randomize_contours(&mut self) {
+        use crate::utils::SeededRng;
+
+        let mut contours = Vec::new();
+        // 16 voices
+        for _ in 0..16 {
+            // Generate 3 to 5 points
+            let num_points = 3 + SeededRng::random_int(3); // 0..3 -> 0..2.99 -> 0..2. 3 + 0..2 = 3..5
+            // utils.rs: (self._seeded_random(max as f64, 0.0)).floor() as i32
+            // if max=8, returns 0..7.99 -> floor -> 0..7.
+            // 3 + 0..7 = 3..10. Correct.
+
+            let mut points: Vec<(f64, f64)> = Vec::new();
+            let total_len = (self.render_length * 32) as f64;
+
+            for _ in 0..num_points {
+                let x = SeededRng::seeded_random(total_len, 0.0);
+                let y = SeededRng::seeded_random(12.0, -12.0);
+                points.push((x, y));
+            }
+
+            // Sort by x
+            points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+            // Interpolate
+            let mut contour_vec = Vec::new();
+            // Calculate number of steps.
+            // +1 to cover the end?
+            let steps = (total_len / self.voice_contour_resolution).ceil() as usize;
+
+            for i in 0..steps {
+                let pos = (i as f64) * self.voice_contour_resolution;
+
+                let mut y = 0.0;
+                if points.is_empty() {
+                    y = 0.0;
+                } else if pos <= points[0].0 {
+                    y = points[0].1;
+                } else if pos >= points.last().unwrap().0 {
+                    y = points.last().unwrap().1;
+                } else {
+                    // Linear interpolation
+                    for j in 0..points.len() - 1 {
+                        if pos >= points[j].0 && pos <= points[j + 1].0 {
+                            let p1 = points[j];
+                            let p2 = points[j + 1];
+                            // Avoid div by zero if x matches (unlikely with random, but possible if sorted puts them close)
+                            if (p2.0 - p1.0).abs() < 0.0001 {
+                                y = p1.1;
+                            } else {
+                                let t = (pos - p1.0) / (p2.0 - p1.0);
+                                y = p1.1 + t * (p2.1 - p1.1);
+                            }
+                            break;
+                        }
+                    }
+                }
+                contour_vec.push(y);
+            }
+            contours.push(contour_vec);
+        }
+        self.voice_contour = Some(contours);
+    }
+}
