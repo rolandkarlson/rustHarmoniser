@@ -37,7 +37,7 @@ pub fn get_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
 pub fn get_distance_score(prev_note: i32, current_note: i32) -> f64 {
     let dist = (prev_note - current_note).abs() as f64;
     if dist == 0.0 {
-        return 2.0;
+        return 30.0;
     }
     let max_jump = 7.0;
     if dist > max_jump {
@@ -69,7 +69,7 @@ pub struct HarmonizerState {
 }
 
 fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState) -> Vec<i32> {
-    let bar = (current_note.start / 4.0).floor() as i32;
+    let bar = (current_note.start / 8.0).floor() as i32;
     let safe_bar = mod_shim(bar, state.schillinger_notes.len() as i32) as usize;
     let notes = &state.schillinger_notes[safe_bar];
     if(current_note.channel == 4){
@@ -206,20 +206,17 @@ pub fn get_harmony_scores(
     let last_harmony = &precomputed.last_harmony;
     let last_harmony_intervals = &precomputed.last_harmony_intervals;
     let channel_idx = current_note.channel as usize;
-    let channel_idx = current_note.channel as usize;
-    let mut current_harmony = Vec::with_capacity(
-        precomputed.sustaining_notes.len() + current_on_same_start_harmony.len(),
-    );
-    current_harmony.extend_from_slice(&precomputed.sustaining_notes);
-    current_harmony.extend(current_on_same_start_harmony.iter().map(|n| n.pitch));
+    let mut current_harmony = precomputed.sustaining_notes.clone();
+    for n in current_on_same_start_harmony {
+        current_harmony.push(n.pitch);
+    }
 
     let current_on_same_end_harmony = &precomputed.notes_ending_at_start;
 
-    let mut current_lasts_fallback: Vec<i32> = Vec::new();
-    let mut current_lasts: &[i32] = if channel_idx < precomputed.last_notes_by_channel.len() {
-        &precomputed.last_notes_by_channel[channel_idx]
+    let mut current_lasts = if channel_idx < precomputed.last_notes_by_channel.len() {
+        precomputed.last_notes_by_channel[channel_idx].clone()
     } else {
-        &[]
+        Vec::new()
     };
 
     let bounds_p = if channel_idx < precomputed.boundries_by_channel.len() {
@@ -231,8 +228,7 @@ pub fn get_harmony_scores(
     let is_outer_voice = current_note.channel == 0 || current_note.channel == 3;
 
     if current_lasts.is_empty() {
-        current_lasts_fallback.push(current_note.pitch);
-        current_lasts = &current_lasts_fallback;
+        current_lasts.push(current_note.pitch);
     }
 
     let mut no_same_note_penalty = no_same_note_penalty;
@@ -247,14 +243,14 @@ pub fn get_harmony_scores(
     let mut use_contour = false;
 
     if let Some(ref contours) = state.voice_contour {
-         if !contours.is_empty() {
-             let contour = &contours[mod_shim(channel_idx as i32, contours.len() as i32) as usize];
-             if !contour.is_empty() {
-                  let idx = (current_note.start / state.contour_resolution).floor() as usize;
-                  target_offset = *contour.get_wrapped(idx);
-                  use_contour = true;
-             }
-         }
+        if !contours.is_empty() {
+            let contour = &contours[mod_shim(channel_idx as i32, contours.len() as i32) as usize];
+            if !contour.is_empty() {
+                let idx = (current_note.start / state.contour_resolution).floor() as usize;
+                target_offset = *contour.get_wrapped(idx);
+                use_contour = false;
+            }
+        }
     }
 
     // Inline seq array
@@ -262,32 +258,23 @@ pub fn get_harmony_scores(
         [0,3,12,1], [0,3,-5,1], [0,3,4,1], [0,3,4,1],[0,3,4,1]
     ];
     let seq_row = seq_arr.get_wrapped(channel_idx);
-    let seq = seq_row.get_wrapped((current_note.start / (4.0*8.0)) as usize);
+    let seq = 0;// seq_row.get_wrapped((current_note.start / (4.0*8.0)) as usize);
 
-    let last_note = current_lasts[0];
+    let last_note = if !current_lasts.is_empty() { current_lasts[0] } else { current_note.pitch };
     let range = 3;
     let min_pitch = (last_note - range).max(24);
     let max_pitch = (last_note + range).min(96);
 
-    let mut interval_present = [false; 12];
-    if current_harmony.len() >= 2 {
+    let current_harmony_intervals: Vec<i32> = {
+        let len = current_harmony.len();
+        let mut intervals = Vec::with_capacity(if len > 0 { len * (len - 1) / 2 } else { 0 });
         for i in 0..current_harmony.len() {
-            for j in (i + 1)..current_harmony.len() {
-                let interval = (current_harmony[i] - current_harmony[j]).abs() % 12;
-                interval_present[interval as usize] = true;
+            for j in (i+1)..current_harmony.len() {
+                intervals.push((current_harmony[i] - current_harmony[j]).abs() % 12);
             }
         }
-    }
-
-    let mut pitch_present = [false; 128];
-    let mut pc_present = [false; 12];
-    for &pitch in &current_harmony {
-        if (0..128).contains(&pitch) {
-            pitch_present[pitch as usize] = true;
-        }
-        let pc = ((pitch % 12) + 12) % 12;
-        pc_present[pc as usize] = true;
-    }
+        intervals
+    };
 
     let has_interval_7 = last_harmony_intervals.contains(&7);
     let has_interval_0 = last_harmony_intervals.contains(&0);
@@ -296,65 +283,17 @@ pub fn get_harmony_scores(
     let channel_boundry_min = [2,2,2,7,1].get_wrapped(channel_idx);
 
     let current_harmony_len = current_harmony.len();
-    let current_harmony_len_f64 = current_harmony_len as f64;
-    let current_harmony_lt_3 = current_harmony_len < 3;
-    let current_harmony_non_empty = current_harmony_len > 0;
     let mut scores = Vec::with_capacity((max_pitch - min_pitch + 1) as usize);
     let mut sp = 0.0;
     let mut sc:Vec<i32> = vec![];
     if(config.schillinger_progression){
         let sch_scale = get_schillinger_scale(current_note, state);
-       // let sch_scale =[0,1,2,3,4,5,6,7,8,9,10,11];// get_schillinger_scale(current_note, state);
+        // let sch_scale =[0,1,2,3,4,5,6,7,8,9,10,11];// get_schillinger_scale(current_note, state);
         let center_octave = (current_lasts[0] as f64 / 12.0).floor() as i32;
-         sc = gen_scale(&sch_scale, center_octave);
-         sp = 0.0;
+        sc = gen_scale(&sch_scale, center_octave);
+        sp = 0.0;
     }else{
         sc =  (min_pitch..=max_pitch).collect();
-    }
-
-    let w_harmony = 0.5 + config.harmony_distance_balance;
-    let w_smooth = 0.5 - config.harmony_distance_balance;
-
-    let mut same_dir_counts: Option<(i32, i32, i32)> = None;
-    if !current_on_same_end_harmony.is_empty()
-        && !current_on_same_start_harmony.is_empty()
-        && !current_lasts.is_empty()
-        && is_outer_voice
-    {
-        let mut last_map = [i32::MIN; 16];
-        let mut last_present = [false; 16];
-        for n in current_on_same_end_harmony {
-            let ch = n.channel as usize;
-            if ch < 16 {
-                last_map[ch] = n.pitch;
-                last_present[ch] = true;
-            }
-        }
-        let mut cur_map = [i32::MIN; 16];
-        let mut cur_present = [false; 16];
-        for n in current_on_same_start_harmony {
-            let ch = n.channel as usize;
-            if ch < 16 {
-                cur_map[ch] = n.pitch;
-                cur_present[ch] = true;
-            }
-        }
-        let mut up = 0;
-        let mut down = 0;
-        let mut compared = 0;
-        for ch in 0..16 {
-            if last_present[ch] && cur_present[ch] {
-                compared += 1;
-                if cur_map[ch] > last_map[ch] {
-                    up += 1;
-                } else if cur_map[ch] < last_map[ch] {
-                    down += 1;
-                }
-            }
-        }
-        if compared > 0 {
-            same_dir_counts = Some((up, down, compared));
-        }
     }
 
     for (idx, note_candidate) in sc.into_iter().enumerate() {
@@ -369,10 +308,11 @@ pub fn get_harmony_scores(
         }
 
         // Same direction check
-        if let Some((up, down, _)) = same_dir_counts {
-            let going_down = current_lasts[0] > note_candidate;
-            if if going_down { down > up } else { up > down } {
-                score -= config.same_direction;
+        if !current_on_same_end_harmony.is_empty() && !current_on_same_start_harmony.is_empty() && !current_lasts.is_empty() {
+            if is_outer_voice {
+                if is_harmony_moving_to_same_direction(current_on_same_end_harmony, current_on_same_start_harmony, current_lasts[0] > note_candidate) {
+                    score -= config.same_direction;
+                }
             }
         }
 
@@ -390,29 +330,30 @@ pub fn get_harmony_scores(
             }
         }
 
-        if (0..128).contains(&note_candidate) && pitch_present[note_candidate as usize] {
+        if current_harmony.contains(&note_candidate) {
             score += -10000.0;
         }
 
-        if current_harmony_lt_3 {
-            let pc = ((note_candidate % 12) + 12) % 12;
-            if pc_present[pc as usize] {
-                score += -10000.0;
+        if current_harmony_len < 3 {
+            for ch in &current_harmony {
+                if ch % 12 == note_candidate % 12 {
+                    score += -10000.0;
+                }
             }
         }
 
         let mut harm_sum = 0.0;
         for ch_pitch in &current_harmony {
-            if current_harmony_lt_3 {
+            if current_harmony_len < 3 {
                 let dif = (ch_pitch - note_candidate).abs() % 12;
-                if interval_present[dif as usize] {
+                if current_harmony_intervals.contains(&dif) {
                     score -= config.interval_exists_in_harmony;
                 }
             }
             harm_sum += get_harmonic_score_adjusted(note_candidate, *ch_pitch);
         }
-        if current_harmony_non_empty {
-            harmony_score += harm_sum / current_harmony_len_f64;
+        if current_harmony_len > 0 {
+            harmony_score += harm_sum / current_harmony_len as f64;
         }
 
         let d = bounds_p.max - note_candidate;
@@ -448,8 +389,12 @@ pub fn get_harmony_scores(
 
             distance_score = get_distance_score(last_note, note_candidate);
         }
+        let r = config.harmony_distance_balance;
+
+        let w_harmony = 0.5+r;
+        let w_smooth = 0.5-r;
         let sum_score = ((harmony_score-sp) * w_harmony) + (distance_score * w_smooth) + score;
-        
+
 
         scores.push(NoteScore {
             note: note_candidate,
@@ -627,7 +572,7 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
 
     for (i, _) in grouped_notes.iter().enumerate() {
         if let Some(sender) = progress_sender {
-             let _ = sender.send((i, grouped_notes.len()));
+            let _ = sender.send((i, grouped_notes.len()));
         }
 
         let permutations = &all_permutations[i];
@@ -684,14 +629,14 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
             }
         }).collect();
 
-      //  println!("Processed group {}/{}, best score: {}", i, grouped_notes.len(), beam[0].score - ccc);
+        //  println!("Processed group {}/{}, best score: {}", i, grouped_notes.len(), beam[0].score - ccc);
         ccc = beam[0].score;
     }
 
     if beam.is_empty() {
         return Vec::new();
     }
- //   println!("Final Score: {}", beam[0].score);
+    //   println!("Final Score: {}", beam[0].score);
     beam[0].notes.clone()
 }
 

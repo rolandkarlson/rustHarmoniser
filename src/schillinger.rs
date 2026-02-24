@@ -2,7 +2,7 @@ use crate::utils::{mod_shim, SeededRng, ArrayExt};
 use crate::music_theory::{generate_mode_from_steps};
 
 // PL = 8 in JS
-const PL: i32 = 8;
+const PL: i32 = 4;
 const EXP: i32 = 2;
 
 fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32) -> Option<Vec<i32>> {
@@ -75,19 +75,9 @@ fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32) ->
 }
 
 pub fn gen_schillinger_progression() -> Vec<Vec<i32>> {
-    let bars = 4 * PL;
-    // Wait, JS: `var CLIP_LEN = PL;` -> 8.
-    // `var bars = CLIP_LEN / 4;` -> 2.
-    // Loop `for (var i = 0; i < bars; i++)`.
-    // BUT later `schillingerNotes[bar]` is accessed.
-    // If bars=2, index 0 and 1 exist.
-    // `getSchillingerScale` uses `var bar = Math.floor(currentNote.start / 4);`.
-    // If start goes up to 8 (CLIP_LEN), bar is 0 or 1.
-    
-    // JS `srm` init:
-    // `var srm = [ findSequenceWithCondition([-2, -2, -2, -1, -3], PL) ];`
-    
-    let seq_opt = find_sequence_with_condition(&[-4, -4, -4, -2, -2], PL);
+    let bars = PL;
+
+    let seq_opt = find_sequence_with_condition(&[-4, -4, -4, -2, -2,-6], PL);
     let seq = seq_opt.unwrap_or(vec![0; PL as usize]); // Fallback? JS logs error and returns null.
     // We'll trust RNG seed matches or just handle it.
 
@@ -97,20 +87,14 @@ pub fn gen_schillinger_progression() -> Vec<Vec<i32>> {
     let scale = generate_mode_from_steps(0, 5);
     
     // JS `get` is wrap around access.
-    let n_struct_base = vec![0, 1, 2, 4,5];
+    let n_struct_base = vec![0, 1, 2];
     let ex_base = vec![2]; // `var ex = [2].get(i);`
 
     for i in 0..bars {
-        let n_struct_idx = mod_shim(i, 5); // JS `[0..6].get(i)`? No, array len 5.
-        // Wait, JS: `var nStruct = [[0, 1, 2, 4, 6]].get(i);`
-        // It's an array OF ARRAYS? `[[0,1...]]`
-        // `[[...]].get(i)` where length is 1. So it always gets `[0, 1, 2, 4, 6]`.
-        // My bad, `[[0, 1, 2, 4, 6]]` has length 1.
+
         let n_struct = &n_struct_base;
 
-        // `var ex = [2].get(i)` -> always 2.
-
-        let ex = [2][mod_shim(i, 1) as usize];
+        let ex = 2;
 
         let notes: Vec<i32> = n_struct.iter().map(|&itm| {
              let idx = (itm * ex) + seq[i as usize%seq.len()];

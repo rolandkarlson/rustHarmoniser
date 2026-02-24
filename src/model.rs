@@ -48,7 +48,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            schillinger_progression: false,
+            schillinger_progression: true,
             last_note_exist_in_voice: 100.0,
             same_direction: 1.0,
             consecutive_octav_fift: 0.0,
@@ -57,9 +57,9 @@ impl Default for Config {
             mode: 0,
             interval_exists_in_harmony: 1.0,
             voice_rhythm: vec![4.0],
-            harmony_distance_balance: -0.1,
+            harmony_distance_balance: 0.2,
             lookahead_depth: 1,
-            render_length: 10,
+            render_length: 1,
             rng_seed: 5443343433.0,
             voice_contour: None,
             voice_contour_resolution: 4.0,
