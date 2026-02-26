@@ -51,6 +51,7 @@ impl App {
         config.randomize_contours();
         let keys = vec![
             "schillinger_progression",
+            "schillinger_sequence",
             "last_note_exist_in_voice",
             "same_direction",
             "consecutive_octav_fift",
@@ -115,6 +116,7 @@ impl App {
     pub fn get_value(&self, key: &str) -> String {
         match key {
             "schillinger_progression" => self.config.schillinger_progression.to_string(),
+            "schillinger_sequence" => self.config.schillinger_sequence.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(", "),
             "last_note_exist_in_voice" => self.config.last_note_exist_in_voice.to_string(),
             "same_direction" => self.config.same_direction.to_string(),
             "consecutive_octav_fift" => self.config.consecutive_octav_fift.to_string(),
@@ -136,6 +138,16 @@ impl App {
             let key = self.keys[i];
             match key {
                 "schillinger_progression" => if let Ok(v) = self.input_buffer.parse::<i32>() { self.config.schillinger_progression = if v == 1 { true } else { false }; },
+                "schillinger_sequence" => {
+                    let parts: Result<Vec<i32>, _> = self.input_buffer.split(',')
+                        .map(|s| s.trim().parse::<i32>())
+                        .collect();
+                    if let Ok(v) = parts {
+                        if !v.is_empty() {
+                            self.config.schillinger_sequence = v;
+                        }
+                    }
+                },
                 "last_note_exist_in_voice" => if let Ok(v) = self.input_buffer.parse() { self.config.last_note_exist_in_voice = v; },
                 "same_direction" => if let Ok(v) = self.input_buffer.parse() { self.config.same_direction = v; },
                 "consecutive_octav_fift" => if let Ok(v) = self.input_buffer.parse() { self.config.consecutive_octav_fift = v; },

@@ -74,12 +74,12 @@ fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32) ->
     None
 }
 
-pub fn gen_schillinger_progression() -> Vec<Vec<i32>> {
+pub fn gen_schillinger_progression(config_seq: &[i32]) -> Vec<Vec<i32>> {
     let bars = PL;
 
     let seq_opt = find_sequence_with_condition(&[-4, -4, -4, -2, -2,-6], PL);
     //let seq = seq_opt.unwrap_or(vec![0; PL as usize]); // Fallback? JS logs error and returns null.
-    let seq = vec![0,3,4,0];//
+    let seq = config_seq;//
 
     // We'll trust RNG seed matches or just handle it.
 

@@ -89,7 +89,7 @@ pub fn run_generation(config: &Config, progress_sender: Option<Sender<(usize, us
     });
 
     // 4. Harmonize
-    let schillinger_notes = schillinger::gen_schillinger_progression();
+    let schillinger_notes = schillinger::gen_schillinger_progression(&config.schillinger_sequence);
     let state = HarmonizerState {
         schillinger_notes,
         voice_contour: config.voice_contour.clone(),

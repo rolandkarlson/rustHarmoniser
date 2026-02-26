@@ -37,6 +37,7 @@ pub struct Config {
     pub interval_exists_in_harmony: f64,
     // New fields
     pub voice_rhythm: Vec<f64>,
+    pub schillinger_sequence: Vec<i32>,
     pub harmony_distance_balance: f64,
     pub lookahead_depth: i32,
     pub render_length: i32,
@@ -57,6 +58,7 @@ impl Default for Config {
             mode: 0,
             interval_exists_in_harmony: 1.0,
             voice_rhythm: vec![4.0],
+            schillinger_sequence: vec![0, 3, 4, 0],
             harmony_distance_balance: 0.2,
             lookahead_depth: 1,
             render_length: 1,
