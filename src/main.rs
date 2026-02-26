@@ -117,7 +117,7 @@ fn append_to_js_file(notes: &[Note]) -> std::io::Result<()> {
     #[cfg(windows)]
     let path = "C:\\Users\\rolan\\Documents\\Ableton\\User Library\\Presets\\MIDI Effects\\Max MIDI Effect\\harmonizer\\harmonize.js";
     #[cfg(not(windows))]
-    let path = "/Users/roland/Music/Ableton/User Library/Presets/Instruments/Max Instrument/harmonize.js";
+    let path = "/Users/roland/Music/Ableton/User Library/Presets/Instruments/Max Instrument/harmonizer/harmonize.js";
 
     let mut file = OpenOptions::new()
         .read(true)

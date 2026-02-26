@@ -78,7 +78,9 @@ pub fn gen_schillinger_progression() -> Vec<Vec<i32>> {
     let bars = PL;
 
     let seq_opt = find_sequence_with_condition(&[-4, -4, -4, -2, -2,-6], PL);
-    let seq = seq_opt.unwrap_or(vec![0; PL as usize]); // Fallback? JS logs error and returns null.
+    //let seq = seq_opt.unwrap_or(vec![0; PL as usize]); // Fallback? JS logs error and returns null.
+    let seq = vec![0,3,4,0];//
+
     // We'll trust RNG seed matches or just handle it.
 
     // `genSchillingerProgression` logic:
@@ -91,18 +93,14 @@ pub fn gen_schillinger_progression() -> Vec<Vec<i32>> {
     let ex_base = vec![2]; // `var ex = [2].get(i);`
 
     for i in 0..bars {
-
         let n_struct = &n_struct_base;
-
         let ex = 2;
-
         let notes: Vec<i32> = n_struct.iter().map(|&itm| {
              let idx = (itm * ex) + seq[i as usize%seq.len()];
              // scale.get(idx)
              scale[mod_shim(idx, scale.len() as i32) as usize]
         }).collect();
-        let root = seq[i as usize%seq.len()];
-        root_sequence = mod_shim(root_sequence - root, scale.len() as i32);
+
         chord_notes.push(notes);
     }
     
