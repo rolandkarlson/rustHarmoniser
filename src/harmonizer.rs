@@ -68,12 +68,23 @@ pub struct HarmonizerState {
     pub contour_resolution: f64,
 }
 
-fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState) -> Vec<i32> {
-    let bar = (current_note.start / 8.0).floor() as i32;
+fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &Config) -> Vec<i32> {
+    let bar = (current_note.start / 8.0 as f64).floor() as i32;
     let safe_bar = mod_shim(bar, state.schillinger_notes.len() as i32) as usize;
     let notes = &state.schillinger_notes[safe_bar];
+
+    if(bar % config.pl == 0 || bar % config.pl ==  config.pl - 1){
+        if(current_note.channel == 4){
+             return vec![notes[0]];
+        }
+
+        if(current_note.channel == 0){
+            return vec![notes[2]];
+        }
+        return vec![notes[0], notes[1], notes[2]];
+    }
     if(current_note.channel == 4){
-        return vec![notes[0]];
+       // return vec![notes[0]];
     }
     //let notes = &state.schillinger_notes[safe_bar];
     notes.clone()
@@ -287,7 +298,7 @@ pub fn get_harmony_scores(
     let mut sp = 0.0;
     let mut sc:Vec<i32> = vec![];
     if(config.schillinger_progression){
-        let sch_scale = get_schillinger_scale(current_note, state);
+        let sch_scale = get_schillinger_scale(current_note, state, config);
         // let sch_scale =[0,1,2,3,4,5,6,7,8,9,10,11];// get_schillinger_scale(current_note, state);
         let center_octave = (current_lasts[0] as f64 / 12.0).floor() as i32;
         sc = gen_scale(&sch_scale, center_octave);
@@ -410,7 +421,7 @@ pub fn get_harmony_scores(
 
 pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channel: i32, muted: i32, config: &Config) -> Vec<Note> {
     let mut ar = Vec::new();
-    let clip_len = (8 * 4 * config.render_length) as f64;
+    let clip_len = (config.pl * 4 * config.render_length) as f64;
     let mut pos = 0.0;
     let mut counter = 0;
     let sf = (SeededRng::random_int(60) + 1) as f64;

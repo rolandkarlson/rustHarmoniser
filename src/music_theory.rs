@@ -96,12 +96,12 @@ pub fn get_harmonic_score_adjusted(note_a: i32, note_b: i32) -> f64 {
 }
 
 
-pub fn generate_mode_from_steps(root: i32, mode: i32) -> Vec<i32> {
+pub fn generate_mode_from_steps(root: i32, mode: &i32) -> Vec<i32> {
     let step_pattern = vec![2, 2, 1, 2, 2, 2, 1];
 
     // rotate
-    let steps_rot = if mode > 0 {
-         let split_idx = mode as usize % step_pattern.len();
+    let steps_rot = if *mode > 0 {
+         let split_idx = *mode as usize  % step_pattern.len();
          let (left, right) = step_pattern.split_at(split_idx);
          [right, left].concat()
     } else {

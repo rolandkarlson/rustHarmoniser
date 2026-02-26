@@ -15,6 +15,8 @@ use ratatui::{
 };
 use crate::model::Config;
 use crate::run_generation;
+use crate::schillinger::generate_progression;
+use crate::utils::SeededRng;
 
 #[derive(PartialEq, Eq)]
 enum InputMode {
@@ -49,9 +51,15 @@ impl App {
     pub fn new() -> Self {
         let mut config = Config::default();
         config.randomize_contours();
+        
+        SeededRng::set_seed(config.rng_seed);
+        config.schillinger_sequence = Self::genProgression(&mut config);
         let keys = vec![
             "schillinger_progression",
             "schillinger_sequence",
+            "mode",
+            "chord_structure",
+            "pl",
             "last_note_exist_in_voice",
             "same_direction",
             "consecutive_octav_fift",
@@ -61,7 +69,6 @@ impl App {
             "harmony_distance_balance",
             "lookahead_depth",
             "render_length",
-            "voice_rhythm",
             "voice_rhythm",
             "rng_seed",
             "Edit Voice Contours",
@@ -83,6 +90,13 @@ impl App {
             chart_area: Rect::default(),
             last_mouse_pos: None,
         }
+    }
+
+    fn genProgression(mut config: &mut Config) -> Vec<i32> {
+        [
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+        ].concat()
     }
 
     pub fn next(&mut self) {
@@ -117,6 +131,9 @@ impl App {
         match key {
             "schillinger_progression" => self.config.schillinger_progression.to_string(),
             "schillinger_sequence" => self.config.schillinger_sequence.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(", "),
+            "chord_structure" => self.config.chord_structure.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(", "),
+            "mode" => self.config.mode.to_string(),
+            "pl" => self.config.pl.to_string(),
             "last_note_exist_in_voice" => self.config.last_note_exist_in_voice.to_string(),
             "same_direction" => self.config.same_direction.to_string(),
             "consecutive_octav_fift" => self.config.consecutive_octav_fift.to_string(),
@@ -148,6 +165,22 @@ impl App {
                         }
                     }
                 },
+                "chord_structure" => {
+                    let parts: Result<Vec<i32>, _> = self.input_buffer.split(',')
+                        .map(|s| s.trim().parse::<i32>())
+                        .collect();
+                    if let Ok(v) = parts {
+                        if !v.is_empty() {
+                            self.config.chord_structure = v;
+                        }
+                    }
+                },
+                "pl" => if let Ok(v) = self.input_buffer.parse() { 
+                    self.config.pl = v; 
+                    SeededRng::set_seed(self.config.rng_seed);
+                    self.config.schillinger_sequence = generate_progression(self.config.pl as usize, self.config.mode);
+                },
+                "mode" => if let Ok(v) = self.input_buffer.parse() { self.config.mode = v; },
                 "last_note_exist_in_voice" => if let Ok(v) = self.input_buffer.parse() { self.config.last_note_exist_in_voice = v; },
                 "same_direction" => if let Ok(v) = self.input_buffer.parse() { self.config.same_direction = v; },
                 "consecutive_octav_fift" => if let Ok(v) = self.input_buffer.parse() { self.config.consecutive_octav_fift = v; },
@@ -167,7 +200,11 @@ impl App {
                         }
                     }
                 },
-                "rng_seed" => if let Ok(v) = self.input_buffer.parse() { self.config.rng_seed = v; },
+                "rng_seed" => if let Ok(v) = self.input_buffer.parse() { 
+                    self.config.rng_seed = v; 
+                    SeededRng::set_seed(self.config.rng_seed);
+                    self.config.schillinger_sequence =Self::genProgression(&mut self.config);
+                },
                 _ => {},
             }
         }

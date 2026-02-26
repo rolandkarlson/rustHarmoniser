@@ -38,12 +38,14 @@ pub struct Config {
     // New fields
     pub voice_rhythm: Vec<f64>,
     pub schillinger_sequence: Vec<i32>,
+    pub pl: i32,
     pub harmony_distance_balance: f64,
     pub lookahead_depth: i32,
     pub render_length: i32,
     pub rng_seed: f64,
     pub voice_contour: Option<Vec<Vec<f64>>>,
     pub voice_contour_resolution: f64,
+    pub chord_structure: Vec<i32>,
 }
 
 impl Default for Config {
@@ -59,12 +61,14 @@ impl Default for Config {
             interval_exists_in_harmony: 1.0,
             voice_rhythm: vec![4.0],
             schillinger_sequence: vec![0, 3, 4, 0],
+            pl: 4,
             harmony_distance_balance: 0.2,
             lookahead_depth: 1,
-            render_length: 1,
+            render_length: 2,
             rng_seed: 5443343433.0,
             voice_contour: None,
             voice_contour_resolution: 4.0,
+            chord_structure: vec![0, 1, 2, 4, 5],
         }
     }
 }
