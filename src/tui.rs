@@ -96,6 +96,22 @@ impl App {
         [
             generate_progression(config.pl as usize, config.mode),
             generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
+            generate_progression(config.pl as usize, config.mode),
         ].concat()
     }
 

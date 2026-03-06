@@ -173,12 +173,12 @@ fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32) ->
 }
 
 pub fn gen_schillinger_progression(config_seq: &[i32], pl: i32, config_chord_structure: &[i32], config_mode: &i32) -> Vec<Vec<i32>> {
-    let bars = pl;
+
 
     let seq_opt = find_sequence_with_condition(&[-4, -4, -4, -2, -2,-6], pl);
     //let seq = seq_opt.unwrap_or(vec![0; pl as usize]); // Fallback? JS logs error and returns null.
     let seq = config_seq;//
-
+    let bars = seq.len();
     // We'll trust RNG seed matches or just handle it.
 
     // `genSchillingerProgression` logic:
