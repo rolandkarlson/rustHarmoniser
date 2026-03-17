@@ -4,7 +4,6 @@ use crate::music_theory::{gen_scale};
 
 use dashmap::DashMap;
 use rayon::prelude::*;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use fxhash::FxHasher64;
 
@@ -68,28 +67,87 @@ fn interval_set_from_slice(intervals: &[i32]) -> IntervalSet {
 }
 
 // Helper to get permutations of notes
-pub fn get_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
-    let mut results = Vec::new();
-    let mut notes = notes.to_vec();
+/// Generate all N! permutations (used for small groups ≤ 3 notes).
+fn get_all_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
+    let n = notes.len();
+    let capacity = (1..=n).product();
+    let mut results = Vec::with_capacity(capacity);
+    let mut current = Vec::with_capacity(n);
+    let mut used = 0u8;
 
-    fn backtrack(current: Vec<Note>, remaining: Vec<Note>, results: &mut Vec<Vec<Note>>) {
-        if remaining.is_empty() {
-            results.push(current);
+    fn backtrack(notes: &[Note], used: &mut u8, current: &mut Vec<Note>, results: &mut Vec<Vec<Note>>, n: usize) {
+        if current.len() == n {
+            results.push(current.clone());
             return;
         }
-
-        for i in 0..remaining.len() {
-            let mut next_current = current.clone();
-            next_current.push(remaining[i]);
-
-            let mut next_remaining = remaining.clone();
-            next_remaining.remove(i);
-
-            backtrack(next_current, next_remaining, results);
+        for i in 0..n {
+            if *used & (1 << i) == 0 {
+                *used |= 1 << i;
+                current.push(notes[i]);
+                backtrack(notes, used, current, results, n);
+                current.pop();
+                *used &= !(1 << i);
+            }
         }
     }
 
-    backtrack(Vec::new(), notes, &mut results);
+    backtrack(notes, &mut used, &mut current, &mut results, n);
+    results
+}
+
+/// Heuristic channel-priority orderings. Each row is a voice-processing order.
+/// The voice scored first has fewest constraints (most freedom), last has most.
+const SMART_ORDERINGS: [[i32; 5]; 10] = [
+    [4, 3, 2, 1, 0],  // Bass-first
+    [0, 1, 2, 3, 4],  // Soprano-first
+    [0, 4, 1, 3, 2],  // Outer-voices-first
+    [2, 1, 3, 0, 4],  // Inner-voices-first
+    [4, 0, 3, 1, 2],  // Alternating outer
+    [3, 2, 1, 0, 4],  // Tenor-first
+    [1, 0, 2, 4, 3],  // Alto-first
+    [0, 4, 2, 1, 3],  // Outer + middle
+    [4, 2, 0, 3, 1],  // Spread pattern
+    [2, 0, 4, 1, 3],  // Middle-out
+];
+
+/// Smart permutation selection: ~10 heuristic orderings instead of N!
+/// For small groups (≤ 3 notes), falls back to all permutations.
+pub fn get_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
+    let n = notes.len();
+    if n <= 3 {
+        return get_all_permutations(notes);
+    }
+
+    let mut results = Vec::with_capacity(SMART_ORDERINGS.len());
+    let mut seen_channel_orders: Vec<Vec<i32>> = Vec::new();
+
+    for ordering in &SMART_ORDERINGS {
+        // Map channel ordering to notes present in this group
+        let perm: Vec<Note> = ordering.iter()
+            .filter_map(|&ch| notes.iter().find(|note| note.channel == ch))
+            .copied()
+            .collect();
+
+        // Skip if not all notes were matched (group might not have all 5 channels)
+        if perm.len() != n {
+            continue;
+        }
+
+        // Deduplicate: skip if we already have this channel ordering
+        let ch_order: Vec<i32> = perm.iter().map(|note| note.channel).collect();
+        if seen_channel_orders.contains(&ch_order) {
+            continue;
+        }
+        seen_channel_orders.push(ch_order);
+        results.push(perm);
+    }
+
+    // Fallback: if heuristics produced fewer than 3 results (unusual channel layouts),
+    // fall back to all permutations
+    if results.len() < 3 {
+        return get_all_permutations(notes);
+    }
+
     results
 }
 
@@ -150,26 +208,32 @@ fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &
 }
 
 fn is_harmony_moving_to_same_direction(last: &[Note], current: &[Note], going_down: bool) -> bool {
-    let mut last_map = HashMap::new();
-    for n in last { last_map.insert(n.channel, n.pitch); }
+    const NONE: i32 = i32::MIN;
+    let mut last_arr = [NONE; 5];
+    let mut cur_arr = [NONE; 5];
 
-    let mut cur_map = HashMap::new();
-    for n in current { cur_map.insert(n.channel, n.pitch); }
+    for n in last {
+        let ch = n.channel as usize;
+        if ch < 5 { last_arr[ch] = n.pitch; }
+    }
+    for n in current {
+        let ch = n.channel as usize;
+        if ch < 5 { cur_arr[ch] = n.pitch; }
+    }
 
     let mut up = 0;
     let mut down = 0;
     let mut compared = 0;
 
-    for (ch, last_p) in last_map {
-        if let Some(cur_p) = cur_map.get(&ch) {
+    for ch in 0..5 {
+        if last_arr[ch] != NONE && cur_arr[ch] != NONE {
             compared += 1;
-            if cur_p > &last_p { up += 1; }
-            else if cur_p < &last_p { down += 1; }
+            if cur_arr[ch] > last_arr[ch] { up += 1; }
+            else if cur_arr[ch] < last_arr[ch] { down += 1; }
         }
     }
 
     if compared == 0 { return false; }
-
     if going_down { down > up } else { up > down }
 }
 
@@ -563,22 +627,31 @@ pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channe
     ar
 }
 
-fn group_by_start_array(notes: Vec<Note>) -> Vec<Vec<Note>> {
-    let mut map: HashMap<String, Vec<Note>> = HashMap::new();
-    let quantize = |f: f64| format!("{:.4}", f);
+/// Quantize start time to integer key (10000ths of a quarter note).
+#[inline(always)]
+fn quantize_start(start: f64) -> i64 {
+    (start * 10000.0).round() as i64
+}
 
-    for n in notes {
-        let key = quantize(n.start);
-        map.entry(key).or_insert(Vec::new()).push(n);
+fn group_by_start_array(mut notes: Vec<Note>) -> Vec<Vec<Note>> {
+    // Sort by quantized start time, then pitch descending within each group
+    notes.sort_unstable_by(|a, b| {
+        quantize_start(a.start).cmp(&quantize_start(b.start))
+            .then(b.pitch.cmp(&a.pitch))
+    });
+
+    // Split into groups by quantized start time
+    let mut groups: Vec<Vec<Note>> = Vec::new();
+    let mut start = 0;
+    for i in 1..notes.len() {
+        if quantize_start(notes[i].start) != quantize_start(notes[start].start) {
+            groups.push(notes[start..i].to_vec());
+            start = i;
+        }
     }
-
-    let mut groups: Vec<Vec<Note>> = map.into_values().collect();
-    groups.sort_by(|a, b| a[0].start.partial_cmp(&b[0].start).unwrap());
-
-    for g in &mut groups {
-        g.sort_by(|a, b| b.pitch.cmp(&a.pitch));
+    if start < notes.len() {
+        groups.push(notes[start..].to_vec());
     }
-
     groups
 }
 
@@ -706,6 +779,9 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
     }];
     let mut ccc = 0.0;
 
+    // Persistent lookahead cache across all groups (not recreated per group)
+    let cache: DashMap<u64, f64> = DashMap::with_capacity(4096);
+
     for (i, _) in grouped_notes.iter().enumerate() {
         if let Some(sender) = progress_sender {
             let _ = sender.send((i, grouped_notes.len()));
@@ -713,48 +789,65 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
 
         let permutations = &all_permutations[i];
 
-        let cache: DashMap<u64, f64> = DashMap::new();
         let all_permutations_ref = &all_permutations;
         let cache_ref = &cache;
 
         let current_beam = &beam;
 
-        let mut candidates: Vec<IntermediateCandidate> = current_beam
-            .par_iter()
-            .enumerate()
-            .flat_map(|(parent_idx, beam_state)| {
-                let start = if beam_state.notes.len() > 30 {
-                    beam_state.notes.len() - 30
-                } else {
-                    0
-                };
-                let trimmed_notes = &beam_state.notes[start..];
+        // Build precomputed data ONCE per beam state (not per permutation)
+        let start_time = permutations[0][0].start;
+        let beam_precomputed: Vec<_> = current_beam.iter().map(|beam_state| {
+            let start = if beam_state.notes.len() > 30 {
+                beam_state.notes.len() - 30
+            } else {
+                0
+            };
+            let trimmed_notes = &beam_state.notes[start..];
+            (trimmed_notes, build_precomputed_data(trimmed_notes, start_time))
+        }).collect();
 
-                let start_time = permutations[0][0].start;
-                let precomputed = build_precomputed_data(trimmed_notes, start_time);
+        // Flat parallelism: single par_iter over (beam_idx, perm_idx) pairs
+        // instead of nested beam.par_iter().flat_map(perms.par_iter())
+        let num_perms = permutations.len();
+        let total_pairs = current_beam.len() * num_perms;
 
-                permutations.par_iter().map(move |perm| {
-                    let mut temp_notes = Vec::new();
-                    let group_score =
-                        score_note_group(perm, &mut temp_notes, false, config, state, &precomputed);
+        let mut candidates: Vec<IntermediateCandidate> = (0..total_pairs)
+            .into_par_iter()
+            .map(|flat_idx| {
+                let parent_idx = flat_idx / num_perms;
+                let perm_idx = flat_idx % num_perms;
+                let beam_state = &current_beam[parent_idx];
+                let (trimmed_notes, ref precomputed) = beam_precomputed[parent_idx];
+                let perm = &permutations[perm_idx];
 
-                    let mut next_context = trimmed_notes.to_vec();
-                    next_context.extend(temp_notes.clone());
+                let mut temp_notes = Vec::new();
+                let group_score =
+                    score_note_group(perm, &mut temp_notes, false, config, state, precomputed);
 
-                    let lookahead_score = score_lookahead(
-                        all_permutations_ref, i + 1, lookahead, &next_context, config, state, cache_ref,
-                    );
+                let mut next_context = trimmed_notes.to_vec();
+                next_context.extend(temp_notes.clone());
 
-                    IntermediateCandidate {
-                        parent_idx,
-                        added_notes: temp_notes,
-                        score: beam_state.score + group_score + lookahead_score,
-                    }
-                })
+                let lookahead_score = score_lookahead(
+                    all_permutations_ref, i + 1, lookahead, &next_context, config, state, cache_ref,
+                );
+
+                IntermediateCandidate {
+                    parent_idx,
+                    added_notes: temp_notes,
+                    score: beam_state.score + group_score + lookahead_score,
+                }
             })
             .collect();
 
-        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        // Top-K partial sort: O(n) instead of O(n log n)
+        if candidates.len() > beam_width {
+            candidates.select_nth_unstable_by(beam_width, |a, b|
+                b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+            );
+            candidates.truncate(beam_width);
+        }
+        // Sort only the top-K for deterministic beam ordering
+        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
         beam = candidates.into_iter().take(beam_width).map(|c| {
             let mut new_notes = current_beam[c.parent_idx].notes.clone();
