@@ -148,9 +148,58 @@ impl Config {
 
     pub fn init_contours(&mut self) {
         let steps = (self.render_length * self.pl) as usize + 1;
-        self.harmony_distance_contour = Some(vec![0.2; steps]);
-        self.mode_contour = Some(vec![0.0; steps]);
-        self.chord_structure_contour = Some(vec![1.0; steps]);
-        self.voice_rhythm_contour = Some(vec![vec![4.0; steps]; 16]);
+        
+        let mut harmony = vec![0.2; steps];
+        let mut mode = vec![0.0; steps];
+        let mut chord = vec![1.0; steps];
+        let mut rhythm = vec![vec![4.0; steps]; 16];
+
+        let snaps = [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0];
+
+        for i in 0..steps {
+            let phase = (i as f64) / ((steps - 1).max(1) as f64);
+            let tension = (phase * std::f64::consts::PI).sin();
+
+            // Harmony Distance: 0.2 -> 0.45 -> 0.2
+            harmony[i] = 0.2 + (0.25 * tension);
+
+            // Mode: 0.0 -> 1.0 (mid) -> 0.0
+            mode[i] = if phase >= 0.4 && phase <= 0.8 { 1.0 } else { 0.0 };
+
+            // Chord Structure: 0.0 -> 5.0 -> 0.0
+            chord[i] = (tension * 5.0).round().clamp(0.0, 5.0);
+
+            // Rhythm Fractal Predictability (Macro + Mid + Micro Phrase Alignments)
+            // self.pl roughly maps towards fundamental block layouts natively framing structures predictably
+            let local_phase = ((i % self.pl as usize) as f64) / (self.pl as f64).max(1.0);
+            let local_tension = (local_phase * std::f64::consts::PI).sin(); // 0 -> 1 -> 0 over 1 bar
+            
+            let mid_phase = ((i % (self.pl as usize * 4)) as f64) / (self.pl as f64 * 4.0).max(1.0);
+            let mid_tension = (mid_phase * std::f64::consts::PI).sin(); // Over 4 bars
+
+            // Fractal composite: 40% global structure + 30% section + 30% strict local phrase
+            let rhythm_tension = tension * 0.4 + mid_tension * 0.3 + local_tension * 0.3;
+
+            // Voice Rhythm
+            for v in 0..16 {
+                let base_speed = if v >= 3 { 4.0 } else { 1.0 };
+                // Slower at structural starts/ends locally and globally, peaks towards faster speeds logically
+                let target = base_speed - rhythm_tension * (if v >= 3 { 2.0 } else { 0.75 });
+                
+                // Quantize to snaps
+                let mut closest = snaps[0];
+                let mut min_diff = (target - closest).abs();
+                for &s in snaps.iter().skip(1) {
+                    let diff = (target - s).abs();
+                    if diff < min_diff { min_diff = diff; closest = s; }
+                }
+                rhythm[v][i] = closest;
+            }
+        }
+
+        self.harmony_distance_contour = Some(harmony);
+        self.mode_contour = Some(mode);
+        self.chord_structure_contour = Some(chord);
+        self.voice_rhythm_contour = Some(rhythm);
     }
 }
