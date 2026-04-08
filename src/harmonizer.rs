@@ -565,7 +565,21 @@ pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channe
 
     while pos < clip_len {
         let n = base + pitch_shifts[mod_shim(counter, pitch_shifts.len() as i32) as usize];
-        let d = rhythm_data[mod_shim(counter, rhythm_data.len() as i32) as usize];
+        let d = if let Some(vrc) = &config.voice_rhythm_contour {
+            if channel >= 0 && channel < vrc.len() as i32 {
+                let track = &vrc[channel as usize];
+                if !track.is_empty() {
+                    let idx = (pos / config.voice_contour_resolution).floor() as usize;
+                    track[mod_shim(idx as i32, track.len() as i32) as usize]
+                } else {
+                    rhythm_data[mod_shim(counter, rhythm_data.len() as i32) as usize]
+                }
+            } else {
+                rhythm_data[mod_shim(counter, rhythm_data.len() as i32) as usize]
+            }
+        } else {
+            rhythm_data[mod_shim(counter, rhythm_data.len() as i32) as usize]
+        };
         let v = 1 + SeededRng::random_int(10) + sin(counter as f64, sf, 10.0) as i32;
         ar.push(Note::new(n, pos, d, v, muted, channel));
         pos += d;

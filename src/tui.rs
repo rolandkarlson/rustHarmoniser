@@ -26,6 +26,7 @@ enum InputMode {
     HarmonyContour,
     ModeContour,
     ChordContour,
+    VoiceRhythmContour,
 }
 
 enum GenerationMessage {
@@ -76,6 +77,7 @@ impl App {
             "voice_rhythm",
             "rng_seed",
             "Edit Voice Contours",
+            "Edit Voice Rhythm Contour",
             "Edit Harmony Contour",
             "Edit Mode Contour",
             "Edit Chord Contour",
@@ -169,6 +171,7 @@ impl App {
             "voice_rhythm" => self.config.voice_rhythm.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(", "),
             "rng_seed" => self.config.rng_seed.to_string(),
             "Edit Voice Contours" => "Press Enter".to_string(),
+            "Edit Voice Rhythm Contour" => "Press Enter".to_string(),
             "Edit Harmony Contour" => "Press Enter".to_string(),
             "Edit Mode Contour" => "Press Enter".to_string(),
             "Edit Chord Contour" => "Press Enter".to_string(),
@@ -293,10 +296,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
             match event {
                 Event::Key(key) => {
                     if key.kind == KeyEventKind::Press {
-                        if app.input_mode == InputMode::Contour || app.input_mode == InputMode::HarmonyContour || app.input_mode == InputMode::ModeContour || app.input_mode == InputMode::ChordContour {
+                        if app.input_mode == InputMode::Contour || app.input_mode == InputMode::HarmonyContour || app.input_mode == InputMode::ModeContour || app.input_mode == InputMode::ChordContour || app.input_mode == InputMode::VoiceRhythmContour {
                             match key.code {
                                 KeyCode::Esc => app.input_mode = InputMode::Normal,
-                                KeyCode::Char('v') if app.input_mode == InputMode::Contour => {
+                                KeyCode::Char('v') if app.input_mode == InputMode::Contour || app.input_mode == InputMode::VoiceRhythmContour => {
                                     app.selected_voice = (app.selected_voice + 1) % 16;
                                 },
                                 KeyCode::Char('c') => {
@@ -317,6 +320,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                                     } else if app.input_mode == InputMode::ChordContour {
                                         if let Some(contour) = &mut app.config.chord_structure_contour {
                                             contour.clear();
+                                        }
+                                    } else if app.input_mode == InputMode::VoiceRhythmContour {
+                                        if let Some(contours) = &mut app.config.voice_rhythm_contour {
+                                            if app.selected_voice < contours.len() {
+                                                contours[app.selected_voice].clear();
+                                            }
                                         }
                                     }
                                 },
@@ -383,6 +392,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                                          if app.config.voice_contour.is_none() {
                                              app.config.voice_contour = Some(vec![Vec::new(); 16]);
                                          }
+                                     } else if app.keys[i] == "Edit Voice Rhythm Contour" {
+                                         app.input_mode = InputMode::VoiceRhythmContour;
+                                         if app.config.voice_rhythm_contour.is_none() {
+                                             app.config.init_contours();
+                                         }
                                      } else if app.keys[i] == "Edit Harmony Contour" {
                                          app.input_mode = InputMode::HarmonyContour;
                                          if app.config.harmony_distance_contour.is_none() {
@@ -409,7 +423,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                     }
                 },
                 Event::Mouse(mouse) => {
-                    if app.input_mode == InputMode::Contour || app.input_mode == InputMode::HarmonyContour || app.input_mode == InputMode::ModeContour || app.input_mode == InputMode::ChordContour {
+                    if app.input_mode == InputMode::Contour || app.input_mode == InputMode::HarmonyContour || app.input_mode == InputMode::ModeContour || app.input_mode == InputMode::ChordContour || app.input_mode == InputMode::VoiceRhythmContour {
                         match mouse.kind {
                             MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
                                 let x = mouse.column as f64;
@@ -423,6 +437,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                                     let is_harmony = app.input_mode == InputMode::HarmonyContour;
                                     let is_mode = app.input_mode == InputMode::ModeContour;
                                     let is_chord = app.input_mode == InputMode::ChordContour;
+                                    let is_rhythm = app.input_mode == InputMode::VoiceRhythmContour;
 
                                     let chart_x_min = 0.0;
                                     let chart_x_max = (app.config.pl * 4 * app.config.render_length) as f64;
@@ -433,6 +448,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                                         (0.0, 7.0)
                                     } else if is_chord {
                                         (0.0, 5.0)
+                                    } else if is_rhythm {
+                                        (0.0, 4.0)
                                     } else {
                                         (-12.0, 12.0)
                                     };
@@ -452,7 +469,21 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                                     rel_y = rel_y.clamp(0.0, 1.0);
 
                                     let data_x = chart_x_min + rel_x * (chart_x_max - chart_x_min);
-                                    let data_y = chart_y_min + rel_y * (chart_y_max - chart_y_min);
+                                    let mut data_y = chart_y_min + rel_y * (chart_y_max - chart_y_min);
+
+                                    if is_rhythm {
+                                        let snaps = [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0];
+                                        let mut closest = snaps[0];
+                                        let mut min_diff = (data_y - closest).abs();
+                                        for &s in snaps.iter().skip(1) {
+                                            let diff = (data_y - s).abs();
+                                            if diff < min_diff {
+                                                min_diff = diff;
+                                                closest = s;
+                                            }
+                                        }
+                                        data_y = closest;
+                                    }
 
                                     let resolution = app.config.voice_contour_resolution;
                                     let idx = (data_x / resolution).round() as usize;
@@ -464,16 +495,18 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                                     } else if is_chord {
                                         &mut app.config.chord_structure_contour
                                     } else {
-                                        // Custom resolve for VoiceContour mapping specifically avoiding conflict
                                         &mut None
                                     };
 
                                     if !is_harmony && !is_mode && !is_chord {
-                                        if let Some(contours) = &mut app.config.voice_contour {
+                                        let mut_vec_option = if is_rhythm { &mut app.config.voice_rhythm_contour } else { &mut app.config.voice_contour };
+                                        
+                                        if let Some(contours) = mut_vec_option {
                                             if app.selected_voice < contours.len() {
                                                 let vec = &mut contours[app.selected_voice];
+                                                let fill_val = if is_rhythm { 4.0 } else { 0.0 };
                                                 if idx >= vec.len() {
-                                                    vec.resize(idx + 1, 0.0);
+                                                    vec.resize(idx + 1, fill_val);
                                                 }
                                                 
                                                 if let MouseEventKind::Drag(_) = mouse.kind {
@@ -484,14 +517,24 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                                                         if end > start {
                                                             for i in start..=end {
                                                                 if i >= vec.len() {
-                                                                    vec.resize(i + 1, 0.0);
+                                                                    vec.resize(i + 1, fill_val);
                                                                 }
                                                                 let t = (i - start) as f64 / (end - start) as f64;
-                                                                let val = if idx > prev_idx {
+                                                                let mut val = if idx > prev_idx {
                                                                     prev_val + t * (data_y - prev_val)
                                                                 } else {
                                                                     data_y + t * (prev_val - data_y)
                                                                 };
+                                                                if is_rhythm {
+                                                                    let snaps = [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0];
+                                                                    let mut closest = snaps[0];
+                                                                    let mut min_diff = (val - closest).abs();
+                                                                    for &s in snaps.iter().skip(1) {
+                                                                        let diff = (val - s).abs();
+                                                                        if diff < min_diff { min_diff = diff; closest = s; }
+                                                                    }
+                                                                    val = closest;
+                                                                }
                                                                 vec[i] = val;
                                                             }
                                                         }
@@ -553,7 +596,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
-    if app.input_mode == InputMode::Contour || app.input_mode == InputMode::HarmonyContour || app.input_mode == InputMode::ModeContour || app.input_mode == InputMode::ChordContour {
+    if app.input_mode == InputMode::Contour || app.input_mode == InputMode::HarmonyContour || app.input_mode == InputMode::ModeContour || app.input_mode == InputMode::ChordContour || app.input_mode == InputMode::VoiceRhythmContour {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -569,6 +612,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         let is_harmony = app.input_mode == InputMode::HarmonyContour;
         let is_mode = app.input_mode == InputMode::ModeContour;
         let is_chord = app.input_mode == InputMode::ChordContour;
+        let is_rhythm = app.input_mode == InputMode::VoiceRhythmContour;
         let has_boxes = is_harmony || is_mode || is_chord;
 
         let active_contour = if is_harmony {
@@ -601,11 +645,12 @@ fn ui(f: &mut Frame, app: &mut App) {
                 }
             }
         } else {
-            if let Some(contours) = &app.config.voice_contour {
+            let active_multi = if is_rhythm { &app.config.voice_rhythm_contour } else { &app.config.voice_contour };
+            if let Some(contours) = active_multi {
                 if app.selected_voice < contours.len() {
                     for (i, &val) in contours[app.selected_voice].iter().enumerate() {
                         let x = (i as f64) * app.config.voice_contour_resolution;
-                         if val != 0.0 { // Optimization: only plot non-zeros? Or consistent plot?
+                         if val != 0.0 || is_rhythm { // Plot dynamically tracking
                             data_points.push((x, val));
                          }
                     }
@@ -620,6 +665,8 @@ fn ui(f: &mut Frame, app: &mut App) {
             (0.0, 7.0)
         } else if is_chord {
             (0.0, 5.0)
+        } else if is_rhythm {
+            (0.0, 4.0)
         } else {
             (-12.0, 12.0)
         };
@@ -648,11 +695,13 @@ fn ui(f: &mut Frame, app: &mut App) {
             "Mode Contour".to_string()
         } else if is_chord {
             "Chord Contour".to_string()
+        } else if is_rhythm {
+            format!("Voice {} Rhythm Contour", app.selected_voice)
         } else {
             format!("Voice {} Contour", app.selected_voice)
         };
 
-        let active_color = if is_harmony { Color::Magenta } else if is_mode { Color::Yellow } else if is_chord { Color::LightGreen } else { Color::Cyan };
+        let active_color = if is_harmony { Color::Magenta } else if is_mode { Color::Yellow } else if is_chord { Color::LightGreen } else if is_rhythm { Color::Red } else { Color::Cyan };
 
         datasets.push(
             Dataset::default()
@@ -669,11 +718,13 @@ fn ui(f: &mut Frame, app: &mut App) {
             "Mode Contour Editor (Mouse Draw, C: clear, Esc: back)"
         } else if is_chord {
             "Chord Contour Editor (Mouse Draw, C: clear, Esc: back)"
+        } else if is_rhythm {
+            "Voice Rhythm Contour Editor (Mouse Draw, V: switch voice, C: clear, Esc: back)"
         } else {
             "Voice Contour Editor (Mouse Draw, V: switch voice, C: clear, Esc: back)"
         };
 
-        let y_label = if is_harmony { "Balance" } else if is_mode { "Mode" } else if is_chord { "Chord" } else { "Pitch Shift" };
+        let y_label = if is_harmony { "Balance" } else if is_mode { "Mode" } else if is_chord { "Chord" } else if is_rhythm { "Rhythm" } else { "Pitch Shift" };
 
         let chart = Chart::new(datasets)
             .block(Block::default().title(title).borders(Borders::ALL))

@@ -44,6 +44,7 @@ pub struct Config {
     pub render_length: i32,
     pub rng_seed: f64,
     pub voice_contour: Option<Vec<Vec<f64>>>,
+    pub voice_rhythm_contour: Option<Vec<Vec<f64>>>,
     pub voice_contour_resolution: f64,
     pub chord_structure: Vec<i32>,
     pub harmony_distance_contour: Option<Vec<f64>>,
@@ -70,6 +71,7 @@ impl Default for Config {
             render_length: 40,
             rng_seed: 5443343433.0,
             voice_contour: None,
+            voice_rhythm_contour: None,
             voice_contour_resolution: 4.0,
             chord_structure: vec![0, 1, 2, 4, 5],
             harmony_distance_contour: None,
@@ -149,5 +151,6 @@ impl Config {
         self.harmony_distance_contour = Some(vec![0.2; steps]);
         self.mode_contour = Some(vec![0.0; steps]);
         self.chord_structure_contour = Some(vec![1.0; steps]);
+        self.voice_rhythm_contour = Some(vec![vec![4.0; steps]; 16]);
     }
 }
