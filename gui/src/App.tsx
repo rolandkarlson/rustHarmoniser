@@ -44,6 +44,38 @@ function App() {
     setConfig({ ...config, [key]: value });
   };
 
+  const handleDuplicate = () => {
+    if (!config) return;
+    
+    // Explicitly mirror arrays filling gaps enforcing perfect duplication limits natively
+    const duplicateArray = (arr: any[], steps: number, fallback: any) => {
+      const clean = Array.from({ length: steps }).map((_, i) => arr && arr[i] !== undefined ? arr[i] : fallback);
+      return [...clean, ...clean];
+    };
+
+    const newRL = config.render_length * 2;
+    const stdSteps = Math.ceil((config.pl * 4 * config.render_length) / config.voice_contour_resolution);
+    const schillingerSteps = config.pl * config.render_length;
+
+    const newConfig = { ...config };
+    newConfig.render_length = newRL;
+
+    if (newConfig.schillinger_sequence) newConfig.schillinger_sequence = duplicateArray(newConfig.schillinger_sequence, schillingerSteps, 0);
+    if (newConfig.harmony_distance_contour) newConfig.harmony_distance_contour = duplicateArray(newConfig.harmony_distance_contour, stdSteps, 0.2);
+    if (newConfig.mode_contour) newConfig.mode_contour = duplicateArray(newConfig.mode_contour, stdSteps, 0);
+    if (newConfig.chord_structure_contour) newConfig.chord_structure_contour = duplicateArray(newConfig.chord_structure_contour, stdSteps, 0);
+    if (newConfig.schillinger_ex_contour) newConfig.schillinger_ex_contour = duplicateArray(newConfig.schillinger_ex_contour, stdSteps, 2);
+    
+    if (newConfig.voice_contour) {
+      newConfig.voice_contour = newConfig.voice_contour.map((track: any[]) => duplicateArray(track, stdSteps, 0));
+    }
+    if (newConfig.voice_rhythm_contour) {
+      newConfig.voice_rhythm_contour = newConfig.voice_rhythm_contour.map((track: any[]) => duplicateArray(track, stdSteps, 4.0));
+    }
+
+    setConfig(newConfig);
+  };
+
   if (!config) return <div className="p-8 text-xl text-slate-400">Loading Configuration...</div>;
 
   const renderActiveEditor = () => {
@@ -121,12 +153,23 @@ function App() {
           onChange={(d) => updateConfig('schillinger_sequence', d.map(n => Math.round(n)))}
           color="#fb923c"
         />;
+      case 'schillinger_ex':
+        return <ContourEditor 
+          label="Schillinger Expansion Contour (ex)" 
+          data={config.schillinger_ex_contour || []} 
+          yMin={2} yMax={5} xMax={xMax} 
+          resolution={config.voice_contour_resolution}
+          pl={config.pl}
+          onChange={(d) => updateConfig('schillinger_ex_contour', d.map(n => Math.round(n)))}
+          color="#f43f5e"
+        />;
       default: return null;
     }
   };
 
   const tabs = [
     { id: 'schillinger', label: 'Schillinger' },
+    { id: 'schillinger_ex', label: 'Sch. EXP' },
     { id: 'harmony', label: 'Harmony' },
     { id: 'mode', label: 'Mode' },
     { id: 'chord', label: 'Chord' },
@@ -172,13 +215,21 @@ function App() {
               </div>
             </div>
 
-          <button 
-            onClick={handleGenerate}
-            disabled={isGenerating}
-            className="px-6 py-2 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold rounded-lg shadow-[0_0_15px_rgba(34,211,238,0.4)] transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isGenerating ? 'Generating...' : 'Generate MIDI'}
-          </button>
+          <div className="flex gap-4 items-center">
+            <button 
+              onClick={handleDuplicate}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Duplicate (x2)
+            </button>
+            <button 
+              onClick={handleGenerate}
+              disabled={isGenerating}
+              className="px-6 py-2 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold rounded-lg shadow-[0_0_15px_rgba(34,211,238,0.4)] transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isGenerating ? 'Generating...' : 'Generate MIDI'}
+            </button>
+          </div>
         </div>
 
         {/* Tabs Row */}

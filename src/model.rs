@@ -50,6 +50,7 @@ pub struct Config {
     pub harmony_distance_contour: Option<Vec<f64>>,
     pub mode_contour: Option<Vec<f64>>,
     pub chord_structure_contour: Option<Vec<f64>>,
+    pub schillinger_ex_contour: Option<Vec<f64>>,
 }
 
 impl Default for Config {
@@ -77,6 +78,7 @@ impl Default for Config {
             harmony_distance_contour: None,
             mode_contour: None,
             chord_structure_contour: None,
+            schillinger_ex_contour: None,
         }
     }
 }

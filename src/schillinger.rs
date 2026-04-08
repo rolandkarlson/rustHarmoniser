@@ -221,7 +221,15 @@ pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<i32>> {
         };
 
         let scale = generate_mode_from_steps(0, &current_mode);
-        let ex = 2;
+        let ex = if let Some(ec) = &config.schillinger_ex_contour {
+            if !ec.is_empty() {
+                ec.get_wrapped(contour_idx).round() as i32
+            } else {
+                2
+            }
+        } else {
+            2
+        };
         let notes: Vec<i32> = n_struct.iter().map(|&itm| {
              let idx = (itm * ex) + seq[i as usize % seq.len()];
              scale[mod_shim(idx, scale.len() as i32) as usize]
