@@ -190,7 +190,7 @@ pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<i32>> {
     ];
 
     for i in 0..bars {
-        let start_time = i as f64 * (config.pl as f64 * 4.0);
+        let start_time = i as f64 * 4.0;
         let contour_idx = (start_time / 4.0).floor() as usize;
 
         let current_mode = if let Some(mc) = &config.mode_contour {

@@ -130,7 +130,7 @@ pub struct HarmonizerState {
 }
 
 fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &Config) -> Vec<i32> {
-    let bar_duration = config.pl as f64 * 4.0;
+    let bar_duration = 4.0;
     let bar = (current_note.start / bar_duration).floor() as i32;
     let safe_bar = mod_shim(bar, state.schillinger_notes.len() as i32) as usize;
     let notes = &state.schillinger_notes[safe_bar];
@@ -565,7 +565,7 @@ pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channe
 
     while pos < clip_len {
         let n = base + pitch_shifts[mod_shim(counter, pitch_shifts.len() as i32) as usize];
-        let d = if let Some(vrc) = &config.voice_rhythm_contour {
+        let mut d = if let Some(vrc) = &config.voice_rhythm_contour {
             if channel >= 0 && channel < vrc.len() as i32 {
                 let track = &vrc[channel as usize];
                 if !track.is_empty() {
@@ -580,6 +580,11 @@ pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channe
         } else {
             rhythm_data[mod_shim(counter, rhythm_data.len() as i32) as usize]
         };
+
+        if pos + d > clip_len {
+            d = clip_len - pos;
+        }
+
         let v = 1 + SeededRng::random_int(10) + sin(counter as f64, sf, 10.0) as i32;
         ar.push(Note::new(n, pos, d, v, muted, channel));
         pos += d;

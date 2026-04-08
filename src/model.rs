@@ -25,7 +25,7 @@ impl Note {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     pub schillinger_progression: bool,
     pub last_note_exist_in_voice: f64,
