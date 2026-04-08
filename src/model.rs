@@ -46,6 +46,9 @@ pub struct Config {
     pub voice_contour: Option<Vec<Vec<f64>>>,
     pub voice_contour_resolution: f64,
     pub chord_structure: Vec<i32>,
+    pub harmony_distance_contour: Option<Vec<f64>>,
+    pub mode_contour: Option<Vec<f64>>,
+    pub chord_structure_contour: Option<Vec<f64>>,
 }
 
 impl Default for Config {
@@ -69,6 +72,9 @@ impl Default for Config {
             voice_contour: None,
             voice_contour_resolution: 4.0,
             chord_structure: vec![0, 1, 2, 4, 5],
+            harmony_distance_contour: None,
+            mode_contour: None,
+            chord_structure_contour: None,
         }
     }
 }
@@ -136,5 +142,12 @@ impl Config {
             contours.push(contour_vec);
         }
         self.voice_contour = Some(contours);
+    }
+
+    pub fn init_contours(&mut self) {
+        let steps = (self.render_length * self.pl) as usize + 1;
+        self.harmony_distance_contour = Some(vec![0.2; steps]);
+        self.mode_contour = Some(vec![0.0; steps]);
+        self.chord_structure_contour = Some(vec![1.0; steps]);
     }
 }

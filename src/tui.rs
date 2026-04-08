@@ -23,6 +23,9 @@ enum InputMode {
     Normal,
     Editing,
     Contour,
+    HarmonyContour,
+    ModeContour,
+    ChordContour,
 }
 
 enum GenerationMessage {
@@ -54,6 +57,7 @@ impl App {
         
         SeededRng::set_seed(config.rng_seed);
         config.schillinger_sequence = Self::genProgression(&mut config);
+        config.init_contours();
         let keys = vec![
             "schillinger_progression",
             "schillinger_sequence",
@@ -72,6 +76,9 @@ impl App {
             "voice_rhythm",
             "rng_seed",
             "Edit Voice Contours",
+            "Edit Harmony Contour",
+            "Edit Mode Contour",
+            "Edit Chord Contour",
         ];
         let mut state = ListState::default();
         state.select(Some(0));
@@ -162,6 +169,9 @@ impl App {
             "voice_rhythm" => self.config.voice_rhythm.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(", "),
             "rng_seed" => self.config.rng_seed.to_string(),
             "Edit Voice Contours" => "Press Enter".to_string(),
+            "Edit Harmony Contour" => "Press Enter".to_string(),
+            "Edit Mode Contour" => "Press Enter".to_string(),
+            "Edit Chord Contour" => "Press Enter".to_string(),
             _ => "N/A".to_string(),
         }
     }
@@ -283,16 +293,30 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
             match event {
                 Event::Key(key) => {
                     if key.kind == KeyEventKind::Press {
-                        if app.input_mode == InputMode::Contour {
+                        if app.input_mode == InputMode::Contour || app.input_mode == InputMode::HarmonyContour || app.input_mode == InputMode::ModeContour || app.input_mode == InputMode::ChordContour {
                             match key.code {
                                 KeyCode::Esc => app.input_mode = InputMode::Normal,
-                                KeyCode::Char('v') => {
+                                KeyCode::Char('v') if app.input_mode == InputMode::Contour => {
                                     app.selected_voice = (app.selected_voice + 1) % 16;
                                 },
                                 KeyCode::Char('c') => {
-                                    if let Some(contours) = &mut app.config.voice_contour {
-                                        if app.selected_voice < contours.len() {
-                                            contours[app.selected_voice].clear();
+                                    if app.input_mode == InputMode::Contour {
+                                        if let Some(contours) = &mut app.config.voice_contour {
+                                            if app.selected_voice < contours.len() {
+                                                contours[app.selected_voice].clear();
+                                            }
+                                        }
+                                    } else if app.input_mode == InputMode::HarmonyContour {
+                                        if let Some(contour) = &mut app.config.harmony_distance_contour {
+                                            contour.clear();
+                                        }
+                                    } else if app.input_mode == InputMode::ModeContour {
+                                        if let Some(contour) = &mut app.config.mode_contour {
+                                            contour.clear();
+                                        }
+                                    } else if app.input_mode == InputMode::ChordContour {
+                                        if let Some(contour) = &mut app.config.chord_structure_contour {
+                                            contour.clear();
                                         }
                                     }
                                 },
@@ -353,16 +377,31 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                            KeyCode::Up => app.previous(),
                            KeyCode::Enter => {
                                if let Some(i) = app.state.selected() {
-                                    if app.keys[i] == "Edit Voice Contours" {
-                                        app.input_mode = InputMode::Contour;
-                                        // Initialize contour vector if needed
-                                        if app.config.voice_contour.is_none() {
-                                            app.config.voice_contour = Some(vec![Vec::new(); 16]);
-                                        }
-                                    } else {
-                                        app.input_mode = InputMode::Editing;
-                                        app.input_buffer = app.get_value(app.keys[i]);
-                                    }
+                                     if app.keys[i] == "Edit Voice Contours" {
+                                         app.input_mode = InputMode::Contour;
+                                         // Initialize contour vector if needed
+                                         if app.config.voice_contour.is_none() {
+                                             app.config.voice_contour = Some(vec![Vec::new(); 16]);
+                                         }
+                                     } else if app.keys[i] == "Edit Harmony Contour" {
+                                         app.input_mode = InputMode::HarmonyContour;
+                                         if app.config.harmony_distance_contour.is_none() {
+                                             app.config.init_contours();
+                                         }
+                                     } else if app.keys[i] == "Edit Mode Contour" {
+                                         app.input_mode = InputMode::ModeContour;
+                                         if app.config.mode_contour.is_none() {
+                                             app.config.init_contours();
+                                         }
+                                     } else if app.keys[i] == "Edit Chord Contour" {
+                                         app.input_mode = InputMode::ChordContour;
+                                         if app.config.chord_structure_contour.is_none() {
+                                             app.config.init_contours();
+                                         }
+                                     } else {
+                                         app.input_mode = InputMode::Editing;
+                                         app.input_buffer = app.get_value(app.keys[i]);
+                                     }
                                }
                            }
                            _ => {}
@@ -370,7 +409,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                     }
                 },
                 Event::Mouse(mouse) => {
-                    if app.input_mode == InputMode::Contour {
+                    if app.input_mode == InputMode::Contour || app.input_mode == InputMode::HarmonyContour || app.input_mode == InputMode::ModeContour || app.input_mode == InputMode::ChordContour {
                         match mouse.kind {
                             MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
                                 let x = mouse.column as f64;
@@ -381,47 +420,109 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                                    y >= area.y as f64 && y < (area.y + area.height) as f64 {
 
                                     // Map screen coords to chart coords
-                                    let chart_x_min = 0.0;
-                                    let chart_x_max = (app.config.render_length * 32) as f64;
-                                    let chart_y_min = -12.0;
-                                    let chart_y_max = 12.0;
+                                    let is_harmony = app.input_mode == InputMode::HarmonyContour;
+                                    let is_mode = app.input_mode == InputMode::ModeContour;
+                                    let is_chord = app.input_mode == InputMode::ChordContour;
 
-                                    let rel_x = (x - area.x as f64) / area.width as f64;
-                                    let rel_y = 1.0 - (y - area.y as f64) / area.height as f64; // Invert Y
+                                    let chart_x_min = 0.0;
+                                    let chart_x_max = (app.config.pl * 4 * app.config.render_length) as f64;
+                                    
+                                    let (chart_y_min, chart_y_max) = if is_harmony {
+                                        (-0.2, 0.5)
+                                    } else if is_mode {
+                                        (0.0, 7.0)
+                                    } else if is_chord {
+                                        (0.0, 5.0)
+                                    } else {
+                                        (-12.0, 12.0)
+                                    };
+
+                                    // Approximate inner chart drawing area avoiding borders and axes labels
+                                    let inner_x_start = area.x as f64 + 5.0; // Y-axis labels + left border
+                                    let inner_width = (area.width as f64 - 6.0).max(1.0); // Right border
+                                    
+                                    let inner_y_start = area.y as f64 + 1.0; // Top border
+                                    let inner_height = (area.height as f64 - 3.0).max(1.0); // X-axis labels + bottom border
+
+                                    let mut rel_x = (x - inner_x_start) / inner_width;
+                                    // Invert Y: 1.0 is top (inner_y_start), 0.0 is bottom (inner_y_start + inner_height)
+                                    let mut rel_y = 1.0 - (y - inner_y_start) / inner_height; 
+
+                                    rel_x = rel_x.clamp(0.0, 1.0);
+                                    rel_y = rel_y.clamp(0.0, 1.0);
 
                                     let data_x = chart_x_min + rel_x * (chart_x_max - chart_x_min);
                                     let data_y = chart_y_min + rel_y * (chart_y_max - chart_y_min);
 
-                                    // Quantize X to index
-                                    let idx = (data_x / app.config.voice_contour_resolution).round() as usize;
+                                    let resolution = app.config.voice_contour_resolution;
+                                    let idx = (data_x / resolution).round() as usize;
 
-                                    if let Some(contours) = &mut app.config.voice_contour {
-                                        if app.selected_voice < contours.len() {
-                                            let vec = &mut contours[app.selected_voice];
+                                    let active_config_vec = if is_harmony {
+                                        &mut app.config.harmony_distance_contour
+                                    } else if is_mode {
+                                        &mut app.config.mode_contour
+                                    } else if is_chord {
+                                        &mut app.config.chord_structure_contour
+                                    } else {
+                                        // Custom resolve for VoiceContour mapping specifically avoiding conflict
+                                        &mut None
+                                    };
+
+                                    if !is_harmony && !is_mode && !is_chord {
+                                        if let Some(contours) = &mut app.config.voice_contour {
+                                            if app.selected_voice < contours.len() {
+                                                let vec = &mut contours[app.selected_voice];
+                                                if idx >= vec.len() {
+                                                    vec.resize(idx + 1, 0.0);
+                                                }
+                                                
+                                                if let MouseEventKind::Drag(_) = mouse.kind {
+                                                    if let Some((prev_idx, prev_val)) = app.last_mouse_pos {
+                                                        let start = std::cmp::min(prev_idx, idx);
+                                                        let end = std::cmp::max(prev_idx, idx);
+                                                        
+                                                        if end > start {
+                                                            for i in start..=end {
+                                                                if i >= vec.len() {
+                                                                    vec.resize(i + 1, 0.0);
+                                                                }
+                                                                let t = (i - start) as f64 / (end - start) as f64;
+                                                                let val = if idx > prev_idx {
+                                                                    prev_val + t * (data_y - prev_val)
+                                                                } else {
+                                                                    data_y + t * (prev_val - data_y)
+                                                                };
+                                                                vec[i] = val;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                
+                                                vec[idx] = data_y;
+                                                app.last_mouse_pos = Some((idx, data_y));
+                                            }
+                                        }
+                                    } else {
+                                        if let Some(vec) = active_config_vec {
+                                            let fill_val = if is_harmony { 0.2 } else if is_mode { 0.0 } else { 1.0 };
                                             if idx >= vec.len() {
-                                                vec.resize(idx + 1, 0.0);
+                                                vec.resize(idx + 1, fill_val);
                                             }
                                             
-                                            // Ensure we fill the gap if this is a drag
                                             if let MouseEventKind::Drag(_) = mouse.kind {
                                                 if let Some((prev_idx, prev_val)) = app.last_mouse_pos {
-                                                    // Interpolate from prev_idx to idx
                                                     let start = std::cmp::min(prev_idx, idx);
                                                     let end = std::cmp::max(prev_idx, idx);
                                                     
                                                     if end > start {
                                                         for i in start..=end {
                                                             if i >= vec.len() {
-                                                                vec.resize(i + 1, 0.0);
+                                                                vec.resize(i + 1, fill_val);
                                                             }
                                                             let t = (i - start) as f64 / (end - start) as f64;
                                                             let val = if idx > prev_idx {
                                                                 prev_val + t * (data_y - prev_val)
                                                             } else {
-                                                                // if we moved backwards (idx < prev_idx), start=idx, end=prev_idx
-                                                                // so i goes from idx to prev_idx.
-                                                                // if i=start=idx -> t=0 -> should be data_y
-                                                                // if i=end=prev_idx -> t=1 -> should be prev_val
                                                                 data_y + t * (prev_val - data_y)
                                                             };
                                                             vec[i] = val;
@@ -429,7 +530,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                                                     }
                                                 }
                                             }
-                                            
                                             vec[idx] = data_y;
                                             app.last_mouse_pos = Some((idx, data_y));
                                         }
@@ -453,7 +553,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
-    if app.input_mode == InputMode::Contour {
+    if app.input_mode == InputMode::Contour || app.input_mode == InputMode::HarmonyContour || app.input_mode == InputMode::ModeContour || app.input_mode == InputMode::ChordContour {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -465,46 +565,131 @@ fn ui(f: &mut Frame, app: &mut App) {
 
         // Prepare dataset
         let mut data_points = Vec::new();
-        if let Some(contours) = &app.config.voice_contour {
-            if app.selected_voice < contours.len() {
-                for (i, &val) in contours[app.selected_voice].iter().enumerate() {
+        let mut box_points = Vec::new();
+        let is_harmony = app.input_mode == InputMode::HarmonyContour;
+        let is_mode = app.input_mode == InputMode::ModeContour;
+        let is_chord = app.input_mode == InputMode::ChordContour;
+        let has_boxes = is_harmony || is_mode || is_chord;
+
+        let active_contour = if is_harmony {
+            &app.config.harmony_distance_contour
+        } else if is_mode {
+            &app.config.mode_contour
+        } else if is_chord {
+            &app.config.chord_structure_contour
+        } else {
+            &None
+        };
+        
+        if has_boxes {
+            if let Some(contour) = active_contour {
+                for (i, &val) in contour.iter().enumerate() {
                     let x = (i as f64) * app.config.voice_contour_resolution;
-                     if val != 0.0 { // Optimization: only plot non-zeros? Or consistent plot?
-                        data_points.push((x, val));
-                     }
+                    data_points.push((x, val));
+                }
+                
+                // Draw boxes for bars
+                let (y_min, y_max) = if is_harmony { (-0.2, 0.5) } else if is_mode { (0.0, 7.0) } else { (0.0, 5.0) };
+                for i in 0..app.config.render_length {
+                    let x_start = (i as f64) * (app.config.pl as f64 * 4.0);
+                    let x_end = ((i + 1) as f64) * (app.config.pl as f64 * 4.0);
+                    box_points.push((x_start, y_min));
+                    box_points.push((x_start, y_max));
+                    box_points.push((x_end, y_max));
+                    box_points.push((x_end, y_min));
+                    box_points.push((x_start, y_min));
+                }
+            }
+        } else {
+            if let Some(contours) = &app.config.voice_contour {
+                if app.selected_voice < contours.len() {
+                    for (i, &val) in contours[app.selected_voice].iter().enumerate() {
+                        let x = (i as f64) * app.config.voice_contour_resolution;
+                         if val != 0.0 { // Optimization: only plot non-zeros? Or consistent plot?
+                            data_points.push((x, val));
+                         }
+                    }
                 }
             }
         }
         
+        let x_max = if has_boxes { (app.config.pl * 4 * app.config.render_length) as f64 } else { (app.config.render_length * 32) as f64 };
+        let (y_min_val, y_max_val) = if is_harmony {
+            (-0.2, 0.5)
+        } else if is_mode {
+            (0.0, 7.0)
+        } else if is_chord {
+            (0.0, 5.0)
+        } else {
+            (-12.0, 12.0)
+        };
+
         let x_labels = vec![
             Span::styled("0", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(format!("{}", (app.config.render_length * 32)), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{}", x_max), Style::default().add_modifier(Modifier::BOLD)),
         ];
 
-        let datasets = vec![
+        let mut datasets = Vec::new();
+        
+        if has_boxes {
+             datasets.push(
+                Dataset::default()
+                    .name("Bars")
+                    .marker(symbols::Marker::Braille)
+                    .graph_type(GraphType::Line)
+                    .style(Style::default().fg(Color::DarkGray))
+                    .data(&box_points)
+             );
+        }
+
+        let contour_name = if is_harmony {
+            "Harmony Contour".to_string()
+        } else if is_mode {
+            "Mode Contour".to_string()
+        } else if is_chord {
+            "Chord Contour".to_string()
+        } else {
+            format!("Voice {} Contour", app.selected_voice)
+        };
+
+        let active_color = if is_harmony { Color::Magenta } else if is_mode { Color::Yellow } else if is_chord { Color::LightGreen } else { Color::Cyan };
+
+        datasets.push(
             Dataset::default()
-                .name(format!("Voice {} Contour", app.selected_voice))
+                .name(contour_name)
                 .marker(symbols::Marker::Braille)
                 .graph_type(GraphType::Line)
-                .style(Style::default().fg(Color::Cyan))
-                .data(&data_points),
-        ];
+                .style(Style::default().fg(active_color))
+                .data(&data_points)
+        );
+
+        let title = if is_harmony {
+            "Harmony Contour Editor (Mouse Draw, C: clear, Esc: back)"
+        } else if is_mode {
+            "Mode Contour Editor (Mouse Draw, C: clear, Esc: back)"
+        } else if is_chord {
+            "Chord Contour Editor (Mouse Draw, C: clear, Esc: back)"
+        } else {
+            "Voice Contour Editor (Mouse Draw, V: switch voice, C: clear, Esc: back)"
+        };
+
+        let y_label = if is_harmony { "Balance" } else if is_mode { "Mode" } else if is_chord { "Chord" } else { "Pitch Shift" };
 
         let chart = Chart::new(datasets)
-            .block(Block::default().title("Contour Editor (Mouse Draw, V: switch voice, C: clear, Esc: back)").borders(Borders::ALL))
+            .block(Block::default().title(title).borders(Borders::ALL))
             .x_axis(Axis::default()
                 .title("Time")
                 .style(Style::default().fg(Color::Gray))
-                .bounds([0.0, (app.config.render_length * 32) as f64])
+                .bounds([0.0, x_max])
                 .labels(x_labels))
             .y_axis(Axis::default()
-                .title("Pitch Shift")
+                .title(y_label)
                 .style(Style::default().fg(Color::Gray))
-                .bounds([-12.0, 12.0])
+                .bounds([y_min_val, y_max_val])
                 .labels(vec![
-                    Span::styled("-12", Style::default().add_modifier(Modifier::BOLD)),
-                    Span::styled("0", Style::default().add_modifier(Modifier::BOLD)),
-                    Span::styled("12", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("{:.1}", y_min_val), Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("{:.1}", (y_min_val + y_max_val) / 2.0), Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("{:.1}", y_max_val), Style::default().add_modifier(Modifier::BOLD)),
                 ]));
         
         f.render_widget(chart, chunks[0]);

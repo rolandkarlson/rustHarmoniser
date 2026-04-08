@@ -1,0 +1,92 @@
+[
+  {
+    "pitch": 70,
+    "start": 0.0,
+    "duration": 4.0,
+    "velocity": 13,
+    "muted": 0,
+    "channel": 0,
+    "probability": 0
+  },
+  {
+    "pitch": 39,
+    "start": 0.0,
+    "duration": 4.0,
+    "velocity": 19,
+    "muted": 0,
+    "channel": 4,
+    "probability": 0
+  },
+  {
+    "pitch": 65,
+    "start": 0.0,
+    "duration": 4.0,
+    "velocity": 17,
+    "muted": 0,
+    "channel": 1,
+    "probability": 0
+  },
+  {
+    "pitch": 60,
+    "start": 0.0,
+    "duration": 4.0,
+    "velocity": 12,
+    "muted": 0,
+    "channel": 2,
+    "probability": 0
+  },
+  {
+    "pitch": 51,
+    "start": 0.0,
+    "duration": 4.0,
+    "velocity": 11,
+    "muted": 0,
+    "channel": 3,
+    "probability": 0
+  },
+  {
+    "pitch": 70,
+    "start": 4.0,
+    "duration": 4.0,
+    "velocity": 17,
+    "muted": 0,
+    "channel": 0,
+    "probability": 0
+  },
+  {
+    "pitch": 51,
+    "start": 4.0,
+    "duration": 4.0,
+    "velocity": 18,
+    "muted": 0,
+    "channel": 3,
+    "probability": 0
+  },
+  {
+    "pitch": 65,
+    "start": 4.0,
+    "duration": 4.0,
+    "velocity": 21,
+    "muted": 0,
+    "channel": 1,
+    "probability": 0
+  },
+  {
+    "pitch": 39,
+    "start": 4.0,
+    "duration": 4.0,
+    "velocity": 24,
+    "muted": 0,
+    "channel": 4,
+    "probability": 0
+  },
+  {
+    "pitch": 61,
+    "start": 4.0,
+    "duration": 4.0,
+    "velocity": 19,
+    "muted": 0,
+    "channel": 2,
+    "probability": 0
+  }
+]

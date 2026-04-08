@@ -125,10 +125,13 @@ pub struct HarmonizerState {
     pub schillinger_notes: Vec<Vec<i32>>,
     pub voice_contour: Option<Vec<Vec<f64>>>,
     pub contour_resolution: f64,
+    pub harmony_contour: Option<Vec<f64>>,
+    pub harmony_contour_resolution: f64,
 }
 
 fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &Config) -> Vec<i32> {
-    let bar = (current_note.start / 8.0 as f64).floor() as i32;
+    let bar_duration = config.pl as f64 * 4.0;
+    let bar = (current_note.start / bar_duration).floor() as i32;
     let safe_bar = mod_shim(bar, state.schillinger_notes.len() as i32) as usize;
     let notes = &state.schillinger_notes[safe_bar];
 
@@ -380,7 +383,16 @@ pub fn get_harmony_scores(
     let n = candidates.len();
 
     // Precompute weights (loop-invariant)
-    let r = config.harmony_distance_balance;
+    let r = if let Some(ref contour) = state.harmony_contour {
+        if !contour.is_empty() {
+            let idx = (current_note.start / state.harmony_contour_resolution).floor() as usize;
+            *contour.get_wrapped(idx)
+        } else {
+            config.harmony_distance_balance
+        }
+    } else {
+        config.harmony_distance_balance
+    };
     let w_harmony = 0.5 + r;
     let w_smooth = 0.5 - r;
 

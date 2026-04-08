@@ -89,11 +89,13 @@ pub fn run_generation(config: &Config, progress_sender: Option<Sender<(usize, us
     });
 
     // 4. Harmonize
-    let schillinger_notes = schillinger::gen_schillinger_progression(&config.schillinger_sequence, config.pl, &config.chord_structure, &config.mode);
+    let schillinger_notes = schillinger::gen_schillinger_progression(&config);
     let state = HarmonizerState {
         schillinger_notes,
         voice_contour: config.voice_contour.clone(),
         contour_resolution: config.voice_contour_resolution,
+        harmony_contour: config.harmony_distance_contour.clone(),
+        harmony_contour_resolution: config.pl as f64 * 4.0,
     };
 
     let notes = harmonise2(income, &config, &state, progress_sender.as_ref());

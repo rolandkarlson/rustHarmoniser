@@ -1,5 +1,6 @@
 use crate::utils::{mod_shim, SeededRng, ArrayExt};
 use crate::music_theory::{generate_mode_from_steps};
+use crate::model::Config;
 
 // PL was 8 in JS, now passed via Config
 const EXP: i32 = 2;
@@ -172,28 +173,57 @@ fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32) ->
     None
 }
 
-pub fn gen_schillinger_progression(config_seq: &[i32], pl: i32, config_chord_structure: &[i32], config_mode: &i32) -> Vec<Vec<i32>> {
+pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<i32>> {
 
-
-    let seq_opt = find_sequence_with_condition(&[-4, -4, -4, -2, -2,-6], pl);
-    //let seq = seq_opt.unwrap_or(vec![0; pl as usize]); // Fallback? JS logs error and returns null.
-    let seq = config_seq;//
+    let seq = &config.schillinger_sequence;
     let bars = seq.len();
-    // We'll trust RNG seed matches or just handle it.
 
-    // `genSchillingerProgression` logic:
     let mut chord_notes = Vec::new();
-    let mut root_sequence = 0;
-    let scale = generate_mode_from_steps(0, config_mode);
   
-    let ex_base = vec![2]; // `var ex = [2].get(i);`
+    let chord_list = vec![
+        vec![0,1,2],
+        vec![0,1,2,4,5],
+        vec![0,1,2,4,5],
+        vec![0,1,2,3,4],
+        vec![0,1,2,3,4,5],
+        vec![0,1,2,3,4,5,6]
+    ];
 
     for i in 0..bars {
-        let n_struct = config_chord_structure;
+        let start_time = i as f64 * (config.pl as f64 * 4.0);
+        let contour_idx = (start_time / 4.0).floor() as usize;
+
+        let current_mode = if let Some(mc) = &config.mode_contour {
+            if !mc.is_empty() {
+                let contour_val = mc.get_wrapped(contour_idx).round() as i32;
+                mod_shim(contour_val * 5, 7)
+            } else {
+                config.mode
+            }
+        } else {
+            config.mode
+        };
+
+        let chord_idx = if let Some(cc) = &config.chord_structure_contour {
+            if !cc.is_empty() {
+                cc.get_wrapped(contour_idx).round() as usize
+            } else {
+                99 // Trigger fallback to static struct
+            }
+        } else {
+            99
+        };
+
+        let n_struct = if chord_idx < chord_list.len() {
+            &chord_list[chord_idx]
+        } else {
+            &config.chord_structure
+        };
+
+        let scale = generate_mode_from_steps(0, &current_mode);
         let ex = 2;
         let notes: Vec<i32> = n_struct.iter().map(|&itm| {
-             let idx = (itm * ex) + seq[i as usize%seq.len()];
-             // scale.get(idx)
+             let idx = (itm * ex) + seq[i as usize % seq.len()];
              scale[mod_shim(idx, scale.len() as i32) as usize]
         }).collect();
 
