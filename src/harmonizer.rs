@@ -66,9 +66,63 @@ fn interval_set_from_slice(intervals: &[i32]) -> IntervalSet {
     }
     set
 }
+/// Heuristic channel-priority orderings. Each row is a voice-processing order.
+/// The voice scored first has fewest constraints (most freedom), last has most.
+const SMART_ORDERINGS: [[i32; 5]; 4] = [
+    [4, 3, 2, 1, 0],  // Bass-first
+    [0, 1, 2, 3, 4],  // Soprano-first
+    [0, 4, 1, 3, 2],  // Outer-voices-first
+    [2, 1, 3, 0, 4],  // Inner-voices-first
+    // [4, 0, 3, 1, 2],  // Alternating outer
+    // [3, 2, 1, 0, 4],  // Tenor-first
+    // [1, 0, 2, 4, 3],  // Alto-first
+    // [0, 4, 2, 1, 3],  // Outer + middle
+    // [4, 2, 0, 3, 1],  // Spread pattern
+    // [2, 0, 4, 1, 3],  // Middle-out
+];
 
-// Helper to get permutations of notes
+/// Smart permutation selection: ~10 heuristic orderings instead of N!
+/// For small groups (≤ 3 notes), falls back to all permutations.
 pub fn get_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
+    let n = notes.len();
+    if n <= 3 {
+        return get_all_permutations(notes);
+    }
+
+    let mut results = Vec::with_capacity(SMART_ORDERINGS.len());
+    let mut seen_channel_orders: Vec<Vec<i32>> = Vec::new();
+
+    for ordering in &SMART_ORDERINGS {
+        // Map channel ordering to notes present in this group
+        let perm: Vec<Note> = ordering.iter()
+            .filter_map(|&ch| notes.iter().find(|note| note.channel == ch))
+            .copied()
+            .collect();
+
+        // Skip if not all notes were matched (group might not have all 5 channels)
+        if perm.len() != n {
+            continue;
+        }
+
+        // Deduplicate: skip if we already have this channel ordering
+        let ch_order: Vec<i32> = perm.iter().map(|note| note.channel).collect();
+        if seen_channel_orders.contains(&ch_order) {
+            continue;
+        }
+        seen_channel_orders.push(ch_order);
+        results.push(perm);
+    }
+
+    // Fallback: if heuristics produced fewer than 3 results (unusual channel layouts),
+    // fall back to all permutations
+    if results.len() < 3 {
+        return get_all_permutations(notes);
+    }
+
+    results
+}
+// Helper to get permutations of notes
+pub fn get_all_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
     let mut results = Vec::new();
     let mut notes = notes.to_vec();
 

@@ -12,6 +12,7 @@ interface ContourEditorProps {
   snaps?: number[];
   color?: string;
   onResolutionChange?: (newResolution: number) => void;
+  yLabelOffset?: number;
 }
 
 export const ContourEditor: React.FC<ContourEditorProps> = ({
@@ -26,6 +27,7 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
   snaps,
   color = '#22d3ee',
   onResolutionChange,
+  yLabelOffset = 0,
 }) => {
   const innerContainerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -285,7 +287,7 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
          className="absolute right-2 -translate-y-1/2 whitespace-nowrap text-[10px]" 
          style={{ top: `${Math.max(0, Math.min(100, pyCenter))}%` }}
        >
-         {Number.isInteger(val) ? val.toString() : val.toFixed(2)}
+         {Number.isInteger(val) ? (val + yLabelOffset).toString() : (val + yLabelOffset).toFixed(2)}
        </div>
      );
 

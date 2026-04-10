@@ -51,6 +51,7 @@ pub struct Config {
     pub mode_contour: Option<Vec<f64>>,
     pub chord_structure_contour: Option<Vec<f64>>,
     pub schillinger_ex_contour: Option<Vec<f64>>,
+    pub main_pitch: i32,
 }
 
 impl Default for Config {
@@ -79,6 +80,7 @@ impl Default for Config {
             mode_contour: None,
             chord_structure_contour: None,
             schillinger_ex_contour: None,
+            main_pitch: 60,
         }
     }
 }

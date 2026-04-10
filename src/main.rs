@@ -120,9 +120,14 @@ pub fn run_generation(config: &Config, progress_sender: Option<Sender<(usize, us
         harmony_contour_resolution: config.voice_contour_resolution,
     };
 
-    let notes = harmonise2(income, &config, &state, progress_sender.as_ref());
+    let mut notes = harmonise2(income, &config, &state, progress_sender.as_ref());
 
-    // 5. Output
+    // 5. Apply main pitch offset
+    for note in &mut notes {
+        note.pitch += config.main_pitch;
+    }
+
+    // 6. Output
     let json = serde_json::to_string_pretty(&notes)?;
     let mut file = File::create("output.json")?;
     file.write_all(json.as_bytes())?;
