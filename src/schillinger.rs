@@ -191,12 +191,12 @@ pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<i32>> {
 
     for i in 0..bars {
         let start_time = i as f64 * 4.0;
-        let contour_idx = (start_time / 4.0).floor() as usize;
+        let contour_idx = (start_time / config.voice_contour_resolution).floor() as usize;
 
         let current_mode = if let Some(mc) = &config.mode_contour {
             if !mc.is_empty() {
                 let contour_val = mc.get_wrapped(contour_idx).round() as i32;
-                mod_shim(contour_val * 5, 7)
+                mod_shim(contour_val * 4, 7)
             } else {
                 config.mode
             }
@@ -208,10 +208,10 @@ pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<i32>> {
             if !cc.is_empty() {
                 cc.get_wrapped(contour_idx).round() as usize
             } else {
-                99 // Trigger fallback to static struct
+                0 // Trigger fallback to static struct
             }
         } else {
-            99
+            0
         };
 
         let n_struct = if chord_idx < chord_list.len() {

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 interface ContourEditorProps {
   label: string;
@@ -11,6 +11,7 @@ interface ContourEditorProps {
   pl: number;
   snaps?: number[];
   color?: string;
+  onResolutionChange?: (newResolution: number) => void;
 }
 
 export const ContourEditor: React.FC<ContourEditorProps> = ({
@@ -24,11 +25,30 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
   pl,
   snaps,
   color = '#22d3ee',
+  onResolutionChange,
 }) => {
   const innerContainerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [lastIdx, setLastIdx] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
+
+  // Derive grid quantization from resolution
+  const xQuantize: 'note' | 'halfbar' | 'bar' = resolution >= 4 ? 'bar' : resolution >= 2 ? 'halfbar' : 'note';
+
+  // Keyboard shortcuts for X-axis quantization
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+      if (!onResolutionChange) return;
+      switch (e.key) {
+        case '1': onResolutionChange(4); break;
+        case '2': onResolutionChange(2); break;
+        case '3': onResolutionChange(1); break;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onResolutionChange]);
 
   // Explicitly calculate unified ticks mirroring both Snap targets and Graph visuals
   const range = yMax - yMin;
@@ -172,37 +192,52 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
     );
   });
 
-  // Generate grid logic plotting boundaries perfectly matching `pl` (Phrase Length)
-  const totalSteps = xMax / resolution;
-  const gridLines = [];
-  const xLabels = [];
-  
-  for (let i = 0; i <= totalSteps; i++) {
-    const px = (i * resolution / xMax) * 100;
-    const isPhrase = i % pl === 0;
+  // Generate grid with X-axis quantization (note / halfbar / bar)
+  const gridLines: React.ReactNode[] = [];
+  const xLabels: React.ReactNode[] = [];
+
+  const gridSpacingBeats = xQuantize === 'bar' ? 4 : xQuantize === 'halfbar' ? 2 : resolution;
+  const phraseBeats = pl * resolution;
+  const visibleGridPoints = (xMax / gridSpacingBeats) / zoom;
+  const showAllLabels = visibleGridPoints < 50;
+
+  for (let xBeats = 0; xBeats <= xMax; xBeats += gridSpacingBeats) {
+    const px = (xBeats / xMax) * 100;
+    const isPhrase = phraseBeats > 0 && xBeats > 0 && Math.abs(xBeats % phraseBeats) < 0.001;
+    const isBar = xBeats > 0 && Math.abs(xBeats % 4) < 0.001;
 
     if (isPhrase) {
-      if (i > 0) {
-        gridLines.push(
-          <line key={`grid-x-phrase-${i}`} x1={px} y1="0" x2={px} y2="100" stroke="#475569" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-        );
-      }
+      gridLines.push(
+        <line key={`grid-x-phrase-${xBeats}`} x1={px} y1="0" x2={px} y2="100" stroke="#475569" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+      );
+    } else if (isBar) {
+      gridLines.push(
+        <line key={`grid-x-bar-${xBeats}`} x1={px} y1="0" x2={px} y2="100" stroke="#475569" strokeWidth="0.75" vectorEffect="non-scaling-stroke" />
+      );
+    } else if (xBeats > 0) {
+      gridLines.push(
+        <line key={`grid-x-${xBeats}`} x1={px} y1="0" x2={px} y2="100" stroke="#334155" strokeWidth="0.5" strokeDasharray="2 2" vectorEffect="non-scaling-stroke" />
+      );
+    }
+
+    // bar.beat labels
+    const bar = Math.floor(xBeats / 4) + 1;
+    const beat = xBeats % 4;
+    let labelText: string;
+    if (Math.abs(beat) < 0.001) {
+      labelText = `${bar}`;
+    } else if (Math.abs(beat - Math.round(beat)) < 0.001) {
+      labelText = `${bar}.${Math.round(beat) + 1}`;
+    } else {
+      labelText = `${bar}.${(beat + 1).toFixed(1)}`;
+    }
+
+    if (xBeats === 0 || isPhrase || (showAllLabels && xBeats > 0)) {
       xLabels.push(
-        <div key={`x-label-${i}`} className={`absolute bottom-0 -translate-x-1/2 text-[10px] whitespace-nowrap select-none ${isPhrase ? 'text-slate-300 font-bold' : 'text-slate-500'}`} style={{ left: `${px}%` }}>
-          {i + 1}.1
+        <div key={`x-label-${xBeats}`} className={`absolute bottom-0 -translate-x-1/2 text-[10px] whitespace-nowrap select-none ${isPhrase ? 'text-slate-300 font-bold' : isBar ? 'text-slate-400' : 'text-slate-500'}`} style={{ left: `${px}%` }}>
+          {labelText}
         </div>
       );
-    } else if (zoom > 2) {
-      gridLines.push(
-        <line key={`grid-x-bar-${i}`} x1={px} y1="0" x2={px} y2="100" stroke="#334155" strokeWidth="0.5" strokeDasharray="2 2" vectorEffect="non-scaling-stroke" />
-      );
-      if (zoom > 4) {
-        xLabels.push(
-          <div key={`x-label-${i}`} className="absolute bottom-0 -translate-x-1/2 text-[10px] text-slate-500 whitespace-nowrap select-none" style={{ left: `${px}%` }}>
-            {i + 1}.1
-          </div>
-        );
-      }
     }
   }
 
@@ -279,6 +314,22 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
         {/* Graph Area Container with Native Scroll/Zoom */}
         <div className="flex-1 flex flex-col min-w-0 h-full relative">
           
+          {/* Grid Quantization Control */}
+          {onResolutionChange && (
+            <div className="absolute top-2 left-4 z-10 flex gap-1 items-center bg-slate-950/80 px-3 py-1 rounded shadow border border-slate-700 backdrop-blur-sm">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mr-1">Grid</span>
+              {([{id: 'bar' as const, res: 4, label: '1 Bar [1]'}, {id: 'halfbar' as const, res: 2, label: '½ Bar [2]'}, {id: 'note' as const, res: 1, label: 'Note [3]'}]).map(q => (
+                <button
+                  key={q.id}
+                  onClick={() => onResolutionChange(q.res)}
+                  className={`px-2 py-0.5 text-[10px] rounded transition-colors ${xQuantize === q.id ? 'bg-cyan-600 text-slate-950 font-bold' : 'text-slate-400 hover:bg-slate-800'}`}
+                >
+                  {q.label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Zoom Overlay Control */}
           <div className="absolute top-2 right-4 z-10 flex gap-2 items-center bg-slate-950/80 px-3 py-1 rounded shadow border border-slate-700 backdrop-blur-sm">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Zoom</span>

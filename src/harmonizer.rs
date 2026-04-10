@@ -146,7 +146,7 @@ fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &
         return vec![notes[0], notes[1], notes[2]];
     }
     if(current_note.channel == 4){
-       // return vec![notes[0]];
+        return vec![notes[0]];
     }
     //let notes = &state.schillinger_notes[safe_bar];
     notes.clone()
@@ -581,13 +581,31 @@ pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channe
             rhythm_data[mod_shim(counter, rhythm_data.len() as i32) as usize]
         };
 
+        // Clamp to bar boundary (bar = 4 beats) — notes must not cross bar lines
+        let bar_len = 4.0;
+        let next_bar = ((pos / bar_len).floor() + 1.0) * bar_len;
+        if pos + d > next_bar {
+            d = next_bar - pos;
+        }
+
         if pos + d > clip_len {
             d = clip_len - pos;
+        }
+
+        if d < 0.001 {
+            pos = next_bar.min(clip_len);
+            continue;
         }
 
         let v = 1 + SeededRng::random_int(10) + sin(counter as f64, sf, 10.0) as i32;
         ar.push(Note::new(n, pos, d, v, muted, channel));
         pos += d;
+
+        // Snap to bar boundary to avoid float drift
+        if (pos - next_bar).abs() < 0.001 {
+            pos = next_bar;
+        }
+
         counter += 1;
     }
 
