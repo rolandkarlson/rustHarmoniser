@@ -51,6 +51,7 @@ pub struct Config {
     pub mode_contour: Option<Vec<f64>>,
     pub chord_structure_contour: Option<Vec<f64>>,
     pub schillinger_ex_contour: Option<Vec<f64>>,
+    pub harmony_matrix_contour: Option<Vec<f64>>,
     pub main_pitch: i32,
 }
 
@@ -70,8 +71,8 @@ impl Default for Config {
             pl: 4,
             harmony_distance_balance: 0.2,
             lookahead_depth: 2,
-            render_length: 40,
-            rng_seed: 5443343433.0,
+            render_length: 2,
+            rng_seed: 1.0,
             voice_contour: None,
             voice_rhythm_contour: None,
             voice_contour_resolution: 1.0,
@@ -80,7 +81,8 @@ impl Default for Config {
             mode_contour: None,
             chord_structure_contour: None,
             schillinger_ex_contour: None,
-            main_pitch: 60,
+            harmony_matrix_contour: None,
+            main_pitch: 0,
         }
     }
 }
@@ -201,9 +203,17 @@ impl Config {
             }
         }
 
+        // Harmony Matrix: start Strict Classical(0), move to Jazz(1) at peak, back to Strict(0)
+        let harmony_matrix = (0..steps).map(|i| {
+            let phase = (i as f64) / ((steps - 1).max(1) as f64);
+            let tension = (phase * std::f64::consts::PI).sin();
+            (tension * 1.0).round().clamp(0.0, 7.0)
+        }).collect();
+
         self.harmony_distance_contour = Some(harmony);
         self.mode_contour = Some(mode);
         self.chord_structure_contour = Some(chord);
         self.voice_rhythm_contour = Some(rhythm);
+        self.harmony_matrix_contour = Some(harmony_matrix);
     }
 }

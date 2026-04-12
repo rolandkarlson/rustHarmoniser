@@ -118,6 +118,7 @@ pub fn run_generation(config: &Config, progress_sender: Option<Sender<(usize, us
         contour_resolution: config.voice_contour_resolution,
         harmony_contour: config.harmony_distance_contour.clone(),
         harmony_contour_resolution: config.voice_contour_resolution,
+        harmony_matrix_contour: config.harmony_matrix_contour.clone(),
     };
 
     let mut notes = harmonise2(income, &config, &state, progress_sender.as_ref());

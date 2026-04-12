@@ -12,20 +12,42 @@ use fxhash::FxHasher64;
 
 /// Static consonance lookup table indexed by interval mod 12.
 /// Replaces get_harmonic_score_adjusted() function calls.
-const CONSONANCE_TABLE: [f64; 12] = [
-    1.0,            // 0: unison
-    -100_000_000.0, // 1: m2 (clash)
-    -1.0,           // 2: M2
-    0.6,            // 3: m3
-    0.8,            // 4: M3
-    0.7,            // 5: P4
-    -100.0,         // 6: tritone
-    1.0,            // 7: P5
-    0.7,            // 8: m6
-    0.8,            // 9: M6
-    -1.0,           // 10: m7
-    -100_000_000.0, // 11: M7 (clash)
+/// 12x8 Harmony Matrix — each row is a style/context profile.
+/// Rows: 0=Strict Classical, 1=Jazz/Extended, 2=Suspense/Tension, 3=Ethereal/Open,
+///        4=Dark/Melancholic, 5=Bright/Lydian, 6=Aggressive/Brutal, 7=Ancient/Fifth-Based
+/// Columns: interval 0-11 in semitones.
+const HARMONY_MATRIX: [[f64; 12]; 8] = [
+    // 0: STRICT CLASSICAL (Pure consonance, heavy penalties for clashes)
+    [1.0, -100.0, -0.5, 0.6, 0.8, 0.5, -100.0, 1.0, 0.5, 0.7, -0.8, -100.0],
+    // 1: JAZZ & COLOR (7ths and 9ths are loved, clusters are okay)
+    [1.0, -0.2, 0.5, 0.7, 0.9, 0.4, 0.3, 1.0, 0.4, 0.8, 0.9, 0.6],
+    // 2: TENSION/RESOLUTION (High value on tritones and leading tones)
+    [0.0, 0.8, 0.2, -0.5, -0.5, -0.2, 1.0, 0.1, -0.4, -0.4, 0.3, 0.9],
+    // 3: ETHEREAL & OPEN (Perfect 4ths, 5ths, and Major 2nds/9ths)
+    [1.0, -10.0, 0.7, -0.2, 0.3, 0.9, -1.0, 1.0, -0.1, 0.4, 0.2, -0.5],
+    // 4: DARK & MELANCHOLIC (Bias toward minor 3rd and minor 6th)
+    [1.0, -0.5, -0.2, 1.0, -0.4, 0.3, -0.2, 0.8, 0.9, -0.3, 0.4, -0.8],
+    // 5: BRIGHT & LYDIAN (Major 3rd, Major 6th, #4 tritone)
+    [1.0, -0.8, 0.4, -0.3, 1.0, -0.2, 0.7, 0.9, -0.2, 1.0, -0.4, 0.5],
+    // 6: AGGRESSIVE/BRUTAL (Dissonance rewarded, unisons boring)
+    [-0.5, 1.0, 0.4, -0.8, -0.8, -0.5, 0.9, -0.5, -0.8, -0.8, 0.5, 1.0],
+    // 7: ANCIENT/HOLLOW (Organum: only 1sts, 4ths, 5ths, 8ths)
+    [1.0, -100.0, -100.0, -100.0, -100.0, 0.8, -100.0, 1.0, -100.0, -100.0, -100.0, -100.0],
 ];
+
+/// Get the interpolated consonance table for a fractional harmony context value.
+/// Integer values select a row directly; fractional values LERP between adjacent rows.
+fn get_harmony_row(ctx: f64) -> [f64; 12] {
+    let clamped = ctx.clamp(0.0, 7.0);
+    let lo = clamped.floor() as usize;
+    let hi = (lo + 1).min(7);
+    let t = clamped - lo as f64;
+    let mut row = [0.0f64; 12];
+    for i in 0..12 {
+        row[i] = HARMONY_MATRIX[lo][i] * (1.0 - t) + HARMONY_MATRIX[hi][i] * t;
+    }
+    row
+}
 
 type PitchSet = u128;
 type IntervalSet = u16;
@@ -181,6 +203,7 @@ pub struct HarmonizerState {
     pub contour_resolution: f64,
     pub harmony_contour: Option<Vec<f64>>,
     pub harmony_contour_resolution: f64,
+    pub harmony_matrix_contour: Option<Vec<f64>>,
 }
 
 fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &Config) -> Vec<i32> {
@@ -479,13 +502,26 @@ pub fn get_harmony_scores(
     let mut distance_scores = vec![0.0f64; n];
     let mut crossing_flags = vec![false; n];
 
-    // Pass A: Consonance — table lookup averaged over harmony notes
+    // Pass A: Consonance — harmony matrix lookup averaged over harmony notes
+    // Select row from harmony matrix contour (default row 0 = Strict Classical)
+    let harmony_ctx = if let Some(ref contour) = state.harmony_matrix_contour {
+        if !contour.is_empty() {
+            let idx = (current_note.start / state.harmony_contour_resolution).floor() as usize;
+            *contour.get_wrapped(idx)
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+    let consonance_row = get_harmony_row(harmony_ctx);
+
     if harmony_len > 0 {
         let inv_len = 1.0 / harmony_len as f64;
         for &h in &harmony_pitches {
             for (i, &c) in candidates.iter().enumerate() {
                 let interval = ((c - h).abs() % 12) as usize;
-                consonance_scores[i] += CONSONANCE_TABLE[interval];
+                consonance_scores[i] += consonance_row[interval];
             }
         }
         for s in consonance_scores.iter_mut() {
