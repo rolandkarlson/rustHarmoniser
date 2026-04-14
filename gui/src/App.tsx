@@ -1,7 +1,31 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { ContourEditor } from './ContourEditor'
 import { saveSnapshot, listSnapshots, loadSnapshot, deleteSnapshot, type Snapshot } from './snapshots'
 import './index.css'
+
+const MODE_NAMES = ['Ion', 'Dor', 'Phr', 'Lyd', 'Mix', 'Aeo', 'Loc'];
+
+function generateModeFromSteps(mode: number): number[] {
+  const stepPattern = [2, 2, 1, 2, 2, 2, 1];
+  const m = ((mode % 7) + 7) % 7;
+  const rotated = [...stepPattern.slice(m), ...stepPattern.slice(0, m)];
+  rotated.pop();
+  const notes = [0];
+  let current = 0;
+  for (const step of rotated) { current = (current + step) % 12; notes.push(current); }
+  return notes.sort((a, b) => a - b);
+}
+
+function sameChord(a: number[], b: number[]): boolean {
+  const norm = (arr: number[]) => [...new Set(arr.map(n => ((n % 12) + 12) % 12))].sort((x, y) => x - y);
+  const sa = norm(a), sb = norm(b);
+  return sa.length === sb.length && sa.every((v, i) => v === sb[i]);
+}
+
+const CHORD_LIST = [
+  [0,1,2], [0,1,2,4,5], [0,1,2,4,5],
+  [0,1,2,3,4], [0,1,2,3,4,5], [0,1,2,3,4,5,6]
+];
 
 function App() {
   const [config, setConfig] = useState<any>(null);
@@ -447,6 +471,43 @@ function App() {
     setConfig(nc);
   };
 
+  // Precompute mode highlights: which modes share the same chord as the current mode at each step
+  const modeHighlights = useMemo(() => {
+    if (!config || activeTab !== 'mode') return [];
+    const modeContour: number[] = config.mode_contour || [];
+    const chordContour: number[] = config.chord_structure_contour || [];
+    const exContour: number[] = config.schillinger_ex_contour || [];
+    const seq: number[] = config.schillinger_sequence || [0];
+    const res = config.voice_contour_resolution;
+    const fallbackChord = config.chord_structure || [0,1,2,4,5];
+    const steps = Math.ceil((config.pl * 4 * config.render_length) / res);
+
+    const highlights: Array<{x: number, y: number, color: string}> = [];
+    for (let xi = 0; xi < Math.min(steps, modeContour.length); xi++) {
+      const barIdx = Math.floor((xi * res) / 4);
+      const seqRoot = seq[barIdx % seq.length] ?? 0;
+      const expansion = Math.round(exContour[xi] ?? 2);
+      const csIdx = Math.round(chordContour[xi] ?? 0);
+      const chordStruct = (csIdx >= 0 && csIdx < CHORD_LIST.length) ? CHORD_LIST[csIdx] : fallbackChord;
+      const currentMode = ((Math.round(modeContour[xi] ?? config.mode) % 7) + 7) % 7;
+
+      const currentScale = generateModeFromSteps(currentMode);
+      const chordIndices = chordStruct.map(item => (item * expansion) + seqRoot);
+      const modShim = (v: number, len: number) => ((v % len) + len) % len;
+      const currentChord = chordIndices.map(idx => currentScale[modShim(idx, currentScale.length)] % 12);
+
+      for (let m = 0; m < 7; m++) {
+        if (m === currentMode) continue;
+        const otherScale = generateModeFromSteps(m);
+        const otherChord = chordIndices.map(idx => otherScale[modShim(idx, otherScale.length)] % 12);
+        if (sameChord(currentChord, otherChord)) {
+          highlights.push({ x: xi, y: m, color: 'rgba(253, 224, 71, 0.3)' });
+        }
+      }
+    }
+    return highlights;
+  }, [config, activeTab]);
+
   if (!config) return <div className="p-8 text-xl text-slate-400">Loading Configuration...</div>;
 
   const renderActiveEditor = () => {
@@ -468,11 +529,13 @@ function App() {
         return <ContourEditor
           label="Mode Contour"
           data={config.mode_contour || []}
-          yMin={0} yMax={7} xMax={xMax}
+          yMin={0} yMax={6} xMax={xMax}
           resolution={config.voice_contour_resolution}
           pl={config.pl}
           onChange={(d) => updateConfig('mode_contour', d)}
           onResolutionChange={handleResolutionChange}
+          yLabelFormatter={(v) => MODE_NAMES[v] ?? String(v)}
+          cellHighlights={modeHighlights}
           color="#fde047"
         />;
       case 'chord':

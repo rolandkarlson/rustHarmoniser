@@ -196,7 +196,7 @@ pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<i32>> {
         let current_mode = if let Some(mc) = &config.mode_contour {
             if !mc.is_empty() {
                 let contour_val = mc.get_wrapped(contour_idx).round() as i32;
-                mod_shim(contour_val * 4, 7)
+                mod_shim(contour_val, 7)
             } else {
                 config.mode
             }

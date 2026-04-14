@@ -13,6 +13,8 @@ interface ContourEditorProps {
   color?: string;
   onResolutionChange?: (newResolution: number) => void;
   yLabelOffset?: number;
+  yLabelFormatter?: (value: number) => string;
+  cellHighlights?: Array<{x: number, y: number, color: string}>;
 }
 
 export const ContourEditor: React.FC<ContourEditorProps> = ({
@@ -28,6 +30,8 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
   color = '#22d3ee',
   onResolutionChange,
   yLabelOffset = 0,
+  yLabelFormatter,
+  cellHighlights,
 }) => {
   const innerContainerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -194,6 +198,25 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
     );
   });
 
+  // Render cell highlights (compatible modes, etc.)
+  const highlightRects = (cellHighlights || []).map(({x, y, color: hlColor}, hi) => {
+    const px = (x * resolution / xMax) * 100;
+    let tickIdx = 0;
+    let minDiff = Infinity;
+    for (let j = 0; j < validYTicks.length; j++) {
+      const diff = Math.abs(y - validYTicks[j]);
+      if (diff < minDiff) { minDiff = diff; tickIdx = j; }
+    }
+    const tickVal = validYTicks[tickIdx];
+    const pv = tickIdx > 0 ? validYTicks[tickIdx-1] : tickVal;
+    const nv = tickIdx < validYTicks.length - 1 ? validYTicks[tickIdx+1] : tickVal;
+    const vTop = tickIdx === validYTicks.length - 1 ? tickVal + (tickVal - pv)/2 : tickVal + (nv - tickVal)/2;
+    const vBottom = tickIdx === 0 ? tickVal - (nv - tickVal)/2 : tickVal - (tickVal - pv)/2;
+    const bTop = Math.max(0, Math.min(100, 100 - ((vTop - yMin) / range) * 100));
+    const bBot = Math.max(0, Math.min(100, 100 - ((vBottom - yMin) / range) * 100));
+    return <rect key={`hl-${hi}`} x={px} y={bTop} width={boxWidth} height={Math.max(0.2, bBot - bTop)} fill={hlColor} />;
+  });
+
   // Generate grid with X-axis quantization (note / halfbar / bar)
   const gridLines: React.ReactNode[] = [];
   const xLabels: React.ReactNode[] = [];
@@ -287,7 +310,7 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
          className="absolute right-2 -translate-y-1/2 whitespace-nowrap text-[10px]" 
          style={{ top: `${Math.max(0, Math.min(100, pyCenter))}%` }}
        >
-         {Number.isInteger(val) ? (val + yLabelOffset).toString() : (val + yLabelOffset).toFixed(2)}
+         {yLabelFormatter ? yLabelFormatter(val) : (Number.isInteger(val) ? (val + yLabelOffset).toString() : (val + yLabelOffset).toFixed(2))}
        </div>
      );
 
@@ -360,6 +383,7 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
             >
               <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
                 {gridLines}
+                {highlightRects}
                 {contourBoxes}
               </svg>
               
