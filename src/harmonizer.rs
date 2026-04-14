@@ -90,17 +90,17 @@ fn interval_set_from_slice(intervals: &[i32]) -> IntervalSet {
 }
 /// Heuristic channel-priority orderings. Each row is a voice-processing order.
 /// The voice scored first has fewest constraints (most freedom), last has most.
-const SMART_ORDERINGS: [[i32; 5]; 4] = [
+const SMART_ORDERINGS: [[i32; 5]; 10] = [
     [4, 3, 2, 1, 0],  // Bass-first
     [0, 1, 2, 3, 4],  // Soprano-first
     [0, 4, 1, 3, 2],  // Outer-voices-first
     [2, 1, 3, 0, 4],  // Inner-voices-first
-    // [4, 0, 3, 1, 2],  // Alternating outer
-    // [3, 2, 1, 0, 4],  // Tenor-first
-    // [1, 0, 2, 4, 3],  // Alto-first
-    // [0, 4, 2, 1, 3],  // Outer + middle
-    // [4, 2, 0, 3, 1],  // Spread pattern
-    // [2, 0, 4, 1, 3],  // Middle-out
+    [4, 0, 3, 1, 2],  // Alternating outer
+    [3, 2, 1, 0, 4],  // Tenor-first
+    [1, 0, 2, 4, 3],  // Alto-first
+    [0, 4, 2, 1, 3],  // Outer + middle
+    [4, 2, 0, 3, 1],  // Spread pattern
+    [2, 0, 4, 1, 3],  // Middle-out
 ];
 
 /// Smart permutation selection: ~10 heuristic orderings instead of N!

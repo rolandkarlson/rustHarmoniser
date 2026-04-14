@@ -375,6 +375,20 @@ function App() {
     setMessage(`${preset === 'jazz' ? 'Jazz' : 'Classical'} preset loaded`);
   };
 
+  const handleInit = () => {
+    if (!config) return;
+    const nc = { ...config, render_length: 2 };
+    const steps = Math.ceil((nc.pl * 4 * nc.render_length) / nc.voice_contour_resolution);
+    nc.harmony_distance_contour = new Array(steps).fill(0);
+    nc.mode_contour = new Array(steps).fill(0);
+    nc.chord_structure_contour = new Array(steps).fill(0);
+    nc.schillinger_ex_contour = new Array(steps).fill(2);
+    nc.voice_contour = Array.from({ length: 16 }, () => new Array(steps).fill(0));
+    nc.voice_rhythm_contour = Array.from({ length: 16 }, () => new Array(steps).fill(1.0));
+    if (nc.harmony_matrix_contour) nc.harmony_matrix_contour = new Array(steps).fill(0);
+    setConfig(nc);
+  };
+
   const handleRandomise = () => {
     if (!config) return;
     const steps = Math.ceil((config.pl * 4 * config.render_length) / config.voice_contour_resolution);
@@ -585,6 +599,10 @@ function App() {
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Main Pitch — MIDI note offset added to all output pitches. 60 = Middle C.">Pitch:</span>
               <input type="number" value={config.main_pitch ?? 60} onChange={e => updateConfig('main_pitch', parseInt(e.target.value))} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="When enabled, candidate notes are constrained to Schillinger-derived scale degrees. When off, notes can be any pitch within range.">Schillinger:</span>
+              <input type="checkbox" checked={config.schillinger_progression ?? true} onChange={e => updateConfig('schillinger_progression', e.target.checked)} className="accent-cyan-500" />
+            </div>
             <div className="border-l border-slate-700 h-5"></div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes pitches already in voice history. Higher = more variety.">Note Repeat:</span>
@@ -626,6 +644,13 @@ function App() {
               className="px-4 py-2 bg-rose-800 hover:bg-rose-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
             >
               Classical
+            </button>
+            <button
+              onClick={handleInit}
+              title="Reset render length to 2 and zero all contours (rhythm = 1 beat)"
+              className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Init
             </button>
             <button
               onClick={handleRandomise}
