@@ -586,7 +586,7 @@ function App() {
         return <ContourEditor
           label="Schillinger Sequence (1 Block = 1 Bar)"
           data={config.schillinger_sequence || []}
-          yMin={0} yMax={5} xMax={xMax}
+          yMin={0} yMax={6} xMax={xMax}
           resolution={4.0}
           pl={1}
           onChange={(d) => updateConfig('schillinger_sequence', d.map(n => Math.round(n)))}
