@@ -228,7 +228,10 @@ function App() {
     ];
 
     const transitions = allTransitions[Math.max(0, Math.min(6, mode))];
-    const target = 0; // Natural resting resolution
+    // End each phrase on V (scale degree 5). Because the sequence loops,
+    // the V -> I resolution happens across the loop seam (bar N -> bar 1).
+    const target = 4;
+    const phraseStart = 0; // Each phrase opens on I (tonic)
 
     const findPathPhrase = (current: number, remaining: number, path: number[]): boolean => {
       if (remaining === 1) {
@@ -282,17 +285,15 @@ function App() {
 
     const progression: number[] = [];
     const numPhrases = Math.floor(totalLength / phraseLength);
-    let currentStart = 0;
 
     for (let i = 0; i < numPhrases; i++) {
-      const block = generatePhrase(phraseLength, currentStart);
+      const block = generatePhrase(phraseLength, phraseStart);
       progression.push(...block);
-      currentStart = target;
     }
 
     const remainder = totalLength % phraseLength;
     if (remainder > 0) {
-      const block = generatePhrase(remainder, currentStart);
+      const block = generatePhrase(remainder, phraseStart);
       progression.push(...block);
     }
 
@@ -321,18 +322,20 @@ function App() {
       nc.interval_exists_in_harmony = 0.5;
       nc.chord_structure = [0, 1, 2, 3, 4, 5]; // full 7th chord voicings
 
-      // Jazz progression: ii-V-I turnarounds with chromatic motion
+      // Jazz progression: loop-friendly turnarounds — each 4-bar phrase
+      // starts on I and lands on V so the I resolution falls on bar 1 of
+      // the next iteration (across the loop seam).
       // 0=I, 1=ii, 2=iii, 3=IV, 4=V, 5=vi, 6=vii
       const jazzBars = nc.pl * nc.render_length; // 32 bars
       const jazzPatterns = [
-        [1, 4, 0, 0],   // ii-V-I-I
-        [1, 4, 0, 3],   // ii-V-I-IV
-        [5, 1, 4, 0],   // vi-ii-V-I
-        [2, 5, 1, 4],   // iii-vi-ii-V (cycle of fifths)
-        [0, 6, 1, 4],   // I-vii-ii-V
-        [3, 6, 1, 4],   // IV-vii-ii-V
-        [1, 4, 5, 4],   // ii-V-vi-V (deceptive)
+        [0, 5, 1, 4],   // I-vi-ii-V (classic turnaround)
         [0, 3, 1, 4],   // I-IV-ii-V (rhythm changes)
+        [0, 2, 5, 4],   // I-iii-vi-V
+        [0, 6, 1, 4],   // I-vii-ii-V
+        [0, 3, 5, 4],   // I-IV-vi-V
+        [0, 1, 3, 4],   // I-ii-IV-V
+        [0, 5, 3, 4],   // I-vi-IV-V
+        [0, 2, 1, 4],   // I-iii-ii-V
       ];
       nc.schillinger_sequence = [];
       for (let i = 0; i < jazzBars; i += 4) {
@@ -416,17 +419,18 @@ function App() {
       nc.interval_exists_in_harmony = 2.0;
       nc.chord_structure = [0, 1, 2, 4]; // triads & simple 7ths
 
-      // Classical progressions: tonal functional harmony
+      // Classical progressions: each 4-bar phrase starts on I and ends on V
+      // so the authentic cadence (V -> I) resolves across the loop boundary.
       const classBars = nc.pl * nc.render_length;
       const classicalPatterns = [
-        [0, 3, 4, 0],   // I-IV-V-I (authentic cadence)
-        [0, 4, 5, 4],   // I-V-vi-V (deceptive motion)
-        [0, 5, 3, 4],   // I-vi-IV-V (50s progression / classical)
-        [0, 1, 4, 0],   // I-ii-V-I (predominant approach)
-        [0, 3, 1, 4],   // I-IV-ii-V (circle of fifths approach)
-        [5, 3, 4, 0],   // vi-IV-V-I (minor to major resolution)
+        [0, 3, 0, 4],   // I-IV-I-V (prolonged tonic → dominant)
+        [0, 5, 3, 4],   // I-vi-IV-V (50s progression → cadence)
+        [0, 1, 3, 4],   // I-ii-IV-V (predominant approach)
+        [0, 3, 1, 4],   // I-IV-ii-V (circle of fifths)
         [0, 2, 3, 4],   // I-iii-IV-V
-        [0, 4, 3, 0],   // I-V-IV-I (plagal flavor)
+        [0, 5, 1, 4],   // I-vi-ii-V
+        [0, 2, 5, 4],   // I-iii-vi-V
+        [0, 4, 5, 4],   // I-V-vi-V (deceptive, returns to V)
       ];
       nc.schillinger_sequence = [];
       for (let i = 0; i < classBars; i += 4) {
@@ -438,8 +442,8 @@ function App() {
         else poolIdx = Math.floor(Math.random() * 2); // return to tonic
         nc.schillinger_sequence.push(...classicalPatterns[poolIdx].slice(0, Math.min(4, classBars - i)));
       }
-      // Ensure final bar resolves to tonic
-      nc.schillinger_sequence[nc.schillinger_sequence.length - 1] = 0;
+      // Final bar = V so the loop seam delivers the V -> I authentic cadence.
+      nc.schillinger_sequence[nc.schillinger_sequence.length - 1] = 4;
 
       const steps = Math.ceil((nc.pl * 4 * nc.render_length) / nc.voice_contour_resolution);
 
@@ -575,6 +579,39 @@ function App() {
     // Use the first mode from the contour for Markov progression coherence
     nc.schillinger_sequence = generateMarkovProgression(nc.pl * nc.render_length, sectionModes[0], nc.pl);
     setConfig(nc);
+  };
+
+  const handleRandomiseRhythm = () => {
+    if (!config) return;
+    const steps = Math.ceil((config.pl * 4 * config.render_length) / config.voice_contour_resolution);
+    const snaps = [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0];
+    const snapNearest = (v: number) => snaps.reduce((a, b) => Math.abs(b - v) < Math.abs(a - v) ? b : a);
+
+    // Fractal / 1-over-f rhythm: sum octaves of sine at halving amplitude so the
+    // envelope is self-similar — zoom into any phrase and the same pulse shape
+    // emerges at a smaller scale. A universe that nests inside itself.
+    const octaves = 5;
+    const fractalCurve = (phaseOffset: number, seed: number): number[] => {
+      return Array.from({ length: steps }, (_, i) => {
+        let v = 0;
+        let amp = 1;
+        for (let o = 0; o < octaves; o++) {
+          const freq = Math.pow(2, o);
+          const t = (i / steps) * Math.PI * 2 * freq + phaseOffset + seed * (o + 1);
+          v += Math.sin(t) * amp;
+          amp *= 0.5;
+        }
+        const norm = (v + 2) / 4;
+        return 0.25 + Math.max(0, Math.min(1, norm)) * (4 - 0.25);
+      });
+    };
+
+    const nc = { ...config };
+    nc.voice_rhythm_contour = Array.from({ length: 16 }, (_, v) =>
+      fractalCurve(v * 0.618, Math.random() * 6.28).map(snapNearest)
+    );
+    setConfig(nc);
+    setMessage('Rhythm randomised (fractal)');
   };
 
   // Precompute mode highlights: which modes share the same chord as the current mode at each step
@@ -827,6 +864,13 @@ function App() {
               className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
             >
               Randomise
+            </button>
+            <button
+              onClick={handleRandomiseRhythm}
+              title="Randomise only rhythm — fractal / self-similar pulse across octaves"
+              className="px-4 py-2 bg-pink-600 hover:bg-pink-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Rhythm
             </button>
             <button
               onClick={handleDuplicate}

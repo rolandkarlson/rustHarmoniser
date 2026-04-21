@@ -1,0 +1,9 @@
+#!/bin/bash
+# Build the Rust backend and start the GUI dev server
+
+set -e
+echo "fetch git"
+git pull
+echo "run gui"
+
+concurrently "cd gui && npm run dev" "cargo run --release"

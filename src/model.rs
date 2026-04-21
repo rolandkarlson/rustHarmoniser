@@ -75,7 +75,7 @@ impl Default for Config {
             rng_seed: 1.0,
             voice_contour: None,
             voice_rhythm_contour: None,
-            voice_contour_resolution: 1.0,
+            voice_contour_resolution: 4.0,
             chord_structure: vec![0, 1, 2, 4, 5],
             harmony_distance_contour: None,
             mode_contour: None,
