@@ -157,40 +157,146 @@ function App() {
     setConfig(nc);
   };
 
-  const generateMarkovProgression = (length: number, mode: number): number[] => {
-    if (length === 0) return [];
-    const allTransitions: number[][][] = [
-      /* Ionian */     [[3,4,5,1,2],[4,6],[5,3],[0,1,4],[0,5],[3,1,4],[0]],
-      /* Dorian */     [[3,6,1],[0,3],[3,4],[0,6],[0,3],[6,3],[0,3]],
-      /* Phrygian */   [[1,3,5],[0],[1,3],[0,1],[1,5],[1,0],[0,2]],
-      /* Lydian */     [[1,4,2],[0,4],[0,1],[4,2],[0,1],[1,4],[0,2]],
-      /* Mixolydian */ [[3,6,4],[0,3],[3,5],[0,6],[0,3],[3,1],[0,3]],
-      /* Aeolian */    [[2,3,4,5,6],[4,6],[5,3],[0,1,4,6],[0,5],[1,3,4],[2,0]],
-      /* Locrian */    [[1,3,5],[0,3],[1,5],[0,1],[1,5],[0,1],[0,5]],
+  const generateMarkovProgression = (totalLength: number, mode: number, phraseLength: number): number[] => {
+    if (totalLength === 0 || phraseLength === 0) return [];
+    
+    type Transition = [number, number]; // [target_chord, weight]
+    const allTransitions: Transition[][][] = [
+      /* Ionian */ [
+        [[4, 40], [3, 30], [5, 20], [1, 5], [2, 5]], // 0: I -> V, IV, vi
+        [[4, 70], [6, 30]],                          // 1: ii -> V, vii
+        [[5, 60], [3, 40]],                          // 2: iii -> vi, IV
+        [[0, 30], [4, 50], [1, 20]],                 // 3: IV -> V, I, ii
+        [[0, 70], [5, 30]],                          // 4: V -> I, vi
+        [[3, 40], [1, 40], [4, 20]],                 // 5: vi -> IV, ii, V
+        [[0, 100]]                                   // 6: vii -> I
+      ],
+      /* Dorian */ [
+        [[3, 50], [6, 30], [1, 20]], // i -> IV, VII, ii
+        [[0, 70], [3, 30]],          // ii -> i, IV
+        [[3, 60], [4, 40]],          // III -> IV, v
+        [[0, 60], [6, 40]],          // IV -> i, VII
+        [[0, 50], [3, 50]],          // v -> i, IV
+        [[6, 50], [3, 50]],          // vi° -> VII, IV
+        [[0, 70], [3, 30]]           // VII -> i, IV
+      ],
+      /* Phrygian */ [
+        [[1, 50], [3, 30], [5, 20]], // i -> II, iv, VI
+        [[0, 100]],                  // II -> i
+        [[1, 60], [3, 40]],          // III -> II, iv
+        [[0, 60], [1, 40]],          // iv -> i, II
+        [[1, 50], [5, 50]],          // v° -> II, VI
+        [[1, 60], [0, 40]],          // VI -> II, i
+        [[0, 60], [2, 40]]           // vii -> i, III
+      ],
+      /* Lydian */ [
+        [[1, 50], [4, 30], [2, 20]], // I -> II, V, iii
+        [[0, 60], [4, 40]],          // II -> I, V
+        [[0, 50], [1, 50]],          // iii -> I, II
+        [[4, 60], [2, 40]],          // iv° -> V, iii
+        [[0, 60], [1, 40]],          // V -> I, II
+        [[1, 50], [4, 50]],          // vi -> II, V
+        [[0, 70], [2, 30]]           // vii -> I, iii
+      ],
+      /* Mixolydian */ [
+        [[3, 40], [6, 40], [4, 20]], // I -> IV, VII, v
+        [[0, 50], [3, 50]],          // ii -> I, IV
+        [[3, 60], [5, 40]],          // iii° -> IV, vi
+        [[0, 60], [6, 40]],          // IV -> I, VII
+        [[0, 60], [3, 40]],          // v -> I, IV
+        [[3, 50], [1, 50]],          // vi -> IV, ii
+        [[0, 60], [3, 40]]           // VII -> I, IV
+      ],
+      /* Aeolian */ [
+        [[3, 30], [4, 30], [5, 20], [6, 10], [2, 10]], // i -> iv, v, VI, VII, III
+        [[4, 60], [6, 40]],                            // ii° -> v, VII
+        [[5, 60], [3, 40]],                            // III -> VI, iv
+        [[4, 40], [0, 30], [6, 20], [1, 10]],          // iv -> v, i, VII, ii°
+        [[0, 70], [5, 30]],                            // v -> i, VI
+        [[3, 40], [4, 40], [1, 20]],                   // VI -> iv, v, ii°
+        [[2, 60], [0, 40]]                             // VII -> III, i
+      ],
+      /* Locrian */ [
+        [[1, 40], [3, 30], [5, 30]], // i° -> II, iv, VI
+        [[0, 60], [3, 40]],          // II -> i°, iv
+        [[1, 50], [5, 50]],          // iii -> II, VI
+        [[0, 60], [1, 40]],          // iv -> i°, II
+        [[1, 50], [5, 50]],          // V -> II, VI
+        [[0, 60], [1, 40]],          // VI -> i°, II
+        [[0, 50], [5, 50]]           // vii -> i°, VI
+      ],
     ];
+
     const transitions = allTransitions[Math.max(0, Math.min(6, mode))];
+    const target = 0; // Natural resting resolution
 
-    for (let attempt = 0; attempt < 1000; attempt++) {
-      const prog = [0];
-      let cur = 0;
-      for (let i = 1; i < length; i++) {
-        const next = transitions[cur];
-        cur = next[Math.floor(Math.random() * next.length)];
-        prog.push(cur);
+    const findPathPhrase = (current: number, remaining: number, path: number[]): boolean => {
+      if (remaining === 1) {
+        if (current === target) {
+          path.push(current);
+          return true;
+        }
+        return false;
       }
-      if (prog[prog.length - 1] === 4) return prog;
+
+      path.push(current);
+      const opts = transitions[current];
+      const choices: number[] = [];
+      for (const [tgt, weight] of opts) {
+        for (let i = 0; i < weight; i++) {
+          choices.push(tgt);
+        }
+      }
+
+      // Shuffle
+      for (let i = choices.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [choices[i], choices[j]] = [choices[j], choices[i]];
+      }
+
+      const tried = Array(7).fill(false);
+      for (const nextChord of choices) {
+        if (nextChord >= 7 || tried[nextChord]) continue;
+        tried[nextChord] = true;
+        
+        if (findPathPhrase(nextChord, remaining - 1, path)) return true;
+      }
+
+      path.pop();
+      return false;
+    };
+
+    const generatePhrase = (len: number, startChord: number): number[] => {
+      if (len === 0) return [];
+      const path: number[] = [];
+      if (findPathPhrase(startChord, len, path)) return path;
+      
+      const fallback = Array(len).fill(0);
+      fallback[0] = startChord;
+      if (len > 0) fallback[len - 1] = target;
+      for (let i = 1; i < len - 1; i++) {
+        fallback[i] = transitions[fallback[i - 1]][0][0];
+      }
+      return fallback;
+    };
+
+    const progression: number[] = [];
+    const numPhrases = Math.floor(totalLength / phraseLength);
+    let currentStart = 0;
+
+    for (let i = 0; i < numPhrases; i++) {
+      const block = generatePhrase(phraseLength, currentStart);
+      progression.push(...block);
+      currentStart = target;
     }
 
-    // Fallback: force last chord to 0
-    const prog = [0];
-    let cur = 0;
-    for (let i = 1; i < length; i++) {
-      if (i === length - 1) { prog.push(0); continue; }
-      const next = transitions[cur];
-      cur = next[Math.floor(Math.random() * next.length)];
-      prog.push(cur);
+    const remainder = totalLength % phraseLength;
+    if (remainder > 0) {
+      const block = generatePhrase(remainder, currentStart);
+      progression.push(...block);
     }
-    return prog;
+
+    return progression;
   };
 
   const applyPreset = (preset: 'jazz' | 'classical') => {
@@ -467,7 +573,7 @@ function App() {
     nc.voice_contour = Array.from({ length: 16 }, () => smoothRandom(-12, 12).map(v => parseFloat(v.toFixed(1))));
     nc.voice_rhythm_contour = Array.from({ length: 16 }, () => smoothRandom(0.25, 4).map(snapNearest));
     // Use the first mode from the contour for Markov progression coherence
-    nc.schillinger_sequence = generateMarkovProgression(nc.pl * nc.render_length, sectionModes[0]);
+    nc.schillinger_sequence = generateMarkovProgression(nc.pl * nc.render_length, sectionModes[0], nc.pl);
     setConfig(nc);
   };
 
