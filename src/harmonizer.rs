@@ -198,7 +198,7 @@ pub struct Boundries {
 }
 
 pub struct HarmonizerState {
-    pub schillinger_notes: Vec<Vec<i32>>,
+    pub schillinger_notes: Vec<Vec<Vec<i32>>>,
     pub voice_contour: Option<Vec<Vec<f64>>>,
     pub contour_resolution: f64,
     pub harmony_contour: Option<Vec<f64>>,
@@ -209,8 +209,15 @@ pub struct HarmonizerState {
 fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &Config) -> Vec<i32> {
     let bar_duration = 4.0;
     let bar = (current_note.start / bar_duration).floor() as i32;
-    let safe_bar = mod_shim(bar, state.schillinger_notes.len() as i32) as usize;
-    let notes = &state.schillinger_notes[safe_bar];
+    let num_voices = state.schillinger_notes.len() as i32;
+    let voice_idx = if num_voices > 0 {
+        mod_shim(current_note.channel, num_voices) as usize
+    } else {
+        0
+    };
+    let voice_bars = &state.schillinger_notes[voice_idx];
+    let safe_bar = mod_shim(bar, voice_bars.len() as i32) as usize;
+    let notes = &voice_bars[safe_bar];
 
     if(bar % config.pl == 0 || bar % config.pl ==  config.pl - 1){
         if(current_note.channel == 4){

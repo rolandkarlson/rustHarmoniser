@@ -3,7 +3,9 @@
     "allow": [
       "Bash(cargo build:*)",
       "Bash(npx tsc:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(npx --prefix /Users/roland/RustroverProjects/rustHarmoniser/gui tsc -b /Users/roland/RustroverProjects/rustHarmoniser/gui --pretty false)",
+      "Bash(git stash *)"
     ]
   }
 }

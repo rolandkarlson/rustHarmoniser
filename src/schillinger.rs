@@ -173,13 +173,13 @@ fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32) ->
     None
 }
 
-pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<i32>> {
+pub const NUM_VOICES: usize = 16;
+
+pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<Vec<i32>>> {
 
     let seq = &config.schillinger_sequence;
     let bars = seq.len();
 
-    let mut chord_notes = Vec::new();
-  
     let chord_list = vec![
         vec![0,1,2],
         vec![0,1,2,4,5],
@@ -189,54 +189,62 @@ pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<i32>> {
         vec![0,1,2,3,4,5,6]
     ];
 
-    for i in 0..bars {
-        let start_time = i as f64 * 4.0;
-        let contour_idx = (start_time / config.voice_contour_resolution).floor() as usize;
+    let mut per_voice: Vec<Vec<Vec<i32>>> = Vec::with_capacity(NUM_VOICES);
 
-        let current_mode = if let Some(mc) = &config.mode_contour {
-            if !mc.is_empty() {
-                let contour_val = mc.get_wrapped(contour_idx).round() as i32;
-                mod_shim(contour_val, 7)
+    for voice in 0..NUM_VOICES {
+        let mut chord_notes = Vec::with_capacity(bars);
+
+        let voice_ex_contour: Option<&Vec<f64>> = config
+            .schillinger_ex_contour
+            .as_ref()
+            .and_then(|outer| outer.get(voice));
+
+        let voice_chord_contour: Option<&Vec<f64>> = config
+            .chord_structure_contour
+            .as_ref()
+            .and_then(|outer| outer.get(voice));
+
+        for i in 0..bars {
+            let start_time = i as f64 * 4.0;
+            let contour_idx = (start_time / config.voice_contour_resolution).floor() as usize;
+
+            let current_mode = if let Some(mc) = &config.mode_contour {
+                if !mc.is_empty() {
+                    let contour_val = mc.get_wrapped(contour_idx).round() as i32;
+                    mod_shim(contour_val, 7)
+                } else {
+                    config.mode
+                }
             } else {
                 config.mode
-            }
-        } else {
-            config.mode
-        };
+            };
 
-        let chord_idx = if let Some(cc) = &config.chord_structure_contour {
-            if !cc.is_empty() {
-                cc.get_wrapped(contour_idx).round() as usize
+            let chord_idx = match voice_chord_contour {
+                Some(cc) if !cc.is_empty() => cc.get_wrapped(contour_idx).round() as usize,
+                _ => 0,
+            };
+
+            let n_struct = if chord_idx < chord_list.len() {
+                &chord_list[chord_idx]
             } else {
-                0 // Trigger fallback to static struct
-            }
-        } else {
-            0
-        };
+                &config.chord_structure
+            };
 
-        let n_struct = if chord_idx < chord_list.len() {
-            &chord_list[chord_idx]
-        } else {
-            &config.chord_structure
-        };
+            let scale = generate_mode_from_steps(0, &current_mode);
+            let ex = match voice_ex_contour {
+                Some(ec) if !ec.is_empty() => ec.get_wrapped(contour_idx).round() as i32,
+                _ => 2,
+            };
+            let notes: Vec<i32> = n_struct.iter().map(|&itm| {
+                 let idx = (itm * ex) + seq[i as usize % seq.len()];
+                 scale[mod_shim(idx, scale.len() as i32) as usize]
+            }).collect();
 
-        let scale = generate_mode_from_steps(0, &current_mode);
-        let ex = if let Some(ec) = &config.schillinger_ex_contour {
-            if !ec.is_empty() {
-                ec.get_wrapped(contour_idx).round() as i32
-            } else {
-                2
-            }
-        } else {
-            2
-        };
-        let notes: Vec<i32> = n_struct.iter().map(|&itm| {
-             let idx = (itm * ex) + seq[i as usize % seq.len()];
-             scale[mod_shim(idx, scale.len() as i32) as usize]
-        }).collect();
+            chord_notes.push(notes);
+        }
 
-        chord_notes.push(notes);
+        per_voice.push(chord_notes);
     }
-    
-    chord_notes
+
+    per_voice
 }

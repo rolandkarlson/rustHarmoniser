@@ -49,8 +49,8 @@ pub struct Config {
     pub chord_structure: Vec<i32>,
     pub harmony_distance_contour: Option<Vec<f64>>,
     pub mode_contour: Option<Vec<f64>>,
-    pub chord_structure_contour: Option<Vec<f64>>,
-    pub schillinger_ex_contour: Option<Vec<f64>>,
+    pub chord_structure_contour: Option<Vec<Vec<f64>>>,
+    pub schillinger_ex_contour: Option<Vec<Vec<f64>>>,
     pub harmony_matrix_contour: Option<Vec<f64>>,
     pub main_pitch: i32,
 }
@@ -212,7 +212,7 @@ impl Config {
 
         self.harmony_distance_contour = Some(harmony);
         self.mode_contour = Some(mode);
-        self.chord_structure_contour = Some(chord);
+        self.chord_structure_contour = Some(vec![chord; 16]);
         self.voice_rhythm_contour = Some(rhythm);
         self.harmony_matrix_contour = Some(harmony_matrix);
     }

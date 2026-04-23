@@ -35,6 +35,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [showSnapshots, setShowSnapshots] = useState(false);
+  const [broadcastVoices, setBroadcastVoices] = useState(false);
   const snapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -67,6 +68,49 @@ function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
+
+  // Broadcast-to-all-voices modifier (hold Shift while editing a per-voice contour)
+  useEffect(() => {
+    const onDown = (e: KeyboardEvent) => { if (e.key === 'Shift') setBroadcastVoices(true); };
+    const onUp = (e: KeyboardEvent) => { if (e.key === 'Shift') setBroadcastVoices(false); };
+    const onBlur = () => setBroadcastVoices(false);
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
+
+  const writeVoiceContour = (current: number[][] | undefined, d: number[]): number[][] => {
+    const base = current ? [...current] : [];
+    while (base.length < 16) base.push([]);
+    if (!broadcastVoices) {
+      base[selectedVoice] = d;
+      return base;
+    }
+    // Broadcast mode: copy only the indices that actually changed in d
+    // (compared to the selected voice's previous row) into every voice.
+    const prev = base[selectedVoice] || [];
+    const changed: number[] = [];
+    for (let i = 0; i < d.length; i++) {
+      if (d[i] !== prev[i]) changed.push(i);
+    }
+    if (changed.length === 0) {
+      base[selectedVoice] = d;
+      return base;
+    }
+    return base.map(row => {
+      const nr = [...(row || [])];
+      for (const i of changed) {
+        while (nr.length <= i) nr.push(d[i]);
+        nr[i] = d[i];
+      }
+      return nr;
+    });
+  };
 
   const handleGenerate = async () => {
     if (!config) return;
@@ -117,8 +161,12 @@ function App() {
     if (newConfig.schillinger_sequence) newConfig.schillinger_sequence = duplicateArray(newConfig.schillinger_sequence, schillingerSteps, 0);
     if (newConfig.harmony_distance_contour) newConfig.harmony_distance_contour = duplicateArray(newConfig.harmony_distance_contour, stdSteps, 0.2);
     if (newConfig.mode_contour) newConfig.mode_contour = duplicateArray(newConfig.mode_contour, stdSteps, 0);
-    if (newConfig.chord_structure_contour) newConfig.chord_structure_contour = duplicateArray(newConfig.chord_structure_contour, stdSteps, 0);
-    if (newConfig.schillinger_ex_contour) newConfig.schillinger_ex_contour = duplicateArray(newConfig.schillinger_ex_contour, stdSteps, 2);
+    if (newConfig.chord_structure_contour) {
+      newConfig.chord_structure_contour = newConfig.chord_structure_contour.map((track: any[]) => duplicateArray(track, stdSteps, 0));
+    }
+    if (newConfig.schillinger_ex_contour) {
+      newConfig.schillinger_ex_contour = newConfig.schillinger_ex_contour.map((track: any[]) => duplicateArray(track, stdSteps, 2));
+    }
     if (newConfig.harmony_matrix_contour) newConfig.harmony_matrix_contour = duplicateArray(newConfig.harmony_matrix_contour, stdSteps, 0);
 
     if (newConfig.voice_contour) {
@@ -149,8 +197,8 @@ function App() {
     const nc = { ...config, voice_contour_resolution: newRes };
     if (nc.harmony_distance_contour) nc.harmony_distance_contour = resampleContour(nc.harmony_distance_contour, oldRes, newRes);
     if (nc.mode_contour) nc.mode_contour = resampleContour(nc.mode_contour, oldRes, newRes);
-    if (nc.chord_structure_contour) nc.chord_structure_contour = resampleContour(nc.chord_structure_contour, oldRes, newRes);
-    if (nc.schillinger_ex_contour) nc.schillinger_ex_contour = resampleContour(nc.schillinger_ex_contour, oldRes, newRes);
+    if (nc.chord_structure_contour) nc.chord_structure_contour = nc.chord_structure_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
+    if (nc.schillinger_ex_contour) nc.schillinger_ex_contour = nc.schillinger_ex_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
     if (nc.harmony_matrix_contour) nc.harmony_matrix_contour = resampleContour(nc.harmony_matrix_contour, oldRes, newRes);
     if (nc.voice_contour) nc.voice_contour = nc.voice_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
     if (nc.voice_rhythm_contour) nc.voice_rhythm_contour = nc.voice_rhythm_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
@@ -358,17 +406,21 @@ function App() {
         return [1, 4, 1, 5][section] ?? 1;
       });
 
-      // Chord structure: rich voicings throughout, thicker at climax
-      nc.chord_structure_contour = Array.from({ length: steps }, (_, i) => {
-        const phase = i / steps;
-        return Math.round(3 + 2 * Math.sin(phase * Math.PI));
-      });
+      // Chord structure: rich voicings throughout, thicker at climax — per voice
+      nc.chord_structure_contour = Array.from({ length: 16 }, () =>
+        Array.from({ length: steps }, (_, i) => {
+          const phase = i / steps;
+          return Math.round(3 + 2 * Math.sin(phase * Math.PI));
+        })
+      );
 
-      // Schillinger expansion: moderate, jazzier wider voicings
-      nc.schillinger_ex_contour = Array.from({ length: steps }, (_, i) => {
-        const phase = i / steps;
-        return Math.round(3 + Math.sin(phase * Math.PI * 2));
-      });
+      // Schillinger expansion: moderate, jazzier wider voicings — per voice, slight offset per voice
+      nc.schillinger_ex_contour = Array.from({ length: 16 }, (_, v) =>
+        Array.from({ length: steps }, (_, i) => {
+          const phase = i / steps;
+          return Math.round(3 + Math.sin(phase * Math.PI * 2 + v * 0.3));
+        })
+      );
 
       // Rhythm: syncopated — mix of 8ths, dotted quarters, swung feel
       const jazzSnaps = [0.5, 0.75, 1.0, 0.5, 0.75, 1.0, 2.0];
@@ -460,17 +512,21 @@ function App() {
         return (phase > 0.35 && phase < 0.65) ? 5 : 0;
       });
 
-      // Chord structure: triads expanding to 7ths at climax
-      nc.chord_structure_contour = Array.from({ length: steps }, (_, i) => {
-        const phase = i / steps;
-        return Math.round(1 + 3 * Math.sin(phase * Math.PI));
-      });
+      // Chord structure: triads expanding to 7ths at climax — per voice
+      nc.chord_structure_contour = Array.from({ length: 16 }, () =>
+        Array.from({ length: steps }, (_, i) => {
+          const phase = i / steps;
+          return Math.round(1 + 3 * Math.sin(phase * Math.PI));
+        })
+      );
 
-      // Schillinger expansion: moderate, wider at climax
-      nc.schillinger_ex_contour = Array.from({ length: steps }, (_, i) => {
-        const phase = i / steps;
-        return Math.round(2 + 2 * Math.sin(phase * Math.PI));
-      });
+      // Schillinger expansion: moderate, wider at climax — per voice
+      nc.schillinger_ex_contour = Array.from({ length: 16 }, (_, v) =>
+        Array.from({ length: steps }, (_, i) => {
+          const phase = i / steps;
+          return Math.round(2 + 2 * Math.sin(phase * Math.PI) + (v % 2 === 0 ? 0 : 0.5));
+        })
+      );
 
       // Rhythm: stately — mostly quarter and half notes, faster at climax
       const classSnaps = [0.5, 1.0, 2.0, 4.0];
@@ -515,8 +571,8 @@ function App() {
     const steps = Math.ceil((nc.pl * 4 * nc.render_length) / nc.voice_contour_resolution);
     nc.harmony_distance_contour = new Array(steps).fill(0);
     nc.mode_contour = new Array(steps).fill(0);
-    nc.chord_structure_contour = new Array(steps).fill(0);
-    nc.schillinger_ex_contour = new Array(steps).fill(2);
+    nc.chord_structure_contour = Array.from({ length: 16 }, () => new Array(steps).fill(0));
+    nc.schillinger_ex_contour = Array.from({ length: 16 }, () => new Array(steps).fill(2));
     nc.voice_contour = Array.from({ length: 16 }, () => new Array(steps).fill(0));
     nc.voice_rhythm_contour = Array.from({ length: 16 }, () => new Array(steps).fill(1.0));
     if (nc.harmony_matrix_contour) nc.harmony_matrix_contour = new Array(steps).fill(0);
@@ -570,8 +626,8 @@ function App() {
       return sectionModes[sectionIdx];
     });
 
-    nc.chord_structure_contour = smoothRandom(0, 5).map(v => Math.round(v));
-    nc.schillinger_ex_contour = smoothRandom(2, 5).map(v => Math.round(v));
+    nc.chord_structure_contour = Array.from({ length: 16 }, () => smoothRandom(0, 5).map(v => Math.round(v)));
+    nc.schillinger_ex_contour = Array.from({ length: 16 }, () => smoothRandom(2, 5).map(v => Math.round(v)));
     // Harmony matrix: smooth transitions between random context rows (0-7)
     nc.harmony_matrix_contour = smoothRandom(0, 7).map(v => Math.round(v));
     nc.voice_contour = Array.from({ length: 16 }, () => smoothRandom(-12, 12).map(v => parseFloat(v.toFixed(1))));
@@ -618,8 +674,8 @@ function App() {
   const modeHighlights = useMemo(() => {
     if (!config || activeTab !== 'mode') return [];
     const modeContour: number[] = config.mode_contour || [];
-    const chordContour: number[] = config.chord_structure_contour || [];
-    const exContour: number[] = config.schillinger_ex_contour || [];
+    const chordContour: number[] = (config.chord_structure_contour && config.chord_structure_contour[selectedVoice]) || [];
+    const exContour: number[] = (config.schillinger_ex_contour && config.schillinger_ex_contour[selectedVoice]) || [];
     const seq: number[] = config.schillinger_sequence || [0];
     const res = config.voice_contour_resolution;
     const fallbackChord = config.chord_structure || [0,1,2,4,5];
@@ -649,7 +705,7 @@ function App() {
       }
     }
     return highlights;
-  }, [config, activeTab]);
+  }, [config, activeTab, selectedVoice]);
 
   if (!config) return <div className="p-8 text-xl text-slate-400">Loading Configuration...</div>;
 
@@ -682,13 +738,14 @@ function App() {
           color="#fde047"
         />;
       case 'chord':
+        const chordData = config.chord_structure_contour ? config.chord_structure_contour[selectedVoice] : [];
         return <ContourEditor
-          label="Chord Structure Contour"
-          data={config.chord_structure_contour || []}
+          label={`Voice ${selectedVoice} Chord Structure Contour`}
+          data={chordData || []}
           yMin={0} yMax={5} xMax={xMax}
           resolution={config.voice_contour_resolution}
           pl={config.pl}
-          onChange={(d) => updateConfig('chord_structure_contour', d)}
+          onChange={(d) => updateConfig('chord_structure_contour', writeVoiceContour(config.chord_structure_contour, d))}
           onResolutionChange={handleResolutionChange}
           color="#86efac"
         />;
@@ -700,11 +757,7 @@ function App() {
           yMin={-12} yMax={12} xMax={xMax}
           resolution={config.voice_contour_resolution}
           pl={config.pl}
-          onChange={(d) => {
-            const nv = [...config.voice_contour];
-            nv[selectedVoice] = d;
-            updateConfig('voice_contour', nv);
-          }}
+          onChange={(d) => updateConfig('voice_contour', writeVoiceContour(config.voice_contour, d))}
           onResolutionChange={handleResolutionChange}
           color="#67e8f9"
         />;
@@ -717,11 +770,7 @@ function App() {
           resolution={config.voice_contour_resolution}
           pl={config.pl}
           snaps={[0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0]}
-          onChange={(d) => {
-            const nv = [...config.voice_rhythm_contour];
-            nv[selectedVoice] = d;
-            updateConfig('voice_rhythm_contour', nv);
-          }}
+          onChange={(d) => updateConfig('voice_rhythm_contour', writeVoiceContour(config.voice_rhythm_contour, d))}
           onResolutionChange={handleResolutionChange}
           color="#f87171"
         />;
@@ -737,14 +786,15 @@ function App() {
           yLabelOffset={1}
         />;
       case 'schillinger_ex':
+        const exData = config.schillinger_ex_contour ? config.schillinger_ex_contour[selectedVoice] : [];
         return <ContourEditor
-          label="Schillinger Expansion Contour (ex)"
-          data={config.schillinger_ex_contour || []}
+          label={`Voice ${selectedVoice} Schillinger Expansion Contour (ex)`}
+          data={exData || []}
           yMin={2} yMax={5} xMax={xMax}
           resolution={config.voice_contour_resolution}
           pl={config.pl}
           onResolutionChange={handleResolutionChange}
-          onChange={(d) => updateConfig('schillinger_ex_contour', d.map(n => Math.round(n)))}
+          onChange={(d) => updateConfig('schillinger_ex_contour', writeVoiceContour(config.schillinger_ex_contour, d.map(n => Math.round(n))))}
           color="#f43f5e"
         />;
       case 'harmony_matrix':
@@ -944,15 +994,17 @@ function App() {
             ))}
           </div>
 
-          {(activeTab === 'voice' || activeTab === 'rhythm') && (
-            <div className="flex items-center gap-4 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
-              <span className="text-xs text-slate-500 uppercase">Voice Target:</span>
+          {(activeTab === 'voice' || activeTab === 'rhythm' || activeTab === 'schillinger_ex' || activeTab === 'chord') && (
+            <div className={`flex items-center gap-4 px-3 py-1.5 rounded-lg border transition-colors ${broadcastVoices ? 'bg-amber-950/50 border-amber-500/50' : 'bg-slate-950 border-slate-800'}`} title="Hold Shift while editing to apply to all voices">
+              <span className={`text-xs uppercase ${broadcastVoices ? 'text-amber-400' : 'text-slate-500'}`}>
+                {broadcastVoices ? 'All Voices (Shift)' : 'Voice Target:'}
+              </span>
               <div className="flex gap-1 flex-wrap">
                 {Array.from({ length: 16 }).map((_, i) => i < 5 ? (
-                  <button 
-                    key={i} 
+                  <button
+                    key={i}
                     onClick={() => setSelectedVoice(i)}
-                    className={`w-7 h-7 rounded text-xs font-mono transition-colors ${selectedVoice === i ? 'bg-cyan-600 text-slate-950' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                    className={`w-7 h-7 rounded text-xs font-mono transition-colors ${broadcastVoices ? 'bg-amber-800/60 text-amber-200' : selectedVoice === i ? 'bg-cyan-600 text-slate-950' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
                   >
                     {i}
                   </button>

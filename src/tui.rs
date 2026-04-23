@@ -318,8 +318,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                                             contour.clear();
                                         }
                                     } else if app.input_mode == InputMode::ChordContour {
-                                        if let Some(contour) = &mut app.config.chord_structure_contour {
-                                            contour.clear();
+                                        if let Some(contours) = &mut app.config.chord_structure_contour {
+                                            if app.selected_voice < contours.len() {
+                                                contours[app.selected_voice].clear();
+                                            }
                                         }
                                     } else if app.input_mode == InputMode::VoiceRhythmContour {
                                         if let Some(contours) = &mut app.config.voice_rhythm_contour {
@@ -492,14 +494,18 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                                         &mut app.config.harmony_distance_contour
                                     } else if is_mode {
                                         &mut app.config.mode_contour
-                                    } else if is_chord {
-                                        &mut app.config.chord_structure_contour
                                     } else {
                                         &mut None
                                     };
 
-                                    if !is_harmony && !is_mode && !is_chord {
-                                        let mut_vec_option = if is_rhythm { &mut app.config.voice_rhythm_contour } else { &mut app.config.voice_contour };
+                                    if !is_harmony && !is_mode {
+                                        let mut_vec_option = if is_rhythm {
+                                            &mut app.config.voice_rhythm_contour
+                                        } else if is_chord {
+                                            &mut app.config.chord_structure_contour
+                                        } else {
+                                            &mut app.config.voice_contour
+                                        };
                                         
                                         if let Some(contours) = mut_vec_option {
                                             if app.selected_voice < contours.len() {
@@ -615,16 +621,24 @@ fn ui(f: &mut Frame, app: &mut App) {
         let is_rhythm = app.input_mode == InputMode::VoiceRhythmContour;
         let has_boxes = is_harmony || is_mode || is_chord;
 
-        let active_contour = if is_harmony {
-            &app.config.harmony_distance_contour
-        } else if is_mode {
-            &app.config.mode_contour
-        } else if is_chord {
-            &app.config.chord_structure_contour
+        let chord_voice_contour: Option<&Vec<f64>> = if is_chord {
+            app.config.chord_structure_contour
+                .as_ref()
+                .and_then(|outer| outer.get(app.selected_voice))
         } else {
-            &None
+            None
         };
-        
+
+        let active_contour: Option<&Vec<f64>> = if is_harmony {
+            app.config.harmony_distance_contour.as_ref()
+        } else if is_mode {
+            app.config.mode_contour.as_ref()
+        } else if is_chord {
+            chord_voice_contour
+        } else {
+            None
+        };
+
         if has_boxes {
             if let Some(contour) = active_contour {
                 for (i, &val) in contour.iter().enumerate() {
