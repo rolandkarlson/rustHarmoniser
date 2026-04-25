@@ -43,7 +43,7 @@ pub struct Config {
     pub lookahead_depth: i32,
     pub render_length: i32,
     pub rng_seed: f64,
-    pub voice_contour: Option<Vec<Vec<f64>>>,
+    pub voice_contour: Option<Vec<Vec<i32>>>,
     pub voice_rhythm_contour: Option<Vec<Vec<f64>>>,
     pub voice_contour_resolution: f64,
     pub chord_structure: Vec<i32>,
@@ -145,7 +145,7 @@ impl Config {
                         }
                     }
                 }
-                contour_vec.push(y);
+                contour_vec.push(y.round() as i32);
             }
             contours.push(contour_vec);
         }

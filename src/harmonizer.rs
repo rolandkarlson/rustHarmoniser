@@ -199,7 +199,7 @@ pub struct Boundries {
 
 pub struct HarmonizerState {
     pub schillinger_notes: Vec<Vec<Vec<i32>>>,
-    pub voice_contour: Option<Vec<Vec<f64>>>,
+    pub voice_contour: Option<Vec<Vec<i32>>>,
     pub contour_resolution: f64,
     pub harmony_contour: Option<Vec<f64>>,
     pub harmony_contour_resolution: f64,
@@ -218,6 +218,10 @@ fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &
     let voice_bars = &state.schillinger_notes[voice_idx];
     let safe_bar = mod_shim(bar, voice_bars.len() as i32) as usize;
     let notes = &voice_bars[safe_bar];
+
+    if(current_note.muted == 0){
+        return notes.clone();
+    }
 
     if(bar % config.pl == 0 || bar % config.pl ==  config.pl - 1){
         if(current_note.channel == 4){
@@ -379,6 +383,26 @@ pub fn get_harmony_scores(
 
     // === Phase 1: Build context ===
 
+    if current_note.muted == 0 {
+        let candidate: i32 = if config.schillinger_progression {
+            let sch_scale = get_schillinger_scale(current_note, state, config);
+            let center_octave = (current_note.pitch as f64 / 12.0).floor() as i32;
+            gen_scale(&sch_scale, center_octave)
+                .into_iter()
+                .min_by_key(|&p| (p - current_note.pitch).abs())
+                .unwrap_or(current_note.pitch)
+        } else {
+            current_note.pitch
+        };
+
+        return vec![NoteScore {
+            note: candidate,
+            score: 0.0,
+            distance: 0.0,
+            crossing: false,
+        }];
+    }
+
     let channel_idx = current_note.channel as usize;
 
     // Merge sustaining + same-start into current harmony
@@ -434,7 +458,7 @@ pub fn get_harmony_scores(
         }
     }
 
-    let mut target_offset: f64 = 0.0;
+    let mut target_offset: i32 = 0;
     let use_contour = if let Some(ref contours) = state.voice_contour {
         if !contours.is_empty() {
             let contour = &contours[mod_shim(channel_idx as i32, contours.len() as i32) as usize];
@@ -484,7 +508,7 @@ pub fn get_harmony_scores(
     let channel_boundry_min = [2,2,2,7,1].get_wrapped(channel_idx);
 
     let has_lasts = !current_lasts.is_empty();
-    let input_pitch_f = current_note.pitch as f64;
+    let input_pitch_f = current_note.pitch;
 
     // Precompute direction check: call only 2x instead of Nx
     let (dir_penalty_down, dir_penalty_up) = if is_outer_voice
@@ -602,11 +626,11 @@ pub fn get_harmony_scores(
 
             // F: Cubic pitch distance
             let base_dist = if use_contour {
-                (c as f64 - input_pitch_f + target_offset).abs()
+                (c - input_pitch_f + target_offset).abs()
             } else {
-                (c - current_note.pitch + seq).abs() as f64
+                (c - current_note.pitch + seq).abs()
             };
-            let normalized = base_dist / 8.0;
+            let normalized = base_dist as f64 / 8.0;
             penalty_scores[i] -= normalized * normalized * normalized;
 
             // G: History penalties (bitset gates the expensive count)
@@ -753,6 +777,7 @@ fn score_note_group(
     let permu_first_channel = current_notes.last().unwrap().channel;
 
     for j in 0..current_notes.len() {
+
         let skip_penalty = no_same_note_penalty || (permu_first_channel != current_notes[j].channel);
 
         // temp_group_notes acts as current_on_same_start_harmony

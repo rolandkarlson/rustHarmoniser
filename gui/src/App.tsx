@@ -200,7 +200,7 @@ function App() {
     if (nc.chord_structure_contour) nc.chord_structure_contour = nc.chord_structure_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
     if (nc.schillinger_ex_contour) nc.schillinger_ex_contour = nc.schillinger_ex_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
     if (nc.harmony_matrix_contour) nc.harmony_matrix_contour = resampleContour(nc.harmony_matrix_contour, oldRes, newRes);
-    if (nc.voice_contour) nc.voice_contour = nc.voice_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
+    if (nc.voice_contour) nc.voice_contour = nc.voice_contour.map((t: number[]) => resampleContour(t, oldRes, newRes).map(Math.round));
     if (nc.voice_rhythm_contour) nc.voice_rhythm_contour = nc.voice_rhythm_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
     setConfig(nc);
   };
@@ -442,7 +442,7 @@ function App() {
         Array.from({ length: steps }, (_, i) => {
           const phase = i / steps;
           const base = v === 0 ? -8 : v <= 2 ? 0 : 4;
-          return parseFloat((base + 3 * Math.sin(phase * Math.PI * (2 + v * 0.3))).toFixed(1));
+          return Math.round(base + 3 * Math.sin(phase * Math.PI * (2 + v * 0.3)));
         })
       );
 
@@ -549,7 +549,7 @@ function App() {
         Array.from({ length: steps }, (_, i) => {
           const phase = i / steps;
           const base = v === 0 ? -10 : v === 1 ? -4 : v === 2 ? 0 : 5;
-          return parseFloat((base + 4 * Math.sin(phase * Math.PI) * (v < 2 ? -0.5 : 1)).toFixed(1));
+          return Math.round(base + 4 * Math.sin(phase * Math.PI) * (v < 2 ? -0.5 : 1));
         })
       );
 
@@ -630,7 +630,7 @@ function App() {
     nc.schillinger_ex_contour = Array.from({ length: 16 }, () => smoothRandom(2, 5).map(v => Math.round(v)));
     // Harmony matrix: smooth transitions between random context rows (0-7)
     nc.harmony_matrix_contour = smoothRandom(0, 7).map(v => Math.round(v));
-    nc.voice_contour = Array.from({ length: 16 }, () => smoothRandom(-12, 12).map(v => parseFloat(v.toFixed(1))));
+    nc.voice_contour = Array.from({ length: 16 }, () => smoothRandom(-12, 12).map(v => Math.round(v)));
     nc.voice_rhythm_contour = Array.from({ length: 16 }, () => smoothRandom(0.25, 4).map(snapNearest));
     // Use the first mode from the contour for Markov progression coherence
     nc.schillinger_sequence = generateMarkovProgression(nc.pl * nc.render_length, sectionModes[0], nc.pl);
@@ -757,7 +757,7 @@ function App() {
           yMin={-12} yMax={12} xMax={xMax}
           resolution={config.voice_contour_resolution}
           pl={config.pl}
-          onChange={(d) => updateConfig('voice_contour', writeVoiceContour(config.voice_contour, d))}
+          onChange={(d) => updateConfig('voice_contour', writeVoiceContour(config.voice_contour, d.map(n => Math.round(n))))}
           onResolutionChange={handleResolutionChange}
           color="#67e8f9"
         />;

@@ -42,6 +42,7 @@ fn main() -> std::io::Result<()> {
 }
 
 use std::sync::mpsc::Sender;
+use crate::utils::ArrayExt;
 
 pub fn run_generation(config: &Config, progress_sender: Option<Sender<(usize, usize)>>) -> std::io::Result<String> {
     utils::SeededRng::set_seed(config.rng_seed);
@@ -89,7 +90,7 @@ pub fn run_generation(config: &Config, progress_sender: Option<Sender<(usize, us
     // `gen_voice` in my Rust implementation takes `rhythm_data`.
     
     let mut income = Vec::new();
-    
+
 
 
     

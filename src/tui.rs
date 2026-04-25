@@ -499,56 +499,92 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                                     };
 
                                     if !is_harmony && !is_mode {
-                                        let mut_vec_option = if is_rhythm {
-                                            &mut app.config.voice_rhythm_contour
-                                        } else if is_chord {
-                                            &mut app.config.chord_structure_contour
-                                        } else {
-                                            &mut app.config.voice_contour
-                                        };
-                                        
-                                        if let Some(contours) = mut_vec_option {
-                                            if app.selected_voice < contours.len() {
-                                                let vec = &mut contours[app.selected_voice];
-                                                let fill_val = if is_rhythm { 4.0 } else { 0.0 };
-                                                if idx >= vec.len() {
-                                                    vec.resize(idx + 1, fill_val);
-                                                }
-                                                
-                                                if let MouseEventKind::Drag(_) = mouse.kind {
-                                                    if let Some((prev_idx, prev_val)) = app.last_mouse_pos {
-                                                        let start = std::cmp::min(prev_idx, idx);
-                                                        let end = std::cmp::max(prev_idx, idx);
-                                                        
-                                                        if end > start {
-                                                            for i in start..=end {
-                                                                if i >= vec.len() {
-                                                                    vec.resize(i + 1, fill_val);
-                                                                }
-                                                                let t = (i - start) as f64 / (end - start) as f64;
-                                                                let mut val = if idx > prev_idx {
-                                                                    prev_val + t * (data_y - prev_val)
-                                                                } else {
-                                                                    data_y + t * (prev_val - data_y)
-                                                                };
-                                                                if is_rhythm {
-                                                                    let snaps = [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0];
-                                                                    let mut closest = snaps[0];
-                                                                    let mut min_diff = (val - closest).abs();
-                                                                    for &s in snaps.iter().skip(1) {
-                                                                        let diff = (val - s).abs();
-                                                                        if diff < min_diff { min_diff = diff; closest = s; }
+                                        if !is_rhythm && !is_chord {
+                                            // voice_contour: Vec<Vec<i32>>
+                                            if let Some(contours) = &mut app.config.voice_contour {
+                                                if app.selected_voice < contours.len() {
+                                                    let vec = &mut contours[app.selected_voice];
+                                                    let fill_val: i32 = 0;
+                                                    if idx >= vec.len() {
+                                                        vec.resize(idx + 1, fill_val);
+                                                    }
+
+                                                    if let MouseEventKind::Drag(_) = mouse.kind {
+                                                        if let Some((prev_idx, prev_val)) = app.last_mouse_pos {
+                                                            let start = std::cmp::min(prev_idx, idx);
+                                                            let end = std::cmp::max(prev_idx, idx);
+
+                                                            if end > start {
+                                                                for i in start..=end {
+                                                                    if i >= vec.len() {
+                                                                        vec.resize(i + 1, fill_val);
                                                                     }
-                                                                    val = closest;
+                                                                    let t = (i - start) as f64 / (end - start) as f64;
+                                                                    let val = if idx > prev_idx {
+                                                                        prev_val + t * (data_y - prev_val)
+                                                                    } else {
+                                                                        data_y + t * (prev_val - data_y)
+                                                                    };
+                                                                    vec[i] = val.round() as i32;
                                                                 }
-                                                                vec[i] = val;
                                                             }
                                                         }
                                                     }
+
+                                                    vec[idx] = data_y.round() as i32;
+                                                    app.last_mouse_pos = Some((idx, data_y));
                                                 }
-                                                
-                                                vec[idx] = data_y;
-                                                app.last_mouse_pos = Some((idx, data_y));
+                                            }
+                                        } else {
+                                            let mut_vec_option = if is_rhythm {
+                                                &mut app.config.voice_rhythm_contour
+                                            } else {
+                                                &mut app.config.chord_structure_contour
+                                            };
+
+                                            if let Some(contours) = mut_vec_option {
+                                                if app.selected_voice < contours.len() {
+                                                    let vec = &mut contours[app.selected_voice];
+                                                    let fill_val = if is_rhythm { 4.0 } else { 0.0 };
+                                                    if idx >= vec.len() {
+                                                        vec.resize(idx + 1, fill_val);
+                                                    }
+
+                                                    if let MouseEventKind::Drag(_) = mouse.kind {
+                                                        if let Some((prev_idx, prev_val)) = app.last_mouse_pos {
+                                                            let start = std::cmp::min(prev_idx, idx);
+                                                            let end = std::cmp::max(prev_idx, idx);
+
+                                                            if end > start {
+                                                                for i in start..=end {
+                                                                    if i >= vec.len() {
+                                                                        vec.resize(i + 1, fill_val);
+                                                                    }
+                                                                    let t = (i - start) as f64 / (end - start) as f64;
+                                                                    let mut val = if idx > prev_idx {
+                                                                        prev_val + t * (data_y - prev_val)
+                                                                    } else {
+                                                                        data_y + t * (prev_val - data_y)
+                                                                    };
+                                                                    if is_rhythm {
+                                                                        let snaps = [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0];
+                                                                        let mut closest = snaps[0];
+                                                                        let mut min_diff = (val - closest).abs();
+                                                                        for &s in snaps.iter().skip(1) {
+                                                                            let diff = (val - s).abs();
+                                                                            if diff < min_diff { min_diff = diff; closest = s; }
+                                                                        }
+                                                                        val = closest;
+                                                                    }
+                                                                    vec[i] = val;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    vec[idx] = data_y;
+                                                    app.last_mouse_pos = Some((idx, data_y));
+                                                }
                                             }
                                         }
                                     } else {
@@ -659,14 +695,24 @@ fn ui(f: &mut Frame, app: &mut App) {
                 }
             }
         } else {
-            let active_multi = if is_rhythm { &app.config.voice_rhythm_contour } else { &app.config.voice_contour };
-            if let Some(contours) = active_multi {
-                if app.selected_voice < contours.len() {
-                    for (i, &val) in contours[app.selected_voice].iter().enumerate() {
-                        let x = (i as f64) * app.config.voice_contour_resolution;
-                         if val != 0.0 || is_rhythm { // Plot dynamically tracking
+            if is_rhythm {
+                if let Some(contours) = &app.config.voice_rhythm_contour {
+                    if app.selected_voice < contours.len() {
+                        for (i, &val) in contours[app.selected_voice].iter().enumerate() {
+                            let x = (i as f64) * app.config.voice_contour_resolution;
                             data_points.push((x, val));
-                         }
+                        }
+                    }
+                }
+            } else {
+                if let Some(contours) = &app.config.voice_contour {
+                    if app.selected_voice < contours.len() {
+                        for (i, &val) in contours[app.selected_voice].iter().enumerate() {
+                            let x = (i as f64) * app.config.voice_contour_resolution;
+                            if val != 0 {
+                                data_points.push((x, val as f64));
+                            }
+                        }
                     }
                 }
             }
