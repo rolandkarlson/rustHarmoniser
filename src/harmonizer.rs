@@ -677,6 +677,35 @@ pub fn get_harmony_scores(
 }
 
 
+pub fn gen_voice_from_notes(pattern: &[Note], source_length: f64, config: &Config) -> Vec<Note> {
+    let clip_len = (config.pl * 4 * config.render_length) as f64;
+    if pattern.is_empty() || source_length <= 0.0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut offset = 0.0;
+    while offset < clip_len {
+        for n in pattern {
+            let s = n.start + offset;
+            if s >= clip_len { continue; }
+            let mut d = n.duration;
+            if s + d > clip_len { d = clip_len - s; }
+            if d < 0.001 { continue; }
+            out.push(Note {
+                pitch: n.pitch,
+                start: s,
+                duration: d,
+                velocity: n.velocity,
+                muted: 0,
+                channel: 0,
+                probability: n.probability,
+            });
+        }
+        offset += source_length;
+    }
+    out
+}
+
 pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channel: i32, muted: i32, config: &Config) -> Vec<Note> {
     let mut ar = Vec::new();
     let clip_len = (config.pl * 4 * config.render_length) as f64;

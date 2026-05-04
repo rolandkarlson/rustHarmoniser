@@ -859,6 +859,13 @@ function App() {
               <span className="text-xs uppercase tracking-wider text-slate-500" title="When enabled, candidate notes are constrained to Schillinger-derived scale degrees. When off, notes can be any pitch within range.">Schillinger:</span>
               <input type="checkbox" checked={config.schillinger_progression ?? true} onChange={e => updateConfig('schillinger_progression', e.target.checked)} className="accent-cyan-500" />
             </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Use the pitches from an Ableton clip as the leading voice (channel 0). Pitches are cycled through voice_rhythm timing.">Lead Clip:</span>
+              <input type="checkbox" checked={config.use_leading_voice ?? false} onChange={e => updateConfig('use_leading_voice', e.target.checked)} className="accent-cyan-500" />
+              <input type="number" value={config.leading_voice_track ?? 0} onChange={e => updateConfig('leading_voice_track', parseInt(e.target.value))} title="Ableton track index" className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" disabled={!config.use_leading_voice} />
+              <span className="text-xs text-slate-600">/</span>
+              <input type="number" value={config.leading_voice_clip ?? 1} onChange={e => updateConfig('leading_voice_clip', parseInt(e.target.value))} title="Ableton clip index" className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" disabled={!config.use_leading_voice} />
+            </div>
             <div className="border-l border-slate-700 h-5"></div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes pitches already in voice history. Higher = more variety.">Note Repeat:</span>

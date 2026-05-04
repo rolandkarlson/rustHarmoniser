@@ -5,7 +5,16 @@
       "Bash(npx tsc:*)",
       "Bash(cargo check:*)",
       "Bash(npx --prefix /Users/roland/RustroverProjects/rustHarmoniser/gui tsc -b /Users/roland/RustroverProjects/rustHarmoniser/gui --pretty false)",
-      "Bash(git stash *)"
+      "Bash(git stash *)",
+      "Bash(claude mcp *)",
+      "Bash(xattr -l '__TRACKED_VAR__/Library/Preferences/Ableton/Live 12.3.8/User Remote Scripts/AbletonMCP/__init__.py')",
+      "Bash(xattr -l '__TRACKED_VAR__/Library/Preferences/Ableton/Live 12.3.8/User Remote Scripts/AbletonMCP/')",
+      "Bash(ps -ao lstart,command)",
+      "mcp__AbletonMCP__get_track_info",
+      "mcp__AbletonMCP__get_session_info",
+      "mcp__AbletonMCP__get_clip_notes",
+      "Bash(awk '{for\\(i=11;i<=NF;i++\\) printf \"%s \", $i; print \"\"}')",
+      "Bash(ps -eo pid,lstart,command)"
     ]
   }
 }

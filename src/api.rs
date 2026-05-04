@@ -1,11 +1,13 @@
 use axum::{
+    extract::Path,
     routing::{get, post},
     Router, Json, response::{IntoResponse}, http::StatusCode,
 };
 use tower_http::cors::{Any, CorsLayer};
 use std::net::SocketAddr;
-use crate::model::Config;
-use crate::run_generation;
+use crate::ableton;
+use crate::model::{Config, Note};
+use crate::run_generation_with_leading;
 
 pub async fn start_server() {
     let cors = CorsLayer::new()
@@ -16,6 +18,7 @@ pub async fn start_server() {
     let app = Router::new()
         .route("/api/config", get(get_config))
         .route("/api/generate", post(generate_music))
+        .route("/api/clip-notes/:track/:clip", get(get_clip_notes))
         .layer(cors);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -34,9 +37,44 @@ async fn get_config() -> impl IntoResponse {
     Json(config)
 }
 
+async fn get_clip_notes(Path((track, clip)): Path<(i32, i32)>) -> impl IntoResponse {
+    match ableton::get_clip_notes(track, clip).await {
+        Ok(notes) => (StatusCode::OK, Json(notes)).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "status": "error", "message": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 async fn generate_music(Json(config): Json<Config>) -> impl IntoResponse {
-    // Note: Since this is blocking logic, we should ideally use spawn_blocking but it's fine for local tools.
-    match run_generation(&config, None) {
+    let leading = if config.use_leading_voice {
+        match ableton::get_clip(config.leading_voice_track, config.leading_voice_clip).await {
+            Ok(clip) => {
+                let pattern: Vec<Note> = clip.notes.iter().map(|n| Note {
+                    pitch: n.pitch,
+                    start: n.start_time,
+                    duration: n.duration,
+                    velocity: n.velocity.round() as i32,
+                    muted: 0,
+                    channel: 0,
+                    probability: (n.probability * 100.0).round() as i32,
+                }).collect();
+                Some((pattern, clip.length))
+            }
+            Err(e) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "status": "error", "message": format!("ableton fetch failed: {e}") })),
+                ).into_response();
+            }
+        }
+    } else {
+        None
+    };
+
+    match run_generation_with_leading(&config, None, leading) {
         Ok(msg) => (StatusCode::OK, Json(serde_json::json!({ "status": "success", "message": msg }))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "status": "error", "message": e.to_string() }))).into_response(),
     }

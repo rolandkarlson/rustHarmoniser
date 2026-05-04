@@ -6,6 +6,7 @@ mod harmonizer;
 mod schillinger;
 mod tui;
 mod api;
+mod ableton;
 
 use clap::Parser;
 
@@ -19,7 +20,7 @@ struct Args {
 use model::{Config, Note};
 
 use rhythm::{gen_rythm2, transform_rhythm};
-use harmonizer::{gen_voice, harmonise2, HarmonizerState};
+use harmonizer::{gen_voice, gen_voice_from_notes, harmonise2, HarmonizerState};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::time::Instant;
@@ -45,6 +46,14 @@ use std::sync::mpsc::Sender;
 use crate::utils::ArrayExt;
 
 pub fn run_generation(config: &Config, progress_sender: Option<Sender<(usize, usize)>>) -> std::io::Result<String> {
+    run_generation_with_leading(config, progress_sender, None)
+}
+
+pub fn run_generation_with_leading(
+    config: &Config,
+    progress_sender: Option<Sender<(usize, usize)>>,
+    leading: Option<(Vec<Note>, f64)>,
+) -> std::io::Result<String> {
     utils::SeededRng::set_seed(config.rng_seed);
     let start_time = Instant::now();
     // 2. Rhythm Generation Rules (Simplified port)
@@ -94,7 +103,19 @@ pub fn run_generation(config: &Config, progress_sender: Option<Sender<(usize, us
 
 
     
-    income.extend(gen_voice(70, &config.voice_rhythm, &[0], 0, 1, &config));
+    if config.use_leading_voice {
+        if let Some((pattern, source_len)) = leading.as_ref() {
+            if !pattern.is_empty() {
+                income.extend(gen_voice_from_notes(pattern, *source_len, &config));
+            } else {
+                income.extend(gen_voice(70, &config.voice_rhythm, &[0], 0, 1, &config));
+            }
+        } else {
+            income.extend(gen_voice(70, &config.voice_rhythm, &[0], 0, 1, &config));
+        }
+    } else {
+        income.extend(gen_voice(70, &config.voice_rhythm, &[0], 0, 1, &config));
+    }
     income.extend(gen_voice(65, &config.voice_rhythm, &[0], 1, 1, &config));
     income.extend(gen_voice(44, &config.voice_rhythm, &[0], 2, 1, &config));
 
