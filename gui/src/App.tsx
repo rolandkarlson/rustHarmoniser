@@ -629,7 +629,7 @@ function App() {
     nc.chord_structure_contour = Array.from({ length: 16 }, () => smoothRandom(0, 5).map(v => Math.round(v)));
     nc.schillinger_ex_contour = Array.from({ length: 16 }, () => smoothRandom(2, 5).map(v => Math.round(v)));
     // Harmony matrix: smooth transitions between random context rows (0-7)
-    nc.harmony_matrix_contour = smoothRandom(0, 7).map(v => Math.round(v));
+    nc.harmony_matrix_contour = smoothRandom(0, 8).map(v => Math.round(v));
     nc.voice_contour = Array.from({ length: 16 }, () => smoothRandom(-12, 12).map(v => Math.round(v)));
     nc.voice_rhythm_contour = Array.from({ length: 16 }, () => smoothRandom(0.25, 4).map(snapNearest));
     // Use the first mode from the contour for Markov progression coherence
@@ -799,9 +799,9 @@ function App() {
         />;
       case 'harmony_matrix':
         return <ContourEditor
-          label="Harmony Matrix — 0:Classical 1:Jazz 2:Tension 3:Ethereal 4:Dark 5:Bright 6:Aggressive 7:Ancient"
+          label="Harmony Matrix — 0:Classical 1:Jazz 2:Tension 3:Ethereal 4:Dark 5:Bright 6:Aggressive 7:Ancient 8:Neutral"
           data={config.harmony_matrix_contour || []}
-          yMin={0} yMax={7} xMax={xMax}
+          yMin={0} yMax={8} xMax={xMax}
           resolution={config.voice_contour_resolution}
           pl={config.pl}
           onResolutionChange={handleResolutionChange}
@@ -820,7 +820,7 @@ function App() {
     { id: 'chord', label: 'Chord', tip: 'Chord voicing structure over time. Selects from preset voicings (triads to full 7-note chords).' },
     { id: 'voice', label: 'Voice Pitch', tip: 'Per-voice pitch offset in semitones over time. Shifts the target pitch the harmonizer aims for.' },
     { id: 'rhythm', label: 'Voice Rhythm', tip: 'Per-voice note duration over time. Values in beats (0.25=16th, 0.5=8th, 1=quarter, 4=whole). Clamped at bar boundaries.' },
-    { id: 'harmony_matrix', label: 'H. Matrix', tip: 'Harmony style profile over time. 0=Classical, 1=Jazz, 2=Tension, 3=Ethereal, 4=Dark, 5=Bright, 6=Aggressive, 7=Ancient. Fractional values interpolate between rows.' },
+    { id: 'harmony_matrix', label: 'H. Matrix', tip: 'Harmony style profile over time. 0=Classical, 1=Jazz, 2=Tension, 3=Ethereal, 4=Dark, 5=Bright, 6=Aggressive, 7=Ancient, 8=Neutral. Fractional values interpolate between rows.' },
   ];
 
   return (
@@ -858,6 +858,14 @@ function App() {
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="When enabled, candidate notes are constrained to Schillinger-derived scale degrees. When off, notes can be any pitch within range.">Schillinger:</span>
               <input type="checkbox" checked={config.schillinger_progression ?? true} onChange={e => updateConfig('schillinger_progression', e.target.checked)} className="accent-cyan-500" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Snap each Schillinger scale note UP to the nearest chord_structure pitch class (mod 12). Mutually exclusive with Floor.">Ceil:</span>
+              <input type="checkbox" checked={config.use_ceiling ?? false} onChange={e => updateConfig('use_ceiling', e.target.checked)} className="accent-cyan-500" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Snap each Schillinger scale note DOWN to the nearest chord_structure pitch class (mod 12). Ignored if Ceil is on.">Floor:</span>
+              <input type="checkbox" checked={config.use_floor ?? false} onChange={e => updateConfig('use_floor', e.target.checked)} className="accent-cyan-500" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Use the pitches from an Ableton clip as the leading voice (channel 0). Pitches are cycled through voice_rhythm timing.">Lead Clip:</span>

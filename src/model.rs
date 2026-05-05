@@ -54,6 +54,10 @@ pub struct Config {
     pub harmony_matrix_contour: Option<Vec<f64>>,
     pub main_pitch: i32,
     #[serde(default)]
+    pub use_floor: bool,
+    #[serde(default)]
+    pub use_ceiling: bool,
+    #[serde(default)]
     pub use_leading_voice: bool,
     #[serde(default)]
     pub leading_voice_track: i32,
@@ -91,6 +95,8 @@ impl Default for Config {
             schillinger_ex_contour: None,
             harmony_matrix_contour: None,
             main_pitch: 0,
+            use_floor: false,
+            use_ceiling: false,
             use_leading_voice: false,
             leading_voice_track: 0,
             leading_voice_clip: 1,

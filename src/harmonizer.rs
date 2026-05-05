@@ -12,11 +12,12 @@ use fxhash::FxHasher64;
 
 /// Static consonance lookup table indexed by interval mod 12.
 /// Replaces get_harmonic_score_adjusted() function calls.
-/// 12x8 Harmony Matrix — each row is a style/context profile.
+/// 12x9 Harmony Matrix — each row is a style/context profile.
 /// Rows: 0=Strict Classical, 1=Jazz/Extended, 2=Suspense/Tension, 3=Ethereal/Open,
-///        4=Dark/Melancholic, 5=Bright/Lydian, 6=Aggressive/Brutal, 7=Ancient/Fifth-Based
+///        4=Dark/Melancholic, 5=Bright/Lydian, 6=Aggressive/Brutal, 7=Ancient/Fifth-Based,
+///        8=Neutral/Zero (no preference)
 /// Columns: interval 0-11 in semitones.
-const HARMONY_MATRIX: [[f64; 12]; 8] = [
+const HARMONY_MATRIX: [[f64; 12]; 9] = [
     // 0: STRICT CLASSICAL (Pure consonance, heavy penalties for clashes)
     [1.0, -100.0, -0.5, 0.6, 0.8, 0.5, -100.0, 1.0, 0.5, 0.7, -0.8, -100.0],
     // 1: JAZZ & COLOR (7ths and 9ths are loved, clusters are okay)
@@ -33,14 +34,16 @@ const HARMONY_MATRIX: [[f64; 12]; 8] = [
     [-0.5, 1.0, 0.4, -0.8, -0.8, -0.5, 0.9, -0.5, -0.8, -0.8, 0.5, 1.0],
     // 7: ANCIENT/HOLLOW (Organum: only 1sts, 4ths, 5ths, 8ths)
     [1.0, -100.0, -100.0, -100.0, -100.0, 0.8, -100.0, 1.0, -100.0, -100.0, -100.0, -100.0],
+    // 8: NEUTRAL/ZERO (no preference — every interval scores 0.0)
+    [0.0; 12],
 ];
 
 /// Get the interpolated consonance table for a fractional harmony context value.
 /// Integer values select a row directly; fractional values LERP between adjacent rows.
 fn get_harmony_row(ctx: f64) -> [f64; 12] {
-    let clamped = ctx.clamp(0.0, 7.0);
+    let clamped = ctx.clamp(0.0, 8.0);
     let lo = clamped.floor() as usize;
-    let hi = (lo + 1).min(7);
+    let hi = (lo + 1).min(8);
     let t = clamped - lo as f64;
     let mut row = [0.0f64; 12];
     for i in 0..12 {
@@ -206,7 +209,32 @@ pub struct HarmonizerState {
     pub harmony_matrix_contour: Option<Vec<f64>>,
 }
 
-fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &Config) -> Vec<i32> {
+
+#[derive(Clone, Copy)]
+enum BoundMode { Ceiling, Floor }
+
+fn get_modular_bound(n: i32, anchors: &[i32], m: i32, mode: BoundMode) -> i32 {
+    let mut sorted: Vec<i32> = anchors.iter().map(|&a| mod_shim(a, m)).collect();
+    sorted.sort();
+    sorted.dedup();
+    if sorted.is_empty() { return n; }
+    let r = mod_shim(n, m);
+    match mode {
+        BoundMode::Ceiling => sorted.iter().find(|&&x| x > r).copied().unwrap_or(sorted[0]),
+        BoundMode::Floor => sorted.iter().rev().find(|&&x| x < r).copied().unwrap_or(*sorted.last().unwrap()),
+    }
+}
+
+fn apply_bound(notes: Vec<i32>, anchors: &[i32], config: &Config, current_lasts_lead: Vec<i32>, i: i32) -> Vec<i32> {
+    if !config.use_ceiling && !config.use_floor { return notes; }
+    if current_lasts_lead.is_empty() || anchors.is_empty() { return notes; }
+    let mode = if config.use_ceiling { BoundMode::Ceiling } else { BoundMode::Floor };
+    current_lasts_lead.into_iter()
+        .map(|n| get_modular_bound(n+i-1, anchors, 12, mode))
+        .collect()
+}
+
+fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &Config, current_lasts_lead: Vec<i32>) -> Vec<i32> {
     let bar_duration = 4.0;
     let bar = (current_note.start / bar_duration).floor() as i32;
     let num_voices = state.schillinger_notes.len() as i32;
@@ -223,21 +251,21 @@ fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &
         return notes.clone();
     }
 
-    if(bar % config.pl == 0 || bar % config.pl ==  config.pl - 1){
+    let result = if(bar % config.pl == 0 || bar % config.pl ==  config.pl - 1){
         if(current_note.channel == 4){
-             return vec![notes[0]];
+             vec![notes[0]]
+        } else if(current_note.channel == 0){
+            vec![notes[2]]
+        } else {
+            vec![notes[0], notes[1], notes[2]]
         }
+    } else if(current_note.channel == 4){
+        vec![notes[0]]
+    } else {
+        notes.clone()
+    };
 
-        if(current_note.channel == 0){
-            return vec![notes[2]];
-        }
-        return vec![notes[0], notes[1], notes[2]];
-    }
-    if(current_note.channel == 4){
-        return vec![notes[0]];
-    }
-    //let notes = &state.schillinger_notes[safe_bar];
-    notes.clone()
+    apply_bound(result, notes, config, current_lasts_lead, current_note.channel )
 }
 
 fn is_harmony_moving_to_same_direction(last: &[Note], current: &[Note], going_down: bool) -> bool {
@@ -271,6 +299,7 @@ pub struct PrecomputedHarmonyData {
     pub boundries_by_channel: Vec<Boundries>,
     pub last_notes_by_channel: Vec<Vec<i32>>,
     pub notes_ending_at_start: Vec<Note>,
+    pub sustaining_lead_pitch: Option<i32>,
     // Vectorized scoring fields
     pub last_harmony_interval_set: IntervalSet,
     pub has_parallel_fifth: bool,
@@ -284,6 +313,7 @@ fn build_precomputed_data(context: &[Note], start_time: f64) -> PrecomputedHarmo
     let mut notes_ending_at_start = Vec::new();
     let mut sustaining_at_minus_0_1 = Vec::new();
     let mut last_notes_by_channel: Vec<Vec<i32>> = vec![Vec::new(); 16];
+    let mut sustaining_lead_pitch: Option<i32> = None;
 
     for n in context {
         // last_harmony: start <= start-1.0 && end > start-1.0
@@ -294,6 +324,9 @@ fn build_precomputed_data(context: &[Note], start_time: f64) -> PrecomputedHarmo
         // sustaining_notes: start <= start && end > start
         if n.start <= start_time && n.start + n.duration > start_time && n.muted == 0 {
             sustaining_notes.push(n.pitch);
+            if n.channel == 0 {
+                sustaining_lead_pitch = Some(n.pitch);
+            }
         }
 
         // sustaining_at_minus_0_1 (for boundaries): start <= start-0.1 && end > start-0.1
@@ -365,6 +398,7 @@ fn build_precomputed_data(context: &[Note], start_time: f64) -> PrecomputedHarmo
         boundries_by_channel,
         last_notes_by_channel,
         notes_ending_at_start,
+        sustaining_lead_pitch,
         last_harmony_interval_set,
         has_parallel_fifth,
         has_parallel_unison,
@@ -385,7 +419,7 @@ pub fn get_harmony_scores(
 
     if current_note.muted == 0 {
         let candidate: i32 = if config.schillinger_progression {
-            let sch_scale = get_schillinger_scale(current_note, state, config);
+            let sch_scale = get_schillinger_scale(current_note, state, config, Vec::new());
             let center_octave = (current_note.pitch as f64 / 12.0).floor() as i32;
             gen_scale(&sch_scale, center_octave)
                 .into_iter()
@@ -430,6 +464,20 @@ pub fn get_harmony_scores(
 
     let mut current_lasts = if channel_idx < precomputed.last_notes_by_channel.len() {
         precomputed.last_notes_by_channel[channel_idx].clone()
+    } else {
+        Vec::new()
+    };
+
+    let current_lasts_lead: Vec<i32> = if current_note.channel == 0 {
+        Vec::new()
+    } else if let Some(p) = current_on_same_start_harmony.iter().find(|n| n.channel == 0).map(|n| n.pitch) {
+        vec![p]
+    } else if let Some(p) = precomputed.sustaining_lead_pitch {
+        vec![p]
+    } else if !precomputed.last_notes_by_channel.is_empty()
+        && !precomputed.last_notes_by_channel[0].is_empty()
+    {
+        vec![precomputed.last_notes_by_channel[0][0]]
     } else {
         Vec::new()
     };
@@ -482,7 +530,7 @@ pub fn get_harmony_scores(
     // Generate candidates
     let sp = 0.0;
     let candidates: Vec<i32> = if config.schillinger_progression {
-        let sch_scale = get_schillinger_scale(current_note, state, config);
+        let sch_scale = get_schillinger_scale(current_note, state, config, current_lasts_lead);
         let center_octave = (current_lasts[0] as f64 / 12.0).floor() as i32;
         gen_scale(&sch_scale, center_octave)
     } else {
