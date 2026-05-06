@@ -299,7 +299,7 @@ pub struct PrecomputedHarmonyData {
     pub boundries_by_channel: Vec<Boundries>,
     pub last_notes_by_channel: Vec<Vec<i32>>,
     pub notes_ending_at_start: Vec<Note>,
-    pub sustaining_lead_pitch: Option<i32>,
+    pub lead_pitch: Option<i32>,
     // Vectorized scoring fields
     pub last_harmony_interval_set: IntervalSet,
     pub has_parallel_fifth: bool,
@@ -307,13 +307,14 @@ pub struct PrecomputedHarmonyData {
     pub last_notes_bitset_by_channel: Vec<PitchSet>,
 }
 
-fn build_precomputed_data(context: &[Note], start_time: f64) -> PrecomputedHarmonyData {
+fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: f64) -> PrecomputedHarmonyData {
     let mut last_harmony = Vec::new();
     let mut sustaining_notes = Vec::new();
     let mut notes_ending_at_start = Vec::new();
     let mut sustaining_at_minus_0_1 = Vec::new();
     let mut last_notes_by_channel: Vec<Vec<i32>> = vec![Vec::new(); 16];
     let mut sustaining_lead_pitch: Option<i32> = None;
+    let mut latest_past_lead: Option<(f64, i32)> = None;
 
     for n in context {
         // last_harmony: start <= start-1.0 && end > start-1.0
@@ -326,6 +327,13 @@ fn build_precomputed_data(context: &[Note], start_time: f64) -> PrecomputedHarmo
             sustaining_notes.push(n.pitch);
             if n.channel == 0 {
                 sustaining_lead_pitch = Some(n.pitch);
+            }
+        }
+
+        // most recent past channel-0 note (even if no longer sounding)
+        if n.channel == 0 && n.muted == 0 && n.start < start_time {
+            if latest_past_lead.map_or(true, |(s, _)| n.start > s) {
+                latest_past_lead = Some((n.start, n.pitch));
             }
         }
 
@@ -391,6 +399,13 @@ fn build_precomputed_data(context: &[Note], start_time: f64) -> PrecomputedHarmo
         .map(|notes| pitch_set_from_slice(notes))
         .collect();
 
+    // Lead pitch priority: current group > sustaining from context > most recent past lead
+    let lead_pitch = current_group.iter()
+        .find(|n| n.channel == 0 && n.muted == 0)
+        .map(|n| n.pitch)
+        .or(sustaining_lead_pitch)
+        .or(latest_past_lead.map(|(_, p)| p));
+
     PrecomputedHarmonyData {
         last_harmony,
         last_harmony_intervals,
@@ -398,7 +413,7 @@ fn build_precomputed_data(context: &[Note], start_time: f64) -> PrecomputedHarmo
         boundries_by_channel,
         last_notes_by_channel,
         notes_ending_at_start,
-        sustaining_lead_pitch,
+        lead_pitch,
         last_harmony_interval_set,
         has_parallel_fifth,
         has_parallel_unison,
@@ -470,16 +485,8 @@ pub fn get_harmony_scores(
 
     let current_lasts_lead: Vec<i32> = if current_note.channel == 0 {
         Vec::new()
-    } else if let Some(p) = current_on_same_start_harmony.iter().find(|n| n.channel == 0).map(|n| n.pitch) {
-        vec![p]
-    } else if let Some(p) = precomputed.sustaining_lead_pitch {
-        vec![p]
-    } else if !precomputed.last_notes_by_channel.is_empty()
-        && !precomputed.last_notes_by_channel[0].is_empty()
-    {
-        vec![precomputed.last_notes_by_channel[0][0]]
     } else {
-        Vec::new()
+        precomputed.lead_pitch.map(|p| vec![p]).unwrap_or_default()
     };
 
     let last_notes_set: PitchSet = if channel_idx < precomputed.last_notes_bitset_by_channel.len() {
@@ -907,7 +914,7 @@ fn score_lookahead(
     let permutations = &all_permutations[start_idx];
 
     let start_time = permutations[0][0].start;
-    let precomputed = build_precomputed_data(context, start_time);
+    let precomputed = build_precomputed_data(context, &permutations[0], start_time);
 
     let candidates: Vec<(f64, Vec<Note>)> = permutations.par_iter()
         .map(|perm| {
@@ -979,7 +986,7 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
                 let trimmed_notes = &beam_state.notes;
 
                 let start_time = permutations[0][0].start;
-                let precomputed = build_precomputed_data(trimmed_notes, start_time);
+                let precomputed = build_precomputed_data(trimmed_notes, &permutations[0], start_time);
 
                 permutations.par_iter().map(move |perm| {
                     let mut temp_notes = Vec::new();
