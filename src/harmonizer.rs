@@ -93,26 +93,26 @@ fn interval_set_from_slice(intervals: &[i32]) -> IntervalSet {
 }
 /// Heuristic channel-priority orderings. Each row is a voice-processing order.
 /// The voice scored first has fewest constraints (most freedom), last has most.
-const SMART_ORDERINGS: [[i32; 5]; 10] = [
-    [4, 3, 2, 1, 0],  // Bass-first
+const SMART_ORDERINGS: [[i32; 5]; 1] = [
     [0, 1, 2, 3, 4],  // Soprano-first
-    [0, 4, 1, 3, 2],  // Outer-voices-first
-    [2, 1, 3, 0, 4],  // Inner-voices-first
-    [4, 0, 3, 1, 2],  // Alternating outer
-    [3, 2, 1, 0, 4],  // Tenor-first
-    [1, 0, 2, 4, 3],  // Alto-first
-    [0, 4, 2, 1, 3],  // Outer + middle
-    [4, 2, 0, 3, 1],  // Spread pattern
-    [2, 0, 4, 1, 3],  // Middle-out
+    // [4, 3, 2, 1, 0],  // Bass-first
+    // [0, 4, 1, 3, 2],  // Outer-voices-first
+    // [2, 1, 3, 0, 4],  // Inner-voices-first
+    // [4, 0, 3, 1, 2],  // Alternating outer
+    // [3, 2, 1, 0, 4],  // Tenor-first
+    // [1, 0, 2, 4, 3],  // Alto-first
+    // [0, 4, 2, 1, 3],  // Outer + middle
+    // [4, 2, 0, 3, 1],  // Spread pattern
+    // [2, 0, 4, 1, 3],  // Middle-out
 ];
 
 /// Smart permutation selection: ~10 heuristic orderings instead of N!
 /// For small groups (≤ 3 notes), falls back to all permutations.
 pub fn get_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
     let n = notes.len();
-    if n <= 3 {
-        return get_all_permutations(notes);
-    }
+    // if n <= 3 {
+    //     return get_all_permutations(notes);
+    // }
 
     let mut results = Vec::with_capacity(SMART_ORDERINGS.len());
     let mut seen_channel_orders: Vec<Vec<i32>> = Vec::new();
@@ -140,9 +140,9 @@ pub fn get_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
 
     // Fallback: if heuristics produced fewer than 3 results (unusual channel layouts),
     // fall back to all permutations
-    if results.len() < 3 {
-        return get_all_permutations(notes);
-    }
+    // if results.len() < 3 {
+    //     return get_all_permutations(notes);
+    // }
 
     results
 }
@@ -976,7 +976,7 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
                 } else {
                     0
                 };
-                let trimmed_notes = &beam_state.notes[start..];
+                let trimmed_notes = &beam_state.notes;
 
                 let start_time = permutations[0][0].start;
                 let precomputed = build_precomputed_data(trimmed_notes, start_time);
