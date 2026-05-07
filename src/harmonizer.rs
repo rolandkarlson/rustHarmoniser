@@ -991,7 +991,7 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
                 } else {
                     0
                 };
-                let trimmed_notes = &beam_state.notes;
+                let trimmed_notes = &beam_state.notes[start..];
 
                 let start_time = permutations[0][0].start;
                 let precomputed = build_precomputed_data(trimmed_notes, &permutations[0], start_time);
