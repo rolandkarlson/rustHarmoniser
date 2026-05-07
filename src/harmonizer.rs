@@ -110,9 +110,9 @@ const SMART_ORDERINGS: [[i32; 5]; 10] = [
 /// For small groups (≤ 3 notes), falls back to all permutations.
 pub fn get_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
     let n = notes.len();
-    // if n <= 3 {
-    //     return get_all_permutations(notes);
-    // }
+    if n <= 3 {
+        return get_all_permutations(notes);
+    }
 
     let mut results = Vec::with_capacity(SMART_ORDERINGS.len());
     let mut seen_channel_orders: Vec<Vec<i32>> = Vec::new();
@@ -140,9 +140,9 @@ pub fn get_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
 
     // Fallback: if heuristics produced fewer than 3 results (unusual channel layouts),
     // fall back to all permutations
-    // if results.len() < 3 {
-    //     return get_all_permutations(notes);
-    // }
+    if results.len() < 3 {
+        return get_all_permutations(notes);
+    }
 
     results
 }
