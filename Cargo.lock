@@ -984,6 +984,7 @@ dependencies = [
  "crossterm",
  "dashmap",
  "fxhash",
+ "log",
  "ratatui",
  "rayon",
  "serde",
