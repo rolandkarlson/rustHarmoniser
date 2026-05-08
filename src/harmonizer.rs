@@ -108,8 +108,15 @@ const SMART_ORDERINGS: [[i32; 5]; 10] = [
 
 /// Smart permutation selection: ~10 heuristic orderings instead of N!
 /// For small groups (≤ 3 notes), falls back to all permutations.
-pub fn get_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
+pub fn get_permutations(notes: &[Note], use_leading_voice: bool) -> Vec<Vec<Note>> {
     let n = notes.len();
+
+    if use_leading_voice {
+        let mut perm = notes.to_vec();
+        perm.sort_by_key(|n| n.channel);
+        return vec![perm];
+    }
+
     if n <= 3 {
         return get_all_permutations(notes);
     }
@@ -530,7 +537,7 @@ pub fn get_harmony_scores(
                 target_offset = *contour.get_wrapped(idx);
             }
         }
-        false // use_contour is always set to false in original
+        true // use_contour is always set to false in original
     } else {
         false
     };
@@ -693,8 +700,8 @@ pub fn get_harmony_scores(
             } else {
                 (c - current_note.pitch + seq).abs()
             };
-            let normalized = base_dist as f64 / 8.0;
-            penalty_scores[i] -= normalized * normalized * normalized;
+            let normalized = base_dist as f64 / 24.0;
+             penalty_scores[i] -= normalized * normalized * normalized * normalized;
 
             // G: History penalties (bitset gates the expensive count)
             if !no_same_note_penalty {
@@ -957,7 +964,7 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
     let grouped_notes = group_by_start_array(income);
 
     let all_permutations: Vec<Vec<Vec<Note>>> = grouped_notes.par_iter()
-        .map(|g| get_permutations(g))
+        .map(|g| get_permutations(g, config.use_leading_voice))
         .collect();
 
     let beam_width = 5;
@@ -991,7 +998,7 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
                 } else {
                     0
                 };
-                let trimmed_notes = &beam_state.notes[start..];
+                let trimmed_notes = &beam_state.notes;
 
                 let start_time = permutations[0][0].start;
                 let precomputed = build_precomputed_data(trimmed_notes, &permutations[0], start_time);
