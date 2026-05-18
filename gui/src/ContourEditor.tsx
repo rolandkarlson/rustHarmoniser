@@ -219,12 +219,24 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
 
   // Generate grid with X-axis quantization (note / halfbar / bar)
   const gridLines: React.ReactNode[] = [];
+  const barBackgrounds: React.ReactNode[] = [];
   const xLabels: React.ReactNode[] = [];
 
   const gridSpacingBeats = xQuantize === 'bar' ? 4 : xQuantize === 'halfbar' ? 2 : resolution;
   const phraseBeats = pl * resolution;
   const visibleGridPoints = (xMax / gridSpacingBeats) / zoom;
   const showAllLabels = visibleGridPoints < 50;
+
+  // Alternating bar shading so the current bar is visible at any zoom on long pieces
+  const totalBars = Math.ceil(xMax / 4);
+  for (let b = 0; b < totalBars; b++) {
+    if (b % 2 === 0) continue;
+    const x1 = (b * 4 / xMax) * 100;
+    const x2 = Math.min(((b + 1) * 4) / xMax, 1) * 100;
+    barBackgrounds.push(
+      <rect key={`bar-bg-${b}`} x={x1} y="0" width={x2 - x1} height="100" fill="rgba(255,255,255,0.05)" />
+    );
+  }
 
   for (let xBeats = 0; xBeats <= xMax; xBeats += gridSpacingBeats) {
     const px = (xBeats / xMax) * 100;
@@ -382,6 +394,7 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
               onPointerCancel={handlePointerUp}
             >
               <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+                {barBackgrounds}
                 {gridLines}
                 {highlightRects}
                 {contourBoxes}
