@@ -258,7 +258,7 @@ fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &
         return notes.clone();
     }
 
-    let result = if(bar % config.pl == 0 || bar % config.pl ==  config.pl - 1){
+    let result = if(config.use_resolve) {if(bar % config.pl == 0 || bar % config.pl ==  config.pl - 1){
         if(current_note.channel == 4){
              vec![notes[0]]
         } else if(current_note.channel == 0){
@@ -270,7 +270,7 @@ fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &
         vec![notes[0]]
     } else {
         notes.clone()
-    };
+    }} else {notes.clone()};
 
     apply_bound(result, notes, config, current_lasts_lead, current_note.channel )
 }

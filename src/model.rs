@@ -63,6 +63,7 @@ pub struct Config {
     pub leading_voice_track: i32,
     #[serde(default = "default_leading_clip")]
     pub leading_voice_clip: i32,
+    pub use_resolve:bool,
 }
 
 fn default_leading_clip() -> i32 { 1 }
@@ -100,6 +101,7 @@ impl Default for Config {
             use_leading_voice: false,
             leading_voice_track: 0,
             leading_voice_clip: 1,
+            use_resolve: false,
         }
     }
 }

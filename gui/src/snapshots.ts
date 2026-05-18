@@ -5,12 +5,14 @@ export interface Snapshot {
   name: string;
   config: any;
   created_at: string;
+  favorite: boolean;
 }
 
 function readAll(): Snapshot[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    return parsed.map((s: any) => ({ favorite: false, ...s }));
   } catch {
     return [];
   }
@@ -30,6 +32,7 @@ export function saveSnapshot(config: any): Snapshot {
     }).replace(',', ''),
     config: structuredClone(config),
     created_at: now.toISOString(),
+    favorite: false,
   };
   const all = readAll();
   all.unshift(snap);
@@ -48,4 +51,22 @@ export function loadSnapshot(id: string): any | null {
 
 export function deleteSnapshot(id: string) {
   writeAll(readAll().filter(s => s.id !== id));
+}
+
+export function renameSnapshot(id: string, name: string) {
+  const all = readAll();
+  const snap = all.find(s => s.id === id);
+  if (snap) {
+    snap.name = name;
+    writeAll(all);
+  }
+}
+
+export function toggleFavorite(id: string) {
+  const all = readAll();
+  const snap = all.find(s => s.id === id);
+  if (snap) {
+    snap.favorite = !snap.favorite;
+    writeAll(all);
+  }
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { ContourEditor } from './ContourEditor'
-import { saveSnapshot, listSnapshots, loadSnapshot, deleteSnapshot, type Snapshot } from './snapshots'
+import { saveSnapshot, listSnapshots, loadSnapshot, deleteSnapshot, renameSnapshot, toggleFavorite, type Snapshot } from './snapshots'
 import './index.css'
 
 const MODE_NAMES = ['Ion', 'Dor', 'Phr', 'Lyd', 'Mix', 'Aeo', 'Loc'];
@@ -35,6 +35,9 @@ function App() {
   const [message, setMessage] = useState('');
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [showSnapshots, setShowSnapshots] = useState(false);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const [broadcastVoices, setBroadcastVoices] = useState(false);
   const snapRef = useRef<HTMLDivElement>(null);
 
@@ -868,6 +871,10 @@ function App() {
               <input type="checkbox" checked={config.use_floor ?? false} onChange={e => updateConfig('use_floor', e.target.checked)} className="accent-cyan-500" />
             </div>
             <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="At bar boundaries (first/last bar of each pl-length phrase), restrict candidate notes by channel: channel 4 → root only, channel 0 → third, others → root/third/fifth.">Resolve:</span>
+              <input type="checkbox" checked={config.use_resolve ?? false} onChange={e => updateConfig('use_resolve', e.target.checked)} className="accent-cyan-500" />
+            </div>
+            <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Use the pitches from an Ableton clip as the leading voice (channel 0). Pitches are cycled through voice_rhythm timing.">Lead Clip:</span>
               <input type="checkbox" checked={config.use_leading_voice ?? false} onChange={e => updateConfig('use_leading_voice', e.target.checked)} className="accent-cyan-500" />
               <input type="number" value={config.leading_voice_track ?? 0} onChange={e => updateConfig('leading_voice_track', parseInt(e.target.value))} title="Ableton track index" className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" disabled={!config.use_leading_voice} />
@@ -952,20 +959,88 @@ function App() {
               >
                 Snapshots{snapshots.length > 0 && ` (${snapshots.length})`}
               </button>
-              {showSnapshots && (
-                <div className="absolute right-0 top-full mt-1 w-72 max-h-80 overflow-y-auto bg-slate-900 border border-slate-700 rounded-lg shadow-xl z-50">
-                  {snapshots.length === 0 ? (
-                    <div className="p-3 text-sm text-slate-500">No snapshots yet. Press Generate to create one.</div>
-                  ) : snapshots.map(s => (
-                    <div key={s.id} className="flex items-center justify-between px-3 py-2 hover:bg-slate-800 border-b border-slate-800 last:border-0">
+              {showSnapshots && (() => {
+                const visible = favoritesOnly ? snapshots.filter(s => s.favorite) : snapshots;
+                const commitRename = (id: string) => {
+                  const trimmed = renameValue.trim();
+                  if (trimmed) {
+                    renameSnapshot(id, trimmed);
+                    setSnapshots(listSnapshots());
+                  }
+                  setRenamingId(null);
+                };
+                return (
+                <div className="absolute right-0 top-full mt-1 w-80 max-h-80 overflow-y-auto bg-slate-900 border border-slate-700 rounded-lg shadow-xl z-50">
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800 sticky top-0 bg-slate-900">
+                    <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={favoritesOnly}
+                        onChange={(e) => setFavoritesOnly(e.target.checked)}
+                        className="accent-yellow-400"
+                      />
+                      Favorites only
+                    </label>
+                    <span className="text-xs text-slate-600">{visible.length} / {snapshots.length}</span>
+                  </div>
+                  {visible.length === 0 ? (
+                    <div className="p-3 text-sm text-slate-500">
+                      {snapshots.length === 0
+                        ? 'No snapshots yet. Press Generate to create one.'
+                        : 'No favorites yet. Click the star to favorite a snapshot.'}
+                    </div>
+                  ) : visible.map(s => (
+                    <div key={s.id} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-800 border-b border-slate-800 last:border-0">
                       <button
-                        onClick={() => {
-                          const cfg = loadSnapshot(s.id);
-                          if (cfg) { setConfig(cfg); setMessage(`Loaded snapshot ${s.name}`); setShowSnapshots(false); }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleFavorite(s.id);
+                          setSnapshots(listSnapshots());
                         }}
-                        className="text-sm text-slate-300 hover:text-cyan-400 truncate text-left flex-1"
+                        className={`text-base shrink-0 ${s.favorite ? 'text-yellow-400' : 'text-slate-600 hover:text-yellow-400'}`}
+                        title={s.favorite ? 'Unfavorite' : 'Favorite'}
                       >
-                        {s.name}
+                        {s.favorite ? '★' : '☆'}
+                      </button>
+                      {renamingId === s.id ? (
+                        <input
+                          autoFocus
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onBlur={() => commitRename(s.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitRename(s.id);
+                            else if (e.key === 'Escape') setRenamingId(null);
+                          }}
+                          className="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                        />
+                      ) : (
+                        <button
+                          onClick={() => {
+                            const cfg = loadSnapshot(s.id);
+                            if (cfg) { setConfig(cfg); setMessage(`Loaded snapshot ${s.name}`); setShowSnapshots(false); }
+                          }}
+                          onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            setRenameValue(s.name);
+                            setRenamingId(s.id);
+                          }}
+                          className="text-sm text-slate-300 hover:text-cyan-400 truncate text-left flex-1 min-w-0"
+                          title="Click to load · Double-click to rename"
+                        >
+                          {s.name}
+                        </button>
+                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRenameValue(s.name);
+                          setRenamingId(s.id);
+                        }}
+                        className="text-xs text-slate-600 hover:text-cyan-400 shrink-0"
+                        title="Rename snapshot"
+                      >
+                        ✎
                       </button>
                       <button
                         onClick={(e) => {
@@ -973,7 +1048,7 @@ function App() {
                           deleteSnapshot(s.id);
                           setSnapshots(listSnapshots());
                         }}
-                        className="ml-2 text-xs text-slate-600 hover:text-red-400 shrink-0"
+                        className="text-xs text-slate-600 hover:text-red-400 shrink-0"
                         title="Delete snapshot"
                       >
                         x
@@ -981,7 +1056,8 @@ function App() {
                     </div>
                   ))}
                 </div>
-              )}
+                );
+              })()}
             </div>
             <button
               onClick={handleGenerate}
