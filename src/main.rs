@@ -117,10 +117,10 @@ pub fn run_generation_with_leading(
         income.extend(gen_voice(70, &config.voice_rhythm, &[0], 0, 1, &config));
     }
     income.extend(gen_voice(65, &config.voice_rhythm, &[0], 1, 1, &config));
-    income.extend(gen_voice(44, &config.voice_rhythm, &[0], 2, 1, &config));
+    income.extend(gen_voice(60, &config.voice_rhythm, &[0], 2, 1, &config));
 
 
-    income.extend(gen_voice(40, &config.voice_rhythm, &[0], 3, 1, &config));
+    income.extend(gen_voice(50, &config.voice_rhythm, &[0], 3, 1, &config));
     income.extend(gen_voice(34, &config.voice_rhythm, &[0], 4, 1, &config));
 
     // Sort income by start time then pitch

@@ -1,16 +1,24 @@
-use std::cmp::min;
-use crate::utils::{mod_shim, ArrayExt};
-
 pub fn gen_scale(ap: &[i32], center_octave: i32) -> Vec<i32> {
-    let start = if center_octave - 1 < 0 { 0 } else { 0 };
-    let end = if center_octave + 1 > 8 { 0 } else { 8 };
+    if ap.is_empty() {
+        return Vec::new();
+    }
+
+    let center = center_octave.clamp(0, 10);
+    let start = (center - 1).max(0);
+    let end = (center + 1).min(10);
     let mut ar = Vec::new();
 
-    for i in start..end {
+    for i in start..=end {
         for &note in ap {
-            ar.push(note + 12 * i);
+            let pitch = note + 12 * i;
+            if (0..=127).contains(&pitch) {
+                ar.push(pitch);
+            }
         }
     }
+
+    ar.sort_unstable();
+    ar.dedup();
     ar
 }
 
@@ -123,4 +131,3 @@ pub fn generate_mode_from_steps(root: i32, mode: &i32) -> Vec<i32> {
     mode_notes.sort();
     mode_notes
 }
-
