@@ -49,6 +49,15 @@ function App() {
     setSnapshots(listSnapshots());
   }, []);
 
+  // Expose current config to the browser console for debugging.
+  // In DevTools: `config` (live snapshot), `setConfig(obj)` to overwrite, `patchConfig({key: val})` to merge.
+  useEffect(() => {
+    const w = window as any;
+    w.config = config;
+    w.setConfig = setConfig;
+    w.patchConfig = (patch: any) => setConfig((c: any) => ({ ...c, ...patch }));
+  }, [config]);
+
   // Close snapshot menu on outside click
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
