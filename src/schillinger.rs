@@ -230,7 +230,7 @@ pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<Vec<i32>>> {
                 &config.chord_structure
             };
 
-            let scale = generate_mode_from_steps(0, &current_mode);
+            let scale = generate_mode_from_steps(config.root, &current_mode);
             let ex = match voice_ex_contour {
                 Some(ec) if !ec.is_empty() => ec.get_wrapped(contour_idx).round() as i32,
                 _ => 2,
