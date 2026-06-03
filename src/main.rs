@@ -141,6 +141,7 @@ pub fn run_generation_with_leading(
         harmony_contour: config.harmony_distance_contour.clone(),
         harmony_contour_resolution: config.voice_contour_resolution,
         harmony_matrix_contour: config.harmony_matrix_contour.clone(),
+        harmony_matrix: config.harmony_matrix.clone(),
     };
 
     let mut notes = harmonise2(income, &config, &state, progress_sender.as_ref());

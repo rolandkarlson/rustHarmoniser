@@ -18,7 +18,7 @@ use fxhash::FxHasher64;
 ///        4=Dark/Melancholic, 5=Bright/Lydian, 6=Aggressive/Brutal, 7=Ancient/Fifth-Based,
 ///        8=Neutral/Zero (no preference)
 /// Columns: interval 0-11 in semitones.
-const HARMONY_MATRIX: [[f64; 12]; 9] = [
+pub const HARMONY_MATRIX: [[f64; 12]; 9] = [
     // 0: STRICT CLASSICAL (Pure consonance, heavy penalties for clashes)
     [1.0, -100.0, -0.5, 0.6, 0.8, 0.5, -100.0, 1.0, 0.5, 0.7, -0.8, -100.0],
     // 1: JAZZ & COLOR (7ths and 9ths are loved, clusters are okay)
@@ -41,14 +41,23 @@ const HARMONY_MATRIX: [[f64; 12]; 9] = [
 
 /// Get the interpolated consonance table for a fractional harmony context value.
 /// Integer values select a row directly; fractional values LERP between adjacent rows.
-fn get_harmony_row(ctx: f64) -> [f64; 12] {
+/// `custom` overrides the built-in HARMONY_MATRIX when supplied and well-formed
+/// (9 rows × 12 columns); otherwise the default matrix is used.
+fn get_harmony_row(ctx: f64, custom: Option<&Vec<Vec<f64>>>) -> [f64; 12] {
     let clamped = ctx.clamp(0.0, 8.0);
     let lo = clamped.floor() as usize;
     let hi = (lo + 1).min(8);
     let t = clamped - lo as f64;
     let mut row = [0.0f64; 12];
+    let valid = custom.map_or(false, |m| m.len() == 9 && m.iter().all(|r| r.len() == 12));
     for i in 0..12 {
-        row[i] = HARMONY_MATRIX[lo][i] * (1.0 - t) + HARMONY_MATRIX[hi][i] * t;
+        let (a, b) = if valid {
+            let m = custom.unwrap();
+            (m[lo][i], m[hi][i])
+        } else {
+            (HARMONY_MATRIX[lo][i], HARMONY_MATRIX[hi][i])
+        };
+        row[i] = a * (1.0 - t) + b * t;
     }
     row
 }
@@ -228,6 +237,7 @@ pub struct HarmonizerState {
     pub harmony_contour: Option<Vec<f64>>,
     pub harmony_contour_resolution: f64,
     pub harmony_matrix_contour: Option<Vec<f64>>,
+    pub harmony_matrix: Option<Vec<Vec<f64>>>,
 }
 
 
@@ -667,7 +677,7 @@ pub fn get_harmony_scores(
     } else {
         0.0
     };
-    let consonance_row = get_harmony_row(harmony_ctx);
+    let consonance_row = get_harmony_row(harmony_ctx, state.harmony_matrix.as_ref());
 
     if harmony_len > 0 {
         let inv_len = 1.0 / harmony_len as f64;

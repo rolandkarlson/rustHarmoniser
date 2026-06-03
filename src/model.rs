@@ -52,6 +52,10 @@ pub struct Config {
     pub chord_structure_contour: Option<Vec<Vec<f64>>>,
     pub schillinger_ex_contour: Option<Vec<Vec<f64>>>,
     pub harmony_matrix_contour: Option<Vec<f64>>,
+    /// 9×12 consonance scoring matrix (style rows × interval columns).
+    /// None falls back to the built-in default in harmonizer::HARMONY_MATRIX.
+    #[serde(default)]
+    pub harmony_matrix: Option<Vec<Vec<f64>>>,
     pub main_pitch: i32,
     #[serde(default)]
     pub use_floor: bool,
@@ -97,6 +101,7 @@ impl Default for Config {
             chord_structure_contour: None,
             schillinger_ex_contour: None,
             harmony_matrix_contour: None,
+            harmony_matrix: None,
             main_pitch: 0,
             use_floor: false,
             use_ceiling: false,
@@ -237,5 +242,16 @@ impl Config {
         self.chord_structure_contour = Some(vec![chord; 16]);
         self.voice_rhythm_contour = Some(rhythm);
         self.harmony_matrix_contour = Some(harmony_matrix);
+
+        // Seed the editable scoring matrix with the built-in defaults so the UI
+        // starts from the current values ("default should be as it is").
+        if self.harmony_matrix.is_none() {
+            self.harmony_matrix = Some(
+                crate::harmonizer::HARMONY_MATRIX
+                    .iter()
+                    .map(|row| row.to_vec())
+                    .collect(),
+            );
+        }
     }
 }

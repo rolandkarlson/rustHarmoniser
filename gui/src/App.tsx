@@ -27,6 +27,24 @@ const CHORD_LIST = [
   [0,1,2,3,4], [0,1,2,3,4,5], [0,1,2,3,4,5,6]
 ];
 
+// Harmony scoring matrix — 9 style rows × 12 interval columns.
+// Mirrors the built-in default in src/harmonizer.rs (HARMONY_MATRIX).
+const HARMONY_MATRIX_ROWS = [
+  'Classical', 'Jazz', 'Tension', 'Ethereal', 'Dark', 'Bright', 'Aggressive', 'Ancient', 'Neutral'
+];
+const HARMONY_MATRIX_COLS = ['P1', 'm2', 'M2', 'm3', 'M3', 'P4', 'TT', 'P5', 'm6', 'M6', 'm7', 'M7'];
+const DEFAULT_HARMONY_MATRIX: number[][] = [
+  [1.0, -100.0, -0.5, 0.6, 0.8, 0.5, -100.0, 1.0, 0.5, 0.7, -0.8, -100.0],
+  [1.0, -0.2, 0.5, 0.7, 0.9, 0.4, 0.3, 1.0, 0.4, 0.8, 0.9, 0.6],
+  [0.0, 0.8, 0.2, -0.5, -0.5, -0.2, 1.0, 0.1, -0.4, -0.4, 0.3, 0.9],
+  [1.0, -10.0, 0.7, -0.2, 0.3, 0.9, -1.0, 1.0, -0.1, 0.4, 0.2, -0.5],
+  [1.0, -0.5, -0.2, 1.0, -0.4, 0.3, -0.2, 0.8, 0.9, -0.3, 0.4, -0.8],
+  [1.0, -0.8, 0.4, -0.3, 1.0, -0.2, 0.7, 0.9, -0.2, 1.0, -0.4, 0.5],
+  [-0.5, 1.0, 0.4, -0.8, -0.8, -0.5, 0.9, -0.5, -0.8, -0.8, 0.5, 1.0],
+  [1.0, -100.0, -100.0, -100.0, -100.0, 0.8, -100.0, 1.0, -100.0, -100.0, -100.0, -100.0],
+  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+];
+
 function App() {
   const [config, setConfig] = useState<any>(null);
   const [activeTab, setActiveTab] = useState('harmony');
@@ -35,6 +53,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [showSnapshots, setShowSnapshots] = useState(false);
+  const [showMatrix, setShowMatrix] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -42,11 +61,18 @@ function App() {
   const snapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const snaps = listSnapshots();
+    setSnapshots(snaps);
+    if (snaps.length > 0) {
+      // Restore the most recent snapshot (newest is first) on reload.
+      setConfig(snaps[0].config);
+      setMessage(`Restored snapshot ${snaps[0].name}`);
+      return;
+    }
     fetch('http://127.0.0.1:3000/api/config')
       .then(res => res.json())
       .then(data => setConfig(data))
       .catch(err => setMessage(`Error loading config: ${err}`));
-    setSnapshots(listSnapshots());
   }, []);
 
   // Expose current config to the browser console for debugging.
@@ -152,6 +178,25 @@ function App() {
 
   const updateConfig = (key: string, value: any) => {
     setConfig({ ...config, [key]: value });
+  };
+
+  // Current scoring matrix (falls back to defaults if backend didn't supply one).
+  const getMatrix = (): number[][] => {
+    const m = config?.harmony_matrix;
+    if (Array.isArray(m) && m.length === 9 && m.every((r: any) => Array.isArray(r) && r.length === 12)) {
+      return m;
+    }
+    return DEFAULT_HARMONY_MATRIX.map(r => [...r]);
+  };
+
+  const updateMatrixCell = (row: number, col: number, value: number) => {
+    const m = getMatrix().map(r => [...r]);
+    m[row][col] = Number.isFinite(value) ? value : 0;
+    updateConfig('harmony_matrix', m);
+  };
+
+  const resetMatrix = () => {
+    updateConfig('harmony_matrix', DEFAULT_HARMONY_MATRIX.map(r => [...r]));
   };
 
   const handleDuplicate = () => {
@@ -964,6 +1009,13 @@ function App() {
             >
               Duplicate
             </button>
+            <button
+              onClick={() => setShowMatrix(true)}
+              title="Edit the harmony scoring matrix — consonance weight per interval for each style row"
+              className="px-4 py-2 bg-violet-700 hover:bg-violet-600 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              H. Matrix
+            </button>
             <div className="relative" ref={snapRef}>
               <button
                 onClick={() => setShowSnapshots(!showSnapshots)}
@@ -1123,6 +1175,72 @@ function App() {
       <div className="flex-1 overflow-hidden p-6 bg-slate-950 flex flex-col">
           {renderActiveEditor()}
       </div>
+
+      {/* Harmony Scoring Matrix Editor Modal */}
+      {showMatrix && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-6"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setShowMatrix(false); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl max-w-[95vw] max-h-[90vh] overflow-auto">
+            <div className="flex items-center justify-between gap-4 px-5 py-3 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+              <div>
+                <h2 className="text-lg font-bold text-violet-300">Harmony Scoring Matrix</h2>
+                <p className="text-xs text-slate-500">Consonance weight per interval (columns) for each style row. Higher = more favoured; large negatives forbid.</p>
+              </div>
+              <div className="flex gap-2 items-center">
+                <button
+                  onClick={resetMatrix}
+                  title="Restore all values to the built-in defaults"
+                  className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-bold rounded-lg transition-all active:scale-95"
+                >
+                  Reset to default
+                </button>
+                <button
+                  onClick={() => setShowMatrix(false)}
+                  className="px-3 py-1.5 bg-violet-700 hover:bg-violet-600 text-slate-100 text-sm font-bold rounded-lg transition-all active:scale-95"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+            <div className="p-5">
+              <table className="border-collapse">
+                <thead>
+                  <tr>
+                    <th className="sticky left-0 bg-slate-900 px-2 py-1 text-left text-xs uppercase tracking-wider text-slate-500">Style \ Interval</th>
+                    {HARMONY_MATRIX_COLS.map((c, ci) => (
+                      <th key={ci} className="px-1 py-1 text-center text-xs font-mono text-slate-400" title={`Interval ${ci} semitones`}>{c}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {HARMONY_MATRIX_ROWS.map((rowName, ri) => (
+                    <tr key={ri} className="hover:bg-slate-800/40">
+                      <td className="sticky left-0 bg-slate-900 px-2 py-1 text-sm text-slate-300 whitespace-nowrap">
+                        <span className="text-slate-600 font-mono mr-1">{ri}</span>{rowName}
+                      </td>
+                      {HARMONY_MATRIX_COLS.map((_, ci) => {
+                        const val = getMatrix()[ri][ci];
+                        return (
+                          <td key={ci} className="px-0.5 py-0.5">
+                            <input
+                              type="text"
+                              value={val}
+                              onChange={(e) => updateMatrixCell(ri, ci, parseFloat(e.target.value))}
+                              className={`w-16 bg-slate-950 border border-slate-800 rounded px-1.5 py-1 text-sm text-right font-mono outline-none focus:border-violet-500 ${val <= -10 ? 'text-red-400' : val < 0 ? 'text-rose-300' : val > 0 ? 'text-emerald-300' : 'text-slate-500'}`}
+                            />
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
