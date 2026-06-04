@@ -34,16 +34,47 @@ const HARMONY_MATRIX_ROWS = [
 ];
 const HARMONY_MATRIX_COLS = ['P1', 'm2', 'M2', 'm3', 'M3', 'P4', 'TT', 'P5', 'm6', 'M6', 'm7', 'M7'];
 const DEFAULT_HARMONY_MATRIX: number[][] = [
-  [1.0, -100.0, -0.5, 0.6, 0.8, 0.5, -100.0, 1.0, 0.5, 0.7, -0.8, -100.0],
-  [1.0, -0.2, 0.5, 0.7, 0.9, 0.4, 0.3, 1.0, 0.4, 0.8, 0.9, 0.6],
-  [0.0, 0.8, 0.2, -0.5, -0.5, -0.2, 1.0, 0.1, -0.4, -0.4, 0.3, 0.9],
-  [1.0, -10.0, 0.7, -0.2, 0.3, 0.9, -1.0, 1.0, -0.1, 0.4, 0.2, -0.5],
-  [1.0, -0.5, -0.2, 1.0, -0.4, 0.3, -0.2, 0.8, 0.9, -0.3, 0.4, -0.8],
-  [1.0, -0.8, 0.4, -0.3, 1.0, -0.2, 0.7, 0.9, -0.2, 1.0, -0.4, 0.5],
-  [-0.5, 1.0, 0.4, -0.8, -0.8, -0.5, 0.9, -0.5, -0.8, -0.8, 0.5, 1.0],
-  [1.0, -100.0, -100.0, -100.0, -100.0, 0.8, -100.0, 1.0, -100.0, -100.0, -100.0, -100.0],
+  [1.0, -100.0, -0.4, 0.8, 0.9, 0.5, -100.0, 1.0, 0.7, 0.8, -0.3, -100.0],
+  [0.6, 0.0, 0.7, 0.8, 0.9, 0.5, 0.6, 0.9, 0.5, 0.8, 1.0, 0.8],
+  [-0.2, 0.8, 0.2, -0.3, -0.3, -0.2, 1.0, 0.0, -0.3, -0.3, 0.5, 0.9],
+  [1.0, -100.0, 0.8, -0.2, 0.2, 1.0, -0.5, 1.0, 0.0, 0.5, 0.4, -0.4],
+  [1.0, -0.5, -0.1, 1.0, -0.4, 0.3, -0.2, 0.8, 1.0, -0.3, 0.5, -0.6],
+  [1.0, -0.7, 0.5, -0.3, 1.0, -0.2, 0.8, 0.9, -0.2, 1.0, -0.3, 0.6],
+  [-0.5, 1.0, 0.4, -0.6, -0.6, -0.4, 1.0, -0.5, -0.6, -0.6, 0.5, 1.0],
+  [1.0, -100.0, -100.0, -100.0, -100.0, 1.0, -100.0, 1.0, -100.0, -100.0, -100.0, -100.0],
   [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
 ];
+
+// Text input for numeric config values. Keeps the raw typed string while editing
+// (so intermediate states like "-", "." and "1." are allowed) and only commits a
+// finite parsed number — never writes NaN. Syncs to the external value on blur.
+function NumberField({ value, onChange, integer, className, title, disabled }: {
+  value: number;
+  onChange: (v: number) => void;
+  integer?: boolean;
+  className?: string;
+  title?: string;
+  disabled?: boolean;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const display = draft !== null ? draft : String(value ?? '');
+  return (
+    <input
+      type="text"
+      value={display}
+      title={title}
+      disabled={disabled}
+      className={className}
+      onChange={(e) => {
+        const s = e.target.value;
+        setDraft(s);
+        const v = integer ? parseInt(s, 10) : parseFloat(s);
+        if (Number.isFinite(v)) onChange(v);
+      }}
+      onBlur={() => setDraft(null)}
+    />
+  );
+}
 
 function App() {
   const [config, setConfig] = useState<any>(null);
@@ -622,18 +653,18 @@ function App() {
     setMessage(`${preset === 'jazz' ? 'Jazz' : 'Classical'} preset loaded`);
   };
 
-  const handleInit = () => {
-    if (!config) return;
-    const nc = { ...config, render_length: 2 };
-    const steps = Math.ceil((nc.pl * 4 * nc.render_length) / nc.voice_contour_resolution);
-    nc.harmony_distance_contour = new Array(steps).fill(0);
-    nc.mode_contour = new Array(steps).fill(0);
-    nc.chord_structure_contour = Array.from({ length: 16 }, () => new Array(steps).fill(0));
-    nc.schillinger_ex_contour = Array.from({ length: 16 }, () => new Array(steps).fill(2));
-    nc.voice_contour = Array.from({ length: 16 }, () => new Array(steps).fill(0));
-    nc.voice_rhythm_contour = Array.from({ length: 16 }, () => new Array(steps).fill(1.0));
-    if (nc.harmony_matrix_contour) nc.harmony_matrix_contour = new Array(steps).fill(0);
-    setConfig(nc);
+  const handleInit = async () => {
+    // Re-pull the server's default config — the reasonable baseline (rescaled
+    // penalties, common-tone control, default H-matrix). Snapshots are untouched.
+    try {
+      const res = await fetch('http://127.0.0.1:3000/api/config');
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setConfig(data);
+      setMessage('Reset to default config');
+    } catch (err: any) {
+      setMessage(`Error loading defaults: ${err.message || err}`);
+    }
   };
 
   const handleRandomise = () => {
@@ -894,27 +925,27 @@ function App() {
           <div className="flex gap-4 items-center flex-wrap bg-slate-950 px-4 py-2 rounded-lg border border-slate-800">
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Phrase Length — number of bars per phrase. Controls harmonic progression length and contour grid spacing.">PL:</span>
-              <input type="number" value={config.pl} onChange={e => updateConfig('pl', parseInt(e.target.value))} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              <NumberField integer value={config.pl} onChange={v => updateConfig('pl', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Render Length — total number of phrases to generate. Total bars = PL × Render Len.">Render Len:</span>
-              <input type="number" value={config.render_length} onChange={e => updateConfig('render_length', parseInt(e.target.value))} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              <NumberField integer value={config.render_length} onChange={v => updateConfig('render_length', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Lookahead Depth — how many future steps the harmonizer evaluates. Higher = more coherent voice leading but slower.">Lookahead:</span>
-              <input type="number" value={config.lookahead_depth ?? 0} onChange={e => updateConfig('lookahead_depth', parseInt(e.target.value))} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              <NumberField integer value={config.lookahead_depth ?? 0} onChange={v => updateConfig('lookahead_depth', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Random seed — same seed produces identical output. Change for a different arrangement.">Seed:</span>
-              <input type="number" value={config.rng_seed} onChange={e => updateConfig('rng_seed', parseInt(e.target.value))} className="w-24 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              <NumberField integer value={config.rng_seed} onChange={v => updateConfig('rng_seed', v)} className="w-24 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Main Pitch — MIDI note offset added to all output pitches. 60 = Middle C.">Pitch:</span>
-              <input type="number" value={config.main_pitch ?? 60} onChange={e => updateConfig('main_pitch', parseInt(e.target.value))} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              <NumberField integer value={config.main_pitch ?? 60} onChange={v => updateConfig('main_pitch', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Root — pitch class (0-11) used as the tonal center for the Schillinger scale. 0 = C.">Root:</span>
-              <input type="number" value={config.root ?? 0} onChange={e => updateConfig('root', parseInt(e.target.value))} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              <NumberField integer value={config.root ?? 0} onChange={v => updateConfig('root', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="When enabled, candidate notes are constrained to Schillinger-derived scale degrees. When off, notes can be any pitch within range.">Schillinger:</span>
@@ -935,34 +966,50 @@ function App() {
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Use the pitches from an Ableton clip as the leading voice (channel 0). Pitches are cycled through voice_rhythm timing.">Lead Clip:</span>
               <input type="checkbox" checked={config.use_leading_voice ?? false} onChange={e => updateConfig('use_leading_voice', e.target.checked)} className="accent-cyan-500" />
-              <input type="number" value={config.leading_voice_track ?? 0} onChange={e => updateConfig('leading_voice_track', parseInt(e.target.value))} title="Ableton track index" className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" disabled={!config.use_leading_voice} />
+              <NumberField integer value={config.leading_voice_track ?? 0} onChange={v => updateConfig('leading_voice_track', v)} title="Ableton track index" className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" disabled={!config.use_leading_voice} />
               <span className="text-xs text-slate-600">/</span>
-              <input type="number" value={config.leading_voice_clip ?? 1} onChange={e => updateConfig('leading_voice_clip', parseInt(e.target.value))} title="Ableton clip index" className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" disabled={!config.use_leading_voice} />
+              <NumberField integer value={config.leading_voice_clip ?? 1} onChange={v => updateConfig('leading_voice_clip', v)} title="Ableton clip index" className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" disabled={!config.use_leading_voice} />
             </div>
             <div className="border-l border-slate-700 h-5"></div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes pitches already in voice history. Higher = more variety.">Note Repeat:</span>
-              <input type="number" step="1" value={config.last_note_exist_in_voice ?? 100} onChange={e => updateConfig('last_note_exist_in_voice', parseFloat(e.target.value))} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              <NumberField value={config.last_note_exist_in_voice ?? 100} onChange={v => updateConfig('last_note_exist_in_voice', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes repeating the immediate previous note. Higher = more melodic movement.">Same Note:</span>
-              <input type="number" step="0.1" value={config.last_note_same ?? 10} onChange={e => updateConfig('last_note_same', parseFloat(e.target.value))} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Per-voice: penalizes a voice repeating its own immediate previous note. Higher = more melodic movement within a line. (Scale ≈ ±1 now.)">Same Note:</span>
+              <NumberField value={config.last_note_same ?? 0.5} onChange={v => updateConfig('last_note_same', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Stickiness: bonus a NON-leader voice gets for holding its previous pitch (common tone). Higher = voices keep common tones unless moving is clearly more consonant. The permutation leader is excluded so it stays free to move. (Replaces the old +30 unison boost; harmony spans ≈ ±1, so ~2 means 'hold unless serious conflict'.)">Hold Bias:</span>
+              <NumberField value={config.same_note_bonus ?? 2.0} onChange={v => updateConfig('same_note_bonus', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Voice-change budget: MINIMUM voices that must change pitch between consecutive chords (-1 = off). Forces the most-worthwhile holders to move, so chords are never fully static.">Min Δ:</span>
+              <NumberField integer value={config.min_voices_changed ?? -1} onChange={v => updateConfig('min_voices_changed', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Voice-change budget: MAXIMUM voices that may change pitch between consecutive chords (-1 = off). Holds the least-worthwhile movers on their previous pitch (common tones) for parsimonious voice leading.">Max Δ:</span>
+              <NumberField integer value={config.max_voices_changed ?? -1} onChange={v => updateConfig('max_voices_changed', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes outer voices moving in the same direction as harmony. Encourages contrary motion.">Same Dir:</span>
-              <input type="number" step="0.1" value={config.same_direction ?? 1} onChange={e => updateConfig('same_direction', parseFloat(e.target.value))} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              <NumberField value={config.same_direction ?? 1} onChange={v => updateConfig('same_direction', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes parallel fifths and unisons. Classical voice-leading rule. 0 = disabled.">Par 5th/Oct:</span>
-              <input type="number" step="0.1" value={config.consecutive_octav_fift ?? 0} onChange={e => updateConfig('consecutive_octav_fift', parseFloat(e.target.value))} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              <NumberField value={config.consecutive_octav_fift ?? 0} onChange={v => updateConfig('consecutive_octav_fift', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Prevents voice crossing — voices must stay in their register. Higher = stricter.">No Cross:</span>
-              <input type="number" step="1" value={config.no_crossing ?? 100} onChange={e => updateConfig('no_crossing', parseFloat(e.target.value))} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              <NumberField value={config.no_crossing ?? 100} onChange={v => updateConfig('no_crossing', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes duplicate intervals in chord. Adds harmonic variety.">Dup Interval:</span>
-              <input type="number" step="0.1" value={config.interval_exists_in_harmony ?? 1} onChange={e => updateConfig('interval_exists_in_harmony', parseFloat(e.target.value))} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              <NumberField value={config.interval_exists_in_harmony ?? 1} onChange={v => updateConfig('interval_exists_in_harmony', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="How strongly each voice's pitch contour pulls its notes toward the target pitch. 1 = original strength, 0 = contour ignored.">Contour Wt:</span>
+              <NumberField value={config.voice_contour_weight ?? 1} onChange={v => updateConfig('voice_contour_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
           </div>
 
@@ -983,7 +1030,7 @@ function App() {
             </button>
             <button
               onClick={handleInit}
-              title="Reset render length to 2 and zero all contours (rhythm = 1 beat)"
+              title="Reset to the server's default config (reasonable baseline). Does not delete snapshots."
               className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
             >
               Init
@@ -1186,7 +1233,7 @@ function App() {
             <div className="flex items-center justify-between gap-4 px-5 py-3 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
               <div>
                 <h2 className="text-lg font-bold text-violet-300">Harmony Scoring Matrix</h2>
-                <p className="text-xs text-slate-500">Consonance weight per interval (columns) for each style row. Higher = more favoured; large negatives forbid.</p>
+                <p className="text-xs text-slate-500">Per-style consonance preference per interval. Soft values live in ≈ −1…+1 (higher = more favoured). Any cell ≤ −5 is a hard "forbidden" constraint (e.g. the default −100s).</p>
               </div>
               <div className="flex gap-2 items-center">
                 <button
@@ -1224,10 +1271,9 @@ function App() {
                         const val = getMatrix()[ri][ci];
                         return (
                           <td key={ci} className="px-0.5 py-0.5">
-                            <input
-                              type="text"
+                            <NumberField
                               value={val}
-                              onChange={(e) => updateMatrixCell(ri, ci, parseFloat(e.target.value))}
+                              onChange={(v) => updateMatrixCell(ri, ci, v)}
                               className={`w-16 bg-slate-950 border border-slate-800 rounded px-1.5 py-1 text-sm text-right font-mono outline-none focus:border-violet-500 ${val <= -10 ? 'text-red-400' : val < 0 ? 'text-rose-300' : val > 0 ? 'text-emerald-300' : 'text-slate-500'}`}
                             />
                           </td>

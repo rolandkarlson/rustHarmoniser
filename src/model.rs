@@ -70,19 +70,49 @@ pub struct Config {
     pub use_resolve:bool,
     #[serde(default)]
     pub root: i32,
+    /// Group-level common-tone control (relationship to the IMMEDIATELY preceding
+    /// chord), distinct from the per-voice last_note_* penalties (a voice's own
+    /// melodic history). Penalty subtracted per voice that holds its previous pitch.
+    #[serde(default)]
+    pub common_tone_penalty: f64,
+    /// (Superseded by min/max_voices_changed — kept for snapshot compatibility.)
+    /// Soft cap on common tones per chord. -1 disables.
+    #[serde(default = "default_neg_one")]
+    pub max_common_tones: i32,
+    /// Voice-change budget: how many voices may change pitch between consecutive
+    /// chords. Enforced by holding the lowest-benefit voices on their previous
+    /// pitch (parsimonious voice leading). -1 disables each bound.
+    #[serde(default = "default_neg_one")]
+    pub min_voices_changed: i32,
+    #[serde(default = "default_neg_one")]
+    pub max_voices_changed: i32,
+    /// "Stickiness": score bonus a NON-leader voice gets for holding its previous
+    /// pitch (a common tone). Higher = voices keep common tones unless moving is
+    /// clearly more consonant. The leader voice is excluded so it stays free to
+    /// move. (Principled replacement for the old +30 unison bonus.)
+    #[serde(default = "default_same_note_bonus")]
+    pub same_note_bonus: f64,
+    /// How strongly the per-voice pitch contour pulls candidates toward its target
+    /// pitch (Pass F quartic). 1.0 = original strength, 0 = contour ignored.
+    #[serde(default = "default_one_f64")]
+    pub voice_contour_weight: f64,
 }
 
 fn default_leading_clip() -> i32 { 1 }
+fn default_neg_one() -> i32 { -1 }
+fn default_same_note_bonus() -> f64 { 2.0 }
+fn default_one_f64() -> f64 { 1.0 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             schillinger_progression: true,
-            last_note_exist_in_voice: 100.0,
+            // Rescaled for the normalized ([-1,1]) harmony/distance scoring.
+            last_note_exist_in_voice: 1.0,
             same_direction: 1.0,
             consecutive_octav_fift: 0.0,
             no_crossing: 100.0,
-            last_note_same: 10.0,
+            last_note_same: 0.5,
             mode: 0,
             interval_exists_in_harmony: 1.0,
             voice_rhythm: vec![4.0],
@@ -110,6 +140,15 @@ impl Default for Config {
             leading_voice_clip: 1,
             use_resolve: false,
             root: 0,
+            common_tone_penalty: 0.0,
+            max_common_tones: -1,
+            // Non-leader voices stick to their common tones (same_note_bonus); the
+            // leader moves. min_voices_changed = 1 is a safety floor so a chord is
+            // never fully static. max budget off — stickiness handles parsimony.
+            min_voices_changed: 1,
+            max_voices_changed: -1,
+            same_note_bonus: 2.0,
+            voice_contour_weight: 1.0,
         }
     }
 }

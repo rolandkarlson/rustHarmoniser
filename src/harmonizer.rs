@@ -18,48 +18,109 @@ use fxhash::FxHasher64;
 ///        4=Dark/Melancholic, 5=Bright/Lydian, 6=Aggressive/Brutal, 7=Ancient/Fifth-Based,
 ///        8=Neutral/Zero (no preference)
 /// Columns: interval 0-11 in semitones.
+// Soft preferences live in [-1, 1] (higher = more favoured); any cell <= -5 is a
+// HARD "forbidden" constraint (see FORBIDDEN_THRESHOLD). Physical roughness/spacing
+// (m2 vs m9, register) is handled separately by pair_roughness, so these rows
+// encode interval-class *character* per style, not raw acoustic dissonance.
+// Columns: P1 m2 M2 m3 M3 P4 TT P5 m6 M6 m7 M7
 pub const HARMONY_MATRIX: [[f64; 12]; 9] = [
-    // 0: STRICT CLASSICAL (Pure consonance, heavy penalties for clashes)
-    [1.0, -100.0, -0.5, 0.6, 0.8, 0.5, -100.0, 1.0, 0.5, 0.7, -0.8, -100.0],
-    // 1: JAZZ & COLOR (7ths and 9ths are loved, clusters are okay)
-    [1.0, -0.2, 0.5, 0.7, 0.9, 0.4, 0.3, 1.0, 0.4, 0.8, 0.9, 0.6],
-    // 2: TENSION/RESOLUTION (High value on tritones and leading tones)
-    [0.0, 0.8, 0.2, -0.5, -0.5, -0.2, 1.0, 0.1, -0.4, -0.4, 0.3, 0.9],
-    // 3: ETHEREAL & OPEN (Perfect 4ths, 5ths, and Major 2nds/9ths)
-    [1.0, -10.0, 0.7, -0.2, 0.3, 0.9, -1.0, 1.0, -0.1, 0.4, 0.2, -0.5],
-    // 4: DARK & MELANCHOLIC (Bias toward minor 3rd and minor 6th)
-    [1.0, -0.5, -0.2, 1.0, -0.4, 0.3, -0.2, 0.8, 0.9, -0.3, 0.4, -0.8],
-    // 5: BRIGHT & LYDIAN (Major 3rd, Major 6th, #4 tritone)
-    [1.0, -0.8, 0.4, -0.3, 1.0, -0.2, 0.7, 0.9, -0.2, 1.0, -0.4, 0.5],
-    // 6: AGGRESSIVE/BRUTAL (Dissonance rewarded, unisons boring)
-    [-0.5, 1.0, 0.4, -0.8, -0.8, -0.5, 0.9, -0.5, -0.8, -0.8, 0.5, 1.0],
-    // 7: ANCIENT/HOLLOW (Organum: only 1sts, 4ths, 5ths, 8ths)
-    [1.0, -100.0, -100.0, -100.0, -100.0, 0.8, -100.0, 1.0, -100.0, -100.0, -100.0, -100.0],
-    // 8: NEUTRAL/ZERO (no preference — every interval scores 0.0)
+    // 0: STRICT CLASSICAL — consonance-first; m2 / tritone / M7 forbidden
+    [1.0, -100.0, -0.4, 0.8, 0.9, 0.5, -100.0, 1.0, 0.7, 0.8, -0.3, -100.0],
+    // 1: JAZZ & COLOR — 7ths/9ths/tritone embraced; bare unison/octave duller
+    [0.6, 0.0, 0.7, 0.8, 0.9, 0.5, 0.6, 0.9, 0.5, 0.8, 1.0, 0.8],
+    // 2: TENSION/RESOLUTION — tritones and leading tones prized, triads dull
+    [-0.2, 0.8, 0.2, -0.3, -0.3, -0.2, 1.0, 0.0, -0.3, -0.3, 0.5, 0.9],
+    // 3: ETHEREAL & OPEN — quartal/quintal and open 2nds/9ths; m2 forbidden
+    [1.0, -100.0, 0.8, -0.2, 0.2, 1.0, -0.5, 1.0, 0.0, 0.5, 0.4, -0.4],
+    // 4: DARK & MELANCHOLIC — minor 3rd/6th favoured, major color avoided
+    [1.0, -0.5, -0.1, 1.0, -0.4, 0.3, -0.2, 0.8, 1.0, -0.3, 0.5, -0.6],
+    // 5: BRIGHT & LYDIAN — major 3rd/6th and the #4 tritone
+    [1.0, -0.7, 0.5, -0.3, 1.0, -0.2, 0.8, 0.9, -0.2, 1.0, -0.3, 0.6],
+    // 6: AGGRESSIVE/BRUTAL — dissonance rewarded, consonance dull
+    [-0.5, 1.0, 0.4, -0.6, -0.6, -0.4, 1.0, -0.5, -0.6, -0.6, 0.5, 1.0],
+    // 7: ANCIENT/HOLLOW — organum: only 1sts, 4ths, 5ths, 8ths
+    [1.0, -100.0, -100.0, -100.0, -100.0, 1.0, -100.0, 1.0, -100.0, -100.0, -100.0, -100.0],
+    // 8: NEUTRAL/ZERO — no preference; every interval scores 0.0
     [0.0; 12],
 ];
 
-/// Get the interpolated consonance table for a fractional harmony context value.
-/// Integer values select a row directly; fractional values LERP between adjacent rows.
-/// `custom` overrides the built-in HARMONY_MATRIX when supplied and well-formed
-/// (9 rows × 12 columns); otherwise the default matrix is used.
-fn get_harmony_row(ctx: f64, custom: Option<&Vec<Vec<f64>>>) -> [f64; 12] {
+// ===================== Harmony scoring tuning =====================
+// Matrix cells at or below this are treated as a HARD constraint ("forbidden")
+// rather than a numeric preference. Replaces the old -100 / -10 sentinels, which
+// (a) were diluted by averaging and (b) produced meaningless values when LERPed
+// between style rows. Soft preferences now live in a clean [-1, 1] band.
+const FORBIDDEN_THRESHOLD: f64 = -5.0;
+// Score for candidates that hit any forbidden interval — large enough to lose to
+// every other term even at the lowest harmony weight, so it acts as a reject.
+const HARD_REJECT: f64 = -1.0e6;
+// How much register-aware sensory roughness (Layer 3) modulates the pitch-class
+// style preference. 0 = pure style/pitch-class; 1 = pure psychoacoustic roughness.
+const ROUGHNESS_WEIGHT: f64 = 0.35;
+// Chord-level aggregation weights (Layer 2): overall mean, worst single clash,
+// and the interval against the bass (root/inversion sensitivity). Sum ≈ 1.
+const AGG_MEAN: f64 = 0.40;
+const AGG_WORST: f64 = 0.35;
+const AGG_BASS: f64 = 0.25;
+
+/// A resolved consonance profile for one fractional harmony-context value.
+/// `soft` holds bounded style preferences per interval class (0..11); `forbidden`
+/// marks hard-rejected interval classes (kept out of the soft LERP).
+struct HarmonyRow {
+    soft: [f64; 12],
+    forbidden: [bool; 12],
+}
+
+/// Resolve the consonance profile for a fractional harmony context value.
+/// Integer values select a row directly; fractional values LERP between adjacent
+/// rows — but only over the *clamped* soft values, so sentinel "forbidden" cells
+/// no longer poison the interpolation. Forbiddenness is decided by the dominant
+/// adjacent row. `custom` overrides the built-in HARMONY_MATRIX when supplied and
+/// well-formed (9 rows × 12 columns); otherwise the default matrix is used.
+fn get_harmony_row(ctx: f64, custom: Option<&Vec<Vec<f64>>>) -> HarmonyRow {
     let clamped = ctx.clamp(0.0, 8.0);
     let lo = clamped.floor() as usize;
     let hi = (lo + 1).min(8);
     let t = clamped - lo as f64;
-    let mut row = [0.0f64; 12];
     let valid = custom.map_or(false, |m| m.len() == 9 && m.iter().all(|r| r.len() == 12));
+    let cell = |row: usize, i: usize| -> f64 {
+        if valid { custom.unwrap()[row][i] } else { HARMONY_MATRIX[row][i] }
+    };
+    let mut soft = [0.0f64; 12];
+    let mut forbidden = [false; 12];
     for i in 0..12 {
-        let (a, b) = if valid {
-            let m = custom.unwrap();
-            (m[lo][i], m[hi][i])
-        } else {
-            (HARMONY_MATRIX[lo][i], HARMONY_MATRIX[hi][i])
-        };
-        row[i] = a * (1.0 - t) + b * t;
+        let lo_v = cell(lo, i);
+        let hi_v = cell(hi, i);
+        let lo_forb = lo_v <= FORBIDDEN_THRESHOLD;
+        let hi_forb = hi_v <= FORBIDDEN_THRESHOLD;
+        forbidden[i] = (lo_forb && (1.0 - t) >= 0.5) || (hi_forb && t >= 0.5);
+        // Clamp to [-1, 1] before blending so a forbidden cell contributes at most
+        // -1 to the soft surface instead of -100.
+        let lo_s = lo_v.clamp(-1.0, 1.0);
+        let hi_s = hi_v.clamp(-1.0, 1.0);
+        soft[i] = lo_s * (1.0 - t) + hi_s * t;
     }
-    row
+    HarmonyRow { soft, forbidden }
+}
+
+#[inline]
+fn midi_to_hz(p: i32) -> f64 {
+    440.0 * 2f64.powf((p as f64 - 69.0) / 12.0)
+}
+
+/// Plomp–Levelt / Sethares sensory dissonance between two fundamentals,
+/// normalized to roughly [0, 1]. Roughness peaks ~1 semitone apart and decays to
+/// ~0 at unison and at wide spacing — and because it works on absolute frequency,
+/// it is register-aware: a literal minor 2nd is far rougher than a minor 9th, and
+/// the same pitch-class clash is rougher low than high. (Fundamental-only model.)
+fn pair_roughness(p1: i32, p2: i32) -> f64 {
+    if p1 == p2 { return 0.0; }
+    let f_low = midi_to_hz(p1.min(p2));
+    let f_high = midi_to_hz(p1.max(p2));
+    let s = 0.24 / (0.0207 * f_low + 18.96);
+    let fdiff = f_high - f_low;
+    let r = (-3.5 * s * fdiff).exp() - (-5.75 * s * fdiff).exp();
+    // The curve e^{-3.5x} - e^{-5.75x} peaks at ≈0.1813; normalize to ~[0, 1].
+    (r / 0.1813).clamp(0.0, 1.0)
 }
 
 type PitchSet = u128;
@@ -189,18 +250,19 @@ pub fn get_all_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
     results
 }
 
+/// Voice-leading smoothness, normalized to roughly [-1, 1] so it trades off on an
+/// equal footing with the (also bounded) consonance term via w_smooth / w_harmony.
+/// Previously this returned +30 for a unison and -(10·dist) for leaps — a dynamic
+/// range that swamped the harmony matrix entirely.
+///
+/// Holding a pitch (a common tone, dist 0) is the SMOOTHEST option and scores
+/// highest; small steps are next; leaps decay toward -1. Excessive holding /
+/// repetition is curbed separately by the repeat penalties (last_note_*) and the
+/// group-level common-tone control — NOT here — so that common tones can occur.
+/// 0 -> 1.0, 1 -> 0.86, 2 -> 0.71, 7 -> 0.0, 12 (octave) -> ~-0.71, then clamps.
 pub fn get_distance_score(prev_note: i32, current_note: i32) -> f64 {
     let dist = (prev_note - current_note).abs() as f64;
-    if dist == 0.0 {
-        return 30.0;
-    }
-    let max_jump = 7.0;
-    if dist > max_jump {
-        return -(dist * 10.0);
-    }
-
-    let score = 1.0 - (dist / max_jump);
-    score.max(0.0)
+    (1.0 - dist / 7.0).clamp(-1.0, 1.0)
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -570,7 +632,8 @@ pub fn get_harmony_scores(
         &Boundries { min: 24, max: 90 }
     };
 
-    let is_outer_voice = current_note.channel == 0 || current_note.channel == 3;
+    // Outer voices = soprano (ch0) and bass (ch4) — the pair contrary motion matters for.
+    let is_outer_voice = current_note.channel == 0 || current_note.channel == 4;
 
     if current_lasts.is_empty() {
         current_lasts.push(current_note.pitch);
@@ -680,15 +743,37 @@ pub fn get_harmony_scores(
     let consonance_row = get_harmony_row(harmony_ctx, state.harmony_matrix.as_ref());
 
     if harmony_len > 0 {
-        let inv_len = 1.0 / harmony_len as f64;
-        for &h in &harmony_pitches {
-            for (i, &c) in candidates.iter().enumerate() {
-                let interval = ((c - h).abs() % 12) as usize;
-                consonance_scores[i] += consonance_row[interval];
+        // Bass = lowest sounding pitch; its interval is weighted extra so chord
+        // root/inversion identity is respected rather than averaged away.
+        let bass_pitch = *harmony_pitches.iter().min().unwrap();
+        for (i, &c) in candidates.iter().enumerate() {
+            let mut sum = 0.0;
+            let mut worst = f64::INFINITY;
+            let mut bass_pair = 0.0;
+            let mut hard = false;
+            for &h in &harmony_pitches {
+                let ic = ((c - h).abs() % 12) as usize;
+                if consonance_row.forbidden[ic] {
+                    hard = true;
+                }
+                // Layer 3: blend pitch-class style preference with register-aware
+                // roughness, so m2 ≠ m9 and the same chord clusters worse down low.
+                let style = consonance_row.soft[ic];
+                let rough = pair_roughness(c, h);
+                let pair = (1.0 - ROUGHNESS_WEIGHT) * style - ROUGHNESS_WEIGHT * rough;
+                sum += pair;
+                if pair < worst { worst = pair; }
+                if h == bass_pitch { bass_pair = pair; }
             }
-        }
-        for s in consonance_scores.iter_mut() {
-            *s *= inv_len;
+            consonance_scores[i] = if hard {
+                HARD_REJECT
+            } else {
+                // Layer 2: chord-level aggregation — overall fit, worst single
+                // clash (so one harsh interval can't hide behind consonant ones),
+                // and the bass interval.
+                let mean = sum / harmony_len as f64;
+                AGG_MEAN * mean + AGG_WORST * worst + AGG_BASS * bass_pair
+            };
         }
     }
     for i in 0..n {
@@ -752,17 +837,28 @@ pub fn get_harmony_scores(
             distance_scores[i] = get_distance_score(last_note, c);
             distance_contribs[i] = distance_scores[i] * w_smooth;
 
-            // F: Cubic pitch distance
-            let base_dist = if use_contour {
-                (c - (input_pitch_f + target_offset)).abs()
-            } else {
-                (c - current_note.pitch + seq).abs()
-            };
-            let normalized = base_dist as f64 / 24.0;
-            contour_contribs[i] -= normalized * normalized * normalized * normalized;
+            // F: Quartic pull toward the voice's pitch-contour target.
+            // Scaled by config.voice_contour_weight (0 = contour has no effect).
+            if config.voice_contour_weight != 0.0 {
+                let base_dist = if use_contour {
+                    (c - (input_pitch_f + target_offset)).abs()
+                } else {
+                    (c - current_note.pitch + seq).abs()
+                };
+                let normalized = base_dist as f64 / 24.0;
+                contour_contribs[i] -= config.voice_contour_weight * normalized * normalized * normalized * normalized;
+            }
 
-            // G: History penalties (bitset gates the expensive count)
-            if !no_same_note_penalty {
+            // G: History penalties (leader) / hold bonus (non-leader).
+            // `no_same_note_penalty` is true for every voice except the
+            // permutation leader. Non-leaders get a "stickiness" bonus for keeping
+            // their previous pitch (common tone) so they hold unless moving is
+            // clearly better; the leader is penalized for holding so it moves.
+            if no_same_note_penalty {
+                if c == last_note {
+                    repeat_contribs[i] += config.same_note_bonus;
+                }
+            } else {
                 if c == last_note {
                     repeat_contribs[i] -= config.last_note_same;
                 }
@@ -776,9 +872,11 @@ pub fn get_harmony_scores(
         }
     }
 
-    // Pass H: Same direction penalty (precomputed for both directions)
+    // Pass H: Same direction penalty (precomputed for both directions).
+    // A held note (c == last0) is oblique motion, not similar motion — exempt it.
     if check_direction {
         for (i, &c) in candidates.iter().enumerate() {
+            if c == last0 { continue; }
             let going_down = last0 > c;
             if (going_down && dir_penalty_down) || (!going_down && dir_penalty_up) {
                 same_direction_contribs[i] -= config.same_direction;
@@ -945,27 +1043,129 @@ fn score_note_group(
     state: &HarmonizerState,
     precomputed: &PrecomputedHarmonyData
 ) -> f64 {
-    let mut group_score = 0.0;
-    let mut current_notes = current_notes_in.to_vec();
+    let current_notes = current_notes_in.to_vec();
+    let n = current_notes.len();
     let permu_first_channel = current_notes.last().unwrap().channel;
+    let base_len = temp_group_notes.len();
 
-    for j in 0..current_notes.len() {
+    let prev_pitch = |ch: i32| -> Option<i32> {
+        precomputed.last_notes_by_channel.get(ch as usize).and_then(|v| v.first()).copied()
+    };
+    let skip_for = |ch: i32| no_same_note_penalty || (permu_first_channel != ch);
 
-        let skip_penalty = no_same_note_penalty || (permu_first_channel != current_notes[j].channel);
+    // ---- Pass 1: greedy best pitch per voice; record the "hold previous pitch"
+    // alternative so we know each voice's benefit of moving. ----
+    let mut chosen = vec![0i32; n];
+    let mut best_score = vec![0.0f64; n];
+    let mut hold_pitch = vec![None::<i32>; n];   // previous pitch, if this voice can hold it
+    let mut hold_score = vec![f64::NEG_INFINITY; n];
+    let mut group_score = 0.0;
 
-        // temp_group_notes acts as current_on_same_start_harmony
-        let mut scores = get_harmony_scores(&current_notes[j], temp_group_notes, skip_penalty, config, state, precomputed);
+    for j in 0..n {
+        let mut scores = get_harmony_scores(&current_notes[j], temp_group_notes, skip_for(current_notes[j].channel), config, state, precomputed);
         scores.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
 
+        // The leading voice's pitch is fixed by the input melody — not eligible.
+        let is_lead = current_notes[j].channel == 0 && config.use_leading_voice;
+        if !is_lead {
+            if let Some(hp) = prev_pitch(current_notes[j].channel) {
+                if let Some(h) = scores.iter().find(|s| s.note == hp) {
+                    hold_pitch[j] = Some(hp);
+                    hold_score[j] = h.score;
+                }
+            }
+        }
+
         if let Some(best) = scores.first() {
-            current_notes[j].pitch = best.note;
-            current_notes[j].muted = 0;
-            temp_group_notes.push(current_notes[j]);
+            chosen[j] = best.note;
+            best_score[j] = best.score;
+            let mut note = current_notes[j];
+            note.pitch = best.note;
+            note.muted = 0;
+            temp_group_notes.push(note);
             group_score += best.score;
         } else {
+            chosen[j] = current_notes[j].pitch;
             temp_group_notes.push(current_notes[j]);
         }
     }
+
+    // ---- Voice-change budget: cap/floor how many eligible voices change pitch
+    // between consecutive chords, by forcing the least-worthwhile movers to hold
+    // (or the most-worthwhile holders to move) and re-scoring. ----
+    let max_changed = config.max_voices_changed;
+    let min_changed = config.min_voices_changed;
+    if max_changed >= 0 || min_changed >= 0 {
+        let movers: Vec<usize> = (0..n)
+            .filter(|&j| hold_pitch[j].is_some() && chosen[j] != hold_pitch[j].unwrap())
+            .collect();
+        let benefit = |j: usize| best_score[j] - hold_score[j];
+
+        let mut force_hold: Vec<usize> = Vec::new();
+        let mut force_move: Vec<usize> = Vec::new();
+
+        if max_changed >= 0 && movers.len() as i32 > max_changed {
+            // Keep the highest-benefit movers; hold the rest on their old pitch.
+            let mut m = movers.clone();
+            m.sort_by(|&a, &b| benefit(a).partial_cmp(&benefit(b)).unwrap_or(std::cmp::Ordering::Equal));
+            let to_hold = m.len() - max_changed as usize;
+            force_hold = m.into_iter().take(to_hold).collect();
+        } else if min_changed >= 0 && (movers.len() as i32) < min_changed {
+            // Force the highest-benefit holders to move.
+            let mut h: Vec<usize> = (0..n)
+                .filter(|&j| hold_pitch[j].is_some() && chosen[j] == hold_pitch[j].unwrap())
+                .collect();
+            h.sort_by(|&a, &b| benefit(b).partial_cmp(&benefit(a)).unwrap_or(std::cmp::Ordering::Equal));
+            let to_move = ((min_changed as usize).saturating_sub(movers.len())).min(h.len());
+            force_move = h.into_iter().take(to_move).collect();
+        }
+
+        if !force_hold.is_empty() || !force_move.is_empty() {
+            // Pass 2: rebuild the chord. Forced holds are placed first so the
+            // remaining voices are scored against them.
+            temp_group_notes.truncate(base_len);
+            group_score = 0.0;
+            let mut order: Vec<usize> = force_hold.clone();
+            order.extend((0..n).filter(|j| !force_hold.contains(j)));
+
+            for &j in &order {
+                let skip = skip_for(current_notes[j].channel);
+                let mut scores = get_harmony_scores(&current_notes[j], temp_group_notes, skip, config, state, precomputed);
+                scores.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+
+                let pick = if force_hold.contains(&j) {
+                    let hp = hold_pitch[j].unwrap();
+                    scores.iter().find(|s| s.note == hp).cloned()
+                        .unwrap_or(NoteScore { note: hp, score: 0.0, distance: 0.0, crossing: false, breakdown: ScoreBreakdown::default() })
+                } else if force_move.contains(&j) {
+                    // Must not pick the held pitch.
+                    let hp = hold_pitch[j];
+                    scores.iter().find(|s| Some(s.note) != hp).or_else(|| scores.first()).cloned()
+                        .unwrap_or(NoteScore { note: current_notes[j].pitch, score: 0.0, distance: 0.0, crossing: false, breakdown: ScoreBreakdown::default() })
+                } else {
+                    match scores.first() {
+                        Some(b) => b.clone(),
+                        None => NoteScore { note: current_notes[j].pitch, score: 0.0, distance: 0.0, crossing: false, breakdown: ScoreBreakdown::default() },
+                    }
+                };
+
+                let mut note = current_notes[j];
+                note.pitch = pick.note;
+                note.muted = 0;
+                temp_group_notes.push(note);
+                group_score += pick.score;
+            }
+        }
+    }
+
+    // Optional soft per-common-tone penalty (in addition to the hard budget above).
+    if config.common_tone_penalty != 0.0 {
+        let common = temp_group_notes[base_len..].iter()
+            .filter(|nnote| prev_pitch(nnote.channel) == Some(nnote.pitch))
+            .count();
+        group_score -= config.common_tone_penalty * common as f64;
+    }
+
     group_score
 }
 
