@@ -96,12 +96,30 @@ pub struct Config {
     /// pitch (Pass F quartic). 1.0 = original strength, 0 = contour ignored.
     #[serde(default = "default_one_f64")]
     pub voice_contour_weight: f64,
+    /// Pitch search window: each voice considers previous pitch ± this many
+    /// semitones (non-Schillinger candidate generation). Was a hardcoded 3.
+    #[serde(default = "default_candidate_range")]
+    pub candidate_range: i32,
+    /// Melodic pressure applied to EVERY voice (unlike the leader-only repeat
+    /// penalties): candidates are penalized by how recently/often they appeared
+    /// in the voice's last 5 notes (recency-decayed, so A-B-A-B circling is
+    /// caught, not just immediate repeats), and stepwise motion (1-2 semitones)
+    /// gets a small reward. 0 = off; 1.0 ≈ the magnitude of the other ±1 terms.
+    #[serde(default)]
+    pub melody_force: f64,
+    /// Joint chord scoring: enumerate all voices' candidates together and score
+    /// each complete chord once (order-independent, full pairwise aggregation,
+    /// budget as a filter) instead of permutation orderings + greedy per-voice
+    /// picks. Off = legacy scoring.
+    #[serde(default)]
+    pub use_joint_scoring: bool,
 }
 
 fn default_leading_clip() -> i32 { 1 }
 fn default_neg_one() -> i32 { -1 }
 fn default_same_note_bonus() -> f64 { 2.0 }
 fn default_one_f64() -> f64 { 1.0 }
+fn default_candidate_range() -> i32 { 3 }
 
 impl Default for Config {
     fn default() -> Self {
@@ -149,6 +167,9 @@ impl Default for Config {
             max_voices_changed: -1,
             same_note_bonus: 2.0,
             voice_contour_weight: 1.0,
+            candidate_range: 3,
+            melody_force: 0.0,
+            use_joint_scoring: false,
         }
     }
 }

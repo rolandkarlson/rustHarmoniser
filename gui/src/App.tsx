@@ -972,8 +972,20 @@ function App() {
             </div>
             <div className="border-l border-slate-700 h-5"></div>
             <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Joint chord scoring: enumerate all voices' candidates together and score each complete chord once (order-independent, smoother voice leading, voice-change budget enforced exactly). Off = legacy permutation + greedy scoring. Note: 'Dup Interval' has no effect in joint mode.">Joint:</span>
+              <input type="checkbox" checked={config.use_joint_scoring ?? false} onChange={e => updateConfig('use_joint_scoring', e.target.checked)} className="accent-cyan-500" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Pitch search window: each voice considers its previous pitch ± this many semitones (non-Schillinger mode). Wider = more freedom to escape a register, slower search.">Cand Range:</span>
+              <NumberField integer value={config.candidate_range ?? 3} onChange={v => updateConfig('candidate_range', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+            </div>
+            <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes pitches already in voice history. Higher = more variety.">Note Repeat:</span>
               <NumberField value={config.last_note_exist_in_voice ?? 100} onChange={v => updateConfig('last_note_exist_in_voice', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Melody force: applied to EVERY voice (Note Repeat / Same Note only act on the per-chord leader). Penalizes pitches the voice used in its last 5 notes, recency-decayed — so A-B-A-B circling is caught, not just immediate repeats — and slightly rewards stepwise motion (1-2 st). 0 = off. Start ~1.0, raise to 2-3 to strongly force moving lines. Pair with Hold Bias ≤ 0.">Melody Force:</span>
+              <NumberField value={config.melody_force ?? 0} onChange={v => updateConfig('melody_force', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Per-voice: penalizes a voice repeating its own immediate previous note. Higher = more melodic movement within a line. (Scale ≈ ±1 now.)">Same Note:</span>

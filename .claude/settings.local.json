@@ -14,7 +14,21 @@
       "mcp__AbletonMCP__get_session_info",
       "mcp__AbletonMCP__get_clip_notes",
       "Bash(awk '{for\\(i=11;i<=NF;i++\\) printf \"%s \", $i; print \"\"}')",
-      "Bash(ps -eo pid,lstart,command)"
+      "Bash(ps -eo pid,lstart,command)",
+      "Bash(graphify query *)",
+      "Bash(graphify update *)",
+      "Read(//private/tmp/**)",
+      "Bash(time curl -s -X POST http://127.0.0.1:3000/api/generate -H 'Content-Type: application/json' -d @/tmp/harm-config.json)",
+      "Bash(cp output.json /tmp/out-legacy.json)",
+      "Bash(jq '.use_joint_scoring = true' /tmp/harm-config.json)",
+      "Bash(time curl -s -X POST http://127.0.0.1:3000/api/generate -H 'Content-Type: application/json' -d @/tmp/harm-config-joint.json)",
+      "Bash(cp output.json /tmp/out-joint.json)",
+      "Bash(jq '.use_joint_scoring = true | .schillinger_progression = false | .candidate_range = 10' /tmp/harm-config.json)",
+      "Bash(curl -s -X POST http://127.0.0.1:3000/api/generate -H 'Content-Type: application/json' -d @/tmp/harm-config-beam.json)",
+      "Bash(python3 -c ' *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(lsof -ti:3000)",
+      "Bash(curl -s -X POST http://127.0.0.1:3000/api/generate -H 'Content-Type: application/json' -d @/tmp/cfg-mf.json)"
     ]
   }
 }
