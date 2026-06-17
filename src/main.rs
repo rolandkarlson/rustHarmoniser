@@ -4,18 +4,8 @@ mod music_theory;
 mod rhythm;
 mod harmonizer;
 mod schillinger;
-mod tui;
 mod api;
 mod ableton;
-
-use clap::Parser;
-
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    #[arg(long, default_value_t = false)]
-    tui: bool,
-}
 
 use model::{Config, Note};
 
@@ -26,19 +16,14 @@ use std::io::{Read, Write};
 use std::time::Instant;
 
 fn main() -> std::io::Result<()> {
-    let args = Args::parse();
-    if args.tui {
-        tui::run_tui()?;
-    } else {
-        println!("Starting Web Server mode...");
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async {
-                api::start_server().await;
-            });
-    }
+    println!("Starting Web Server mode...");
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            api::start_server().await;
+        });
     Ok(())
 }
 
@@ -142,6 +127,7 @@ pub fn run_generation_with_leading(
         harmony_contour_resolution: config.voice_contour_resolution,
         harmony_matrix_contour: config.harmony_matrix_contour.clone(),
         harmony_matrix: config.harmony_matrix.clone(),
+        melody_force_contour: config.melody_force_contour.clone(),
     };
 
     let mut notes = harmonise2(income, &config, &state, progress_sender.as_ref());

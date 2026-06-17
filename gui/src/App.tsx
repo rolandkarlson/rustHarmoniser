@@ -256,6 +256,9 @@ function App() {
       newConfig.schillinger_ex_contour = newConfig.schillinger_ex_contour.map((track: any[]) => duplicateArray(track, stdSteps, 2));
     }
     if (newConfig.harmony_matrix_contour) newConfig.harmony_matrix_contour = duplicateArray(newConfig.harmony_matrix_contour, stdSteps, 0);
+    if (newConfig.melody_force_contour) {
+      newConfig.melody_force_contour = newConfig.melody_force_contour.map((track: any[]) => duplicateArray(track, stdSteps, newConfig.melody_force ?? 0));
+    }
 
     if (newConfig.voice_contour) {
       newConfig.voice_contour = newConfig.voice_contour.map((track: any[]) => duplicateArray(track, stdSteps, 0));
@@ -288,6 +291,7 @@ function App() {
     if (nc.chord_structure_contour) nc.chord_structure_contour = nc.chord_structure_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
     if (nc.schillinger_ex_contour) nc.schillinger_ex_contour = nc.schillinger_ex_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
     if (nc.harmony_matrix_contour) nc.harmony_matrix_contour = resampleContour(nc.harmony_matrix_contour, oldRes, newRes);
+    if (nc.melody_force_contour) nc.melody_force_contour = nc.melody_force_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
     if (nc.voice_contour) nc.voice_contour = nc.voice_contour.map((t: number[]) => resampleContour(t, oldRes, newRes).map(Math.round));
     if (nc.voice_rhythm_contour) nc.voice_rhythm_contour = nc.voice_rhythm_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
     setConfig(nc);
@@ -541,6 +545,12 @@ function App() {
         return [1, 2, 1, 3][section] ?? 1; // Jazz → Tension → Jazz → Ethereal
       });
 
+      // Melody force: moderate-to-strong moving lines, peaking mid-phrase (0-1)
+      nc.melody_force_contour = Array.from({ length: 16 }, () => Array.from({ length: steps }, (_, i) => {
+        const tension = Math.sin((i / Math.max(steps - 1, 1)) * Math.PI);
+        return parseFloat((0.6 + tension * 0.3).toFixed(2));
+      }));
+
     } else {
       // Classical: Ionian/Aeolian modes, strict voice-leading, balanced phrases
       nc.pl = 4;
@@ -647,6 +657,12 @@ function App() {
         if (phase > 0.35 && phase < 0.65) return 4; // Dark/Melancholic for development
         return 0; // Strict Classical for exposition/recap
       });
+
+      // Melody force: gentle stepwise pressure, easing at phrase boundaries (0-1)
+      nc.melody_force_contour = Array.from({ length: 16 }, () => Array.from({ length: steps }, (_, i) => {
+        const tension = Math.sin((i / Math.max(steps - 1, 1)) * Math.PI);
+        return parseFloat((0.3 + tension * 0.2).toFixed(2));
+      }));
     }
 
     setConfig(nc);
@@ -718,6 +734,7 @@ function App() {
     nc.schillinger_ex_contour = Array.from({ length: 16 }, () => smoothRandom(2, 5).map(v => Math.round(v)));
     // Harmony matrix: smooth transitions between random context rows (0-7)
     nc.harmony_matrix_contour = smoothRandom(0, 8).map(v => Math.round(v));
+    nc.melody_force_contour = Array.from({ length: 16 }, () => smoothRandom(0, 1).map(v => parseFloat(v.toFixed(2))));
     nc.voice_contour = Array.from({ length: 16 }, () => smoothRandom(-12, 12).map(v => Math.round(v)));
     nc.voice_rhythm_contour = Array.from({ length: 16 }, () => smoothRandom(0.25, 4).map(snapNearest));
     // Use the first mode from the contour for Markov progression coherence
@@ -896,6 +913,19 @@ function App() {
           onChange={(d) => updateConfig('harmony_matrix_contour', d)}
           color="#a78bfa"
         />;
+      case 'melody_force':
+        const melodyForceData = config.melody_force_contour ? config.melody_force_contour[selectedVoice] : [];
+        return <ContourEditor
+          label={`Voice ${selectedVoice} Melody Force Contour — line-shaping pressure per step (0 = off … 1 = max). Overrides the Melody Force number when drawn.`}
+          data={melodyForceData || []}
+          yMin={0} yMax={1} xMax={xMax}
+          yStep={0.01}
+          resolution={config.voice_contour_resolution}
+          pl={config.pl}
+          onResolutionChange={handleResolutionChange}
+          onChange={(d) => updateConfig('melody_force_contour', writeVoiceContour(config.melody_force_contour, d))}
+          color="#34d399"
+        />;
       default: return null;
     }
   };
@@ -909,6 +939,7 @@ function App() {
     { id: 'voice', label: 'Voice Pitch', tip: 'Per-voice pitch offset in semitones over time. Shifts the target pitch the harmonizer aims for.' },
     { id: 'rhythm', label: 'Voice Rhythm', tip: 'Per-voice note duration over time. Values in beats (0.25=16th, 0.5=8th, 1=quarter, 4=whole). Clamped at bar boundaries.' },
     { id: 'harmony_matrix', label: 'H. Matrix', tip: 'Harmony style profile over time. 0=Classical, 1=Jazz, 2=Tension, 3=Ethereal, 4=Dark, 5=Bright, 6=Aggressive, 7=Ancient, 8=Neutral. Fractional values interpolate between rows.' },
+    { id: 'melody_force', label: 'Melody Force', tip: 'Line-shaping pressure over time, applied to every voice. Penalizes recently-used pitches and rewards stepwise motion. 0=off, 2-3=strongly forces moving lines. Overrides the Melody Force number when drawn.' },
   ];
 
   return (
@@ -1209,7 +1240,7 @@ function App() {
             ))}
           </div>
 
-          {(activeTab === 'voice' || activeTab === 'rhythm' || activeTab === 'schillinger_ex' || activeTab === 'chord') && (
+          {(activeTab === 'voice' || activeTab === 'rhythm' || activeTab === 'schillinger_ex' || activeTab === 'chord' || activeTab === 'melody_force') && (
             <div className={`flex items-center gap-4 px-3 py-1.5 rounded-lg border transition-colors ${broadcastVoices ? 'bg-amber-950/50 border-amber-500/50' : 'bg-slate-950 border-slate-800'}`} title="Hold Shift while editing to apply to all voices">
               <span className={`text-xs uppercase ${broadcastVoices ? 'text-amber-400' : 'text-slate-500'}`}>
                 {broadcastVoices ? 'All Voices (Shift)' : 'Voice Target:'}

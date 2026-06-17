@@ -28,7 +28,8 @@
       "Bash(python3 -c ' *)",
       "Bash(echo \"exit: $?\")",
       "Bash(lsof -ti:3000)",
-      "Bash(curl -s -X POST http://127.0.0.1:3000/api/generate -H 'Content-Type: application/json' -d @/tmp/cfg-mf.json)"
+      "Bash(curl -s -X POST http://127.0.0.1:3000/api/generate -H 'Content-Type: application/json' -d @/tmp/cfg-mf.json)",
+      "Bash(awk *)"
     ]
   }
 }

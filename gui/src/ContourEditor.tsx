@@ -10,6 +10,10 @@ interface ContourEditorProps {
   resolution: number;
   pl: number;
   snaps?: number[];
+  /** Continuous snap granularity (e.g. 0.01). When set, values quantize to this
+   *  step and render as bars from the baseline rather than piano-roll cells.
+   *  Gridline labels stay at the coarse display step. */
+  yStep?: number;
   color?: string;
   onResolutionChange?: (newResolution: number) => void;
   yLabelOffset?: number;
@@ -27,6 +31,7 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
   resolution,
   pl,
   snaps,
+  yStep,
   color = '#22d3ee',
   onResolutionChange,
   yLabelOffset = 0,
@@ -68,6 +73,26 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
     }
   }
 
+  // Quantize an input value: a fine continuous step (yStep) takes precedence
+  // over the discrete display ticks so the value resolution can be finer than
+  // the gridline labels (e.g. 0.01 steps on a 0-1 axis labelled every 0.1).
+  const snapValue = (v: number): number => {
+    if (yStep && yStep > 0) {
+      const snapped = Math.round((v - yMin) / yStep) * yStep + yMin;
+      return parseFloat(Math.max(yMin, Math.min(yMax, snapped)).toFixed(4));
+    }
+    if (validYTicks.length > 0) {
+      let closest = validYTicks[0];
+      let minDiff = Math.abs(v - closest);
+      for (const s of validYTicks) {
+        const diff = Math.abs(v - s);
+        if (diff < minDiff) { minDiff = diff; closest = s; }
+      }
+      return closest;
+    }
+    return v;
+  };
+
   const handlePointerEvent = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!innerContainerRef.current) return;
     const rect = innerContainerRef.current.getBoundingClientRect();
@@ -81,18 +106,7 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
     let dataY = yMin + relY * (yMax - yMin);
 
     // Strictly snap input universally parsing `validYTicks` mappings perfectly!
-    if (validYTicks.length > 0) {
-      let closest = validYTicks[0];
-      let minDiff = Math.abs(dataY - closest);
-      for (const s of validYTicks) {
-        const diff = Math.abs(dataY - s);
-        if (diff < minDiff) {
-          minDiff = diff;
-          closest = s;
-        }
-      }
-      dataY = closest;
-    }
+    dataY = snapValue(dataY);
 
     const totalSteps = xMax / resolution;
     const idx = Math.min(totalSteps - 1, Math.floor(dataX / resolution));
@@ -112,16 +126,7 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
         if (i >= newData.length) newData.push(yMin);
         const t = end > start ? (i - start) / (end - start) : 0;
         let val = idx > lastIdx ? prevVal + t * (dataY - prevVal) : dataY + t * (prevVal - dataY);
-        
-        if (validYTicks.length > 0) {
-          let closest = validYTicks[0];
-          let minDiff = Math.abs(val - closest);
-          for (const s of validYTicks) {
-            const diff = Math.abs(val - s);
-            if (diff < minDiff) { minDiff = diff; closest = s; }
-          }
-          val = closest;
-        }
+        val = snapValue(val);
         newData[i] = val;
       }
     } else {
@@ -155,7 +160,27 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
   
   const contourBoxes = data.map((val, i) => {
     const px = (i * resolution / xMax) * 100;
-    
+
+    // Continuous mode (yStep set): render a bar from the baseline up to the
+    // exact value rather than snapping to a piano-roll cell.
+    if (yStep && yStep > 0) {
+      const pyVal = Math.max(0, Math.min(100, 100 - ((val - yMin) / range) * 100));
+      return (
+        <rect
+          key={`box-${i}`}
+          x={px}
+          y={pyVal}
+          width={boxWidth}
+          height={Math.max(0.2, 100 - pyVal)}
+          fill={color}
+          stroke="rgba(0,0,0,0.5)"
+          strokeWidth="0.5"
+          vectorEffect="non-scaling-stroke"
+          className="transition-colors duration-75"
+        />
+      );
+    }
+
     // Find matching track index dynamically matching Y Grid graphics
     let tickIdx = validYTicks.indexOf(val);
     if (tickIdx === -1) {
@@ -329,9 +354,9 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
      yBgCount++;
   }
 
-  const stepString = snaps && snaps.length > 0 
-    ? `Snaps: ${snaps.join(', ')}` 
-    : `Step Size: ${range <= 1.0 ? 0.1 : (range > 15 ? 2 : 1)}`;
+  const stepString = snaps && snaps.length > 0
+    ? `Snaps: ${snaps.join(', ')}`
+    : `Step Size: ${yStep ?? (range <= 1.0 ? 0.1 : (range > 15 ? 2 : 1))}`;
 
   return (
     <div className="flex flex-col gap-2 w-full h-full select-none min-h-0">

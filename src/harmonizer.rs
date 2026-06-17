@@ -316,6 +316,24 @@ pub struct HarmonizerState {
     pub harmony_contour_resolution: f64,
     pub harmony_matrix_contour: Option<Vec<f64>>,
     pub harmony_matrix: Option<Vec<Vec<f64>>>,
+    pub melody_force_contour: Option<Vec<Vec<f64>>>,
+}
+
+/// Effective melody-force weight for voice `channel_idx` at beat position
+/// `start`: sample that voice's row of melody_force_contour if present and
+/// non-empty (per-voice, like voice_contour), otherwise fall back to the
+/// scalar `config.melody_force`.
+fn melody_force_at(state: &HarmonizerState, config: &Config, channel_idx: usize, start: f64) -> f64 {
+    if let Some(ref contours) = state.melody_force_contour {
+        if !contours.is_empty() {
+            let contour = &contours[mod_shim(channel_idx as i32, contours.len() as i32) as usize];
+            if !contour.is_empty() {
+                let idx = (start / state.harmony_contour_resolution).floor() as usize;
+                return *contour.get_wrapped(idx);
+            }
+        }
+    }
+    config.melody_force
 }
 
 
@@ -707,6 +725,7 @@ pub fn get_harmony_scores(
     };
     let w_harmony = 0.5 + r;
     let w_smooth = 0.5 - r;
+    let eff_melody_force = melody_force_at(state, config, channel_idx, current_note.start);
 
     let channel_boundry_max = [2,2,2,2,7].get_wrapped(channel_idx);
     let channel_boundry_min = [2,2,2,7,1].get_wrapped(channel_idx);
@@ -864,7 +883,8 @@ pub fn get_harmony_scores(
             }
 
             // Melody force: every-voice line shaping (see melody_force_term).
-            repeat_contribs[i] += melody_force_term(c, &current_lasts, config.melody_force);
+            // Weight is the per-step contour value when set, else the scalar.
+            repeat_contribs[i] += melody_force_term(c, &current_lasts, eff_melody_force);
 
             // G: History penalties (leader) / hold bonus (non-leader).
             // `no_same_note_penalty` is true for every voice except the
@@ -1328,9 +1348,10 @@ fn build_joint_voices(
         let cb_max = *[2, 2, 2, 2, 7].get_wrapped(channel_idx);
         let cb_min = *[2, 2, 2, 7, 1].get_wrapped(channel_idx);
 
+        let eff_melody_force = melody_force_at(state, config, channel_idx, note.start);
         let cands = candidates.into_iter().map(|c| {
             let mut soft_base = get_distance_score(last_note, c) * w_smooth;
-            soft_base += melody_force_term(c, &current_lasts, config.melody_force);
+            soft_base += melody_force_term(c, &current_lasts, eff_melody_force);
 
             if config.voice_contour_weight != 0.0 {
                 let base_dist = if use_contour {

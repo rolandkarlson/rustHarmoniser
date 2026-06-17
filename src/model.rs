@@ -52,6 +52,12 @@ pub struct Config {
     pub chord_structure_contour: Option<Vec<Vec<f64>>>,
     pub schillinger_ex_contour: Option<Vec<Vec<f64>>>,
     pub harmony_matrix_contour: Option<Vec<f64>>,
+    /// Per-voice, per-step melody-force weight over time (outer = 16 voices,
+    /// inner = steps, like `voice_rhythm_contour`). When present and the
+    /// selected voice's row is non-empty it overrides the scalar `melody_force`
+    /// (sampled like the other contours); otherwise the scalar is used.
+    /// See `melody_force` / melody_force_term.
+    pub melody_force_contour: Option<Vec<Vec<f64>>>,
     /// 9×12 consonance scoring matrix (style rows × interval columns).
     /// None falls back to the built-in default in harmonizer::HARMONY_MATRIX.
     #[serde(default)]
@@ -149,6 +155,7 @@ impl Default for Config {
             chord_structure_contour: None,
             schillinger_ex_contour: None,
             harmony_matrix_contour: None,
+            melody_force_contour: None,
             harmony_matrix: None,
             main_pitch: 0,
             use_floor: false,
@@ -297,11 +304,17 @@ impl Config {
             (tension * 1.0).round().clamp(0.0, 7.0)
         }).collect();
 
+        // Melody force: per-voice rows, flat at the scalar value so default
+        // behaviour is unchanged, but the contour editor has data to shape over
+        // time (one row per voice, like voice_rhythm_contour).
+        let melody_force = vec![vec![self.melody_force; steps]; 16];
+
         self.harmony_distance_contour = Some(harmony);
         self.mode_contour = Some(mode);
         self.chord_structure_contour = Some(vec![chord; 16]);
         self.voice_rhythm_contour = Some(rhythm);
         self.harmony_matrix_contour = Some(harmony_matrix);
+        self.melody_force_contour = Some(melody_force);
 
         // Seed the editable scoring matrix with the built-in defaults so the UI
         // starts from the current values ("default should be as it is").
