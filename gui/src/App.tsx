@@ -89,6 +89,9 @@ function App() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [broadcastVoices, setBroadcastVoices] = useState(false);
+  const [showConsole, setShowConsole] = useState(false);
+  const [script, setScript] = useState<string>(() => localStorage.getItem('contourScript') || '');
+  const [scriptMsg, setScriptMsg] = useState<{ text: string; error: boolean } | null>(null);
   const snapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -209,6 +212,83 @@ function App() {
 
   const updateConfig = (key: string, value: any) => {
     setConfig({ ...config, [key]: value });
+  };
+
+  // Which config field (and whether it's per-voice) backs the active tab — used
+  // to resolve the `$` shortcut in the script console to the on-screen contour.
+  const CONTOUR_FIELDS: Record<string, { field: string; perVoice: boolean }> = {
+    harmony: { field: 'harmony_distance_contour', perVoice: false },
+    mode: { field: 'mode_contour', perVoice: false },
+    chord: { field: 'chord_structure_contour', perVoice: true },
+    voice: { field: 'voice_contour', perVoice: true },
+    rhythm: { field: 'voice_rhythm_contour', perVoice: true },
+    schillinger: { field: 'schillinger_sequence', perVoice: false },
+    schillinger_ex: { field: 'schillinger_ex_contour', perVoice: true },
+    harmony_matrix: { field: 'harmony_matrix_contour', perVoice: false },
+    melody_force: { field: 'melody_force_contour', perVoice: true },
+  };
+
+  // Execute a user script against a mutable clone of the live config. Exposes
+  // `config` (the draft), `$` (the active tab+voice contour, with write-back),
+  // and a few helpers. Sloppy-mode `with` lets bare names resolve against the
+  // scope proxy first, then fall back to globals (Math, Array, JSON, …).
+  const runScript = (code: string) => {
+    if (!config) return;
+    let draft: any;
+    try {
+      draft = structuredClone(config);
+    } catch {
+      draft = JSON.parse(JSON.stringify(config));
+    }
+    const ref = CONTOUR_FIELDS[activeTab];
+    const getDollar = () => {
+      if (!ref) return undefined;
+      return ref.perVoice ? (draft[ref.field]?.[selectedVoice]) : draft[ref.field];
+    };
+    const setDollar = (v: any) => {
+      if (!ref) return;
+      if (ref.perVoice) {
+        if (!Array.isArray(draft[ref.field])) draft[ref.field] = [];
+        while (draft[ref.field].length < 16) draft[ref.field].push([]);
+        draft[ref.field][selectedVoice] = v;
+      } else {
+        draft[ref.field] = v;
+      }
+    };
+    const range = (n: number) => Array.from({ length: Math.max(0, Math.floor(n)) }, (_, i) => i);
+    const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
+    const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+    const steps = (getDollar() as number[] | undefined)?.length ?? 0;
+    const helpers: Record<string, any> = {
+      range, clamp, lerp, steps, voice: selectedVoice, v: selectedVoice,
+      res: config.voice_contour_resolution,
+    };
+    const scope = new Proxy({}, {
+      has: () => true,
+      get: (_t, key: any) => {
+        if (key === Symbol.unscopables) return undefined;
+        if (key === '$') return getDollar();
+        if (key === 'config') return draft;
+        if (key in helpers) return helpers[key];
+        return (window as any)[key];
+      },
+      set: (_t, key: any, val: any) => {
+        if (key === '$') { setDollar(val); return true; }
+        if (key === 'config') { draft = val; return true; }
+        helpers[key] = val;
+        return true;
+      },
+    });
+    try {
+      // eslint-disable-next-line no-new-func
+      const fn = new Function('__scope', `with(__scope){\n${code}\n}`);
+      fn(scope);
+      setConfig(draft);
+      localStorage.setItem('contourScript', code);
+      setScriptMsg({ text: 'Applied ✓', error: false });
+    } catch (e: any) {
+      setScriptMsg({ text: String(e?.message || e), error: true });
+    }
   };
 
   // Current scoring matrix (falls back to defaults if backend didn't supply one).
@@ -1264,6 +1344,51 @@ function App() {
       {/* Main Editor Canvas Full Screen */}
       <div className="flex-1 overflow-hidden p-6 bg-slate-950 flex flex-col">
           {renderActiveEditor()}
+      </div>
+
+      {/* Script Console */}
+      <div className="shrink-0 border-t border-slate-800 bg-slate-900/80">
+        <div className="flex items-center justify-between px-4 py-1.5">
+          <button
+            onClick={() => setShowConsole(s => !s)}
+            className="text-xs font-mono uppercase tracking-wide text-slate-400 hover:text-cyan-400 transition-colors"
+            title="Run JS against the live config. `config` = full config (mutable), `$` = current tab+voice contour, helpers: range(n), clamp, lerp, steps, voice, res."
+          >
+            {showConsole ? '▾' : '▸'} ⌨ Script Console
+          </button>
+          {scriptMsg && (
+            <span className={`text-xs font-mono ${scriptMsg.error ? 'text-rose-400' : 'text-emerald-400'}`}>
+              {scriptMsg.text}
+            </span>
+          )}
+        </div>
+        {showConsole && (
+          <div className="px-4 pb-3 flex flex-col gap-2">
+            <textarea
+              value={script}
+              onChange={(e) => setScript(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); runScript(script); }
+              }}
+              spellCheck={false}
+              rows={5}
+              placeholder={'// config = live config (mutable)   $ = current tab+voice contour\n// helpers: range(n), clamp(x,lo,hi), lerp(a,b,t), steps, voice, res\nconfig.melody_force_contour[3] = range(128).map(i => i%11===0 ? 1 : 0)\n$ = range(steps).map(i => i%11===0 ? 1 : 0)'}
+              className="w-full font-mono text-xs bg-slate-950 border border-slate-800 rounded-lg p-3 text-slate-200 resize-y focus:outline-none focus:border-cyan-500/50 placeholder:text-slate-600"
+            />
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => runScript(script)}
+                className="px-4 py-1.5 text-sm rounded-lg bg-cyan-600 text-slate-950 font-medium hover:bg-cyan-500 transition-colors"
+              >
+                Run <span className="opacity-60 text-xs">⌘↵</span>
+              </button>
+              <span className="text-xs text-slate-500 font-mono">
+                Targeting <span className="text-cyan-400">{CONTOUR_FIELDS[activeTab]?.field ?? '—'}</span>
+                {CONTOUR_FIELDS[activeTab]?.perVoice && <span className="text-cyan-400">[{selectedVoice}]</span>} for <span className="text-cyan-400">$</span>
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Harmony Scoring Matrix Editor Modal */}
