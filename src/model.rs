@@ -113,12 +113,6 @@ pub struct Config {
     /// gets a small reward. 0 = off; 1.0 ≈ the magnitude of the other ±1 terms.
     #[serde(default)]
     pub melody_force: f64,
-    /// Joint chord scoring: enumerate all voices' candidates together and score
-    /// each complete chord once (order-independent, full pairwise aggregation,
-    /// budget as a filter) instead of permutation orderings + greedy per-voice
-    /// picks. Off = legacy scoring.
-    #[serde(default)]
-    pub use_joint_scoring: bool,
 }
 
 fn default_leading_clip() -> i32 { 1 }
@@ -176,7 +170,6 @@ impl Default for Config {
             voice_contour_weight: 1.0,
             candidate_range: 3,
             melody_force: 0.0,
-            use_joint_scoring: false,
         }
     }
 }

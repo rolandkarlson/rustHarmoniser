@@ -1083,10 +1083,6 @@ function App() {
             </div>
             <div className="border-l border-slate-700 h-5"></div>
             <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Joint chord scoring: enumerate all voices' candidates together and score each complete chord once (order-independent, smoother voice leading, voice-change budget enforced exactly). Off = legacy permutation + greedy scoring. Note: 'Dup Interval' has no effect in joint mode.">Joint:</span>
-              <input type="checkbox" checked={config.use_joint_scoring ?? false} onChange={e => updateConfig('use_joint_scoring', e.target.checked)} className="accent-cyan-500" />
-            </div>
-            <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Pitch search window: each voice considers its previous pitch ± this many semitones (non-Schillinger mode). Wider = more freedom to escape a register, slower search.">Cand Range:</span>
               <NumberField integer value={config.candidate_range ?? 3} onChange={v => updateConfig('candidate_range', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>

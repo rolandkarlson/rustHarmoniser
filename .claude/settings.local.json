@@ -29,7 +29,11 @@
       "Bash(echo \"exit: $?\")",
       "Bash(lsof -ti:3000)",
       "Bash(curl -s -X POST http://127.0.0.1:3000/api/generate -H 'Content-Type: application/json' -d @/tmp/cfg-mf.json)",
-      "Bash(awk *)"
+      "Bash(awk *)",
+      "Bash(command -v graphify)",
+      "Bash(cargo test *)",
+      "Bash(python3 /private/tmp/claude-501/-Users-roland-RustroverProjects-rustHarmoniser/be1296a0-e570-4379-8868-d9cb729f4101/scratchpad/rough.py)",
+      "Bash(cd *)"
     ]
   }
 }

@@ -4,8 +4,7 @@ use crate::music_theory::{gen_scale};
 
 use dashmap::DashMap;
 use rayon::prelude::*;
-use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use std::hash::{Hash, Hasher};
 use fxhash::FxHasher64;
 
@@ -50,9 +49,6 @@ pub const HARMONY_MATRIX: [[f64; 12]; 9] = [
 // (a) were diluted by averaging and (b) produced meaningless values when LERPed
 // between style rows. Soft preferences now live in a clean [-1, 1] band.
 const FORBIDDEN_THRESHOLD: f64 = -5.0;
-// Score for candidates that hit any forbidden interval — large enough to lose to
-// every other term even at the lowest harmony weight, so it acts as a reject.
-const HARD_REJECT: f64 = -1.0e6;
 // How much register-aware sensory roughness (Layer 3) modulates the pitch-class
 // style preference. 0 = pure style/pitch-class; 1 = pure psychoacoustic roughness.
 const ROUGHNESS_WEIGHT: f64 = 0.35;
@@ -61,6 +57,18 @@ const ROUGHNESS_WEIGHT: f64 = 0.35;
 const AGG_MEAN: f64 = 0.40;
 const AGG_WORST: f64 = 0.35;
 const AGG_BASS: f64 = 0.25;
+
+// Candidate-generation register limits (MIDI pitch).
+const PITCH_MIN: i32 = 24; // search-window floor for the simple candidate path
+const PITCH_MAX: i32 = 96; // search-window ceiling for the simple candidate path
+const DEFAULT_BOUND_MIN: i32 = 24; // register floor when no voice below constrains
+const DEFAULT_BOUND_MAX: i32 = 90; // register ceiling when no voice above constrains
+// Per-channel crossing buffers (soprano→bass): how many semitones a candidate must
+// stay clear of the bounding voice above (`UPPER`) and below (`LOWER`).
+const CROSSING_BUFFER_UPPER: [i32; 5] = [2, 2, 2, 2, 7];
+const CROSSING_BUFFER_LOWER: [i32; 5] = [2, 2, 2, 7, 1];
+// Pitch span (≈ two octaves) normalizing the quartic voice-contour pull to ~[0, 1].
+const CONTOUR_PITCH_SPAN: f64 = 24.0;
 
 /// A resolved consonance profile for one fractional harmony-context value.
 /// `soft` holds bounded style preferences per interval class (0..11); `forbidden`
@@ -123,123 +131,6 @@ fn pair_roughness(p1: i32, p2: i32) -> f64 {
     (r / 0.1813).clamp(0.0, 1.0)
 }
 
-type PitchSet = u128;
-type IntervalSet = u16;
-
-#[inline(always)]
-fn pitch_set_contains(set: PitchSet, pitch: i32) -> bool {
-    if pitch < 0 || pitch > 127 { return false; }
-    (set >> pitch as u32) & 1 != 0
-}
-
-#[inline(always)]
-fn pitch_set_from_slice(pitches: &[i32]) -> PitchSet {
-    let mut set: PitchSet = 0;
-    for &p in pitches {
-        if p >= 0 && p <= 127 {
-            set |= 1u128 << p as u32;
-        }
-    }
-    set
-}
-
-#[inline(always)]
-fn interval_set_from_slice(intervals: &[i32]) -> IntervalSet {
-    let mut set: IntervalSet = 0;
-    for &iv in intervals {
-        let iv_mod = ((iv % 12) + 12) % 12;
-        set |= 1u16 << iv_mod as u16;
-    }
-    set
-}
-/// Heuristic channel-priority orderings. Each row is a voice-processing order.
-/// The voice scored first has fewest constraints (most freedom), last has most.
-const SMART_ORDERINGS: [[i32; 5]; 10] = [
-    [0, 1, 2, 3, 4],  // Soprano-first
-    [4, 3, 2, 1, 0],  // Bass-first
-    [0, 4, 1, 3, 2],  // Outer-voices-first
-    [2, 1, 3, 0, 4],  // Inner-voices-first
-    [4, 0, 3, 1, 2],  // Alternating outer
-    [3, 2, 1, 0, 4],  // Tenor-first
-    [1, 0, 2, 4, 3],  // Alto-first
-    [0, 4, 2, 1, 3],  // Outer + middle
-    [4, 2, 0, 3, 1],  // Spread pattern
-    [2, 0, 4, 1, 3],  // Middle-out
-];
-
-/// Smart permutation selection: ~10 heuristic orderings instead of N!
-/// For small groups (≤ 3 notes), falls back to all permutations.
-pub fn get_permutations(notes: &[Note], use_leading_voice: bool) -> Vec<Vec<Note>> {
-    let n = notes.len();
-
-    if use_leading_voice {
-        let mut perm = notes.to_vec();
-        perm.sort_by_key(|n| n.channel);
-        return vec![perm];
-    }
-
-    if n <= 3 {
-        return get_all_permutations(notes);
-    }
-
-    let mut results = Vec::with_capacity(SMART_ORDERINGS.len());
-    let mut seen_channel_orders: Vec<Vec<i32>> = Vec::new();
-
-    for ordering in &SMART_ORDERINGS {
-        // Map channel ordering to notes present in this group
-        let perm: Vec<Note> = ordering.iter()
-            .filter_map(|&ch| notes.iter().find(|note| note.channel == ch))
-            .copied()
-            .collect();
-
-        // Skip if not all notes were matched (group might not have all 5 channels)
-        if perm.len() != n {
-            continue;
-        }
-
-        // Deduplicate: skip if we already have this channel ordering
-        let ch_order: Vec<i32> = perm.iter().map(|note| note.channel).collect();
-        if seen_channel_orders.contains(&ch_order) {
-            continue;
-        }
-        seen_channel_orders.push(ch_order);
-        results.push(perm);
-    }
-
-    // Fallback: if heuristics produced fewer than 3 results (unusual channel layouts),
-    // fall back to all permutations
-    if results.len() < 3 {
-        return get_all_permutations(notes);
-    }
-
-    results
-}
-// Helper to get permutations of notes
-pub fn get_all_permutations(notes: &[Note]) -> Vec<Vec<Note>> {
-    let mut results = Vec::new();
-    let mut notes = notes.to_vec();
-
-    fn backtrack(current: Vec<Note>, remaining: Vec<Note>, results: &mut Vec<Vec<Note>>) {
-        if remaining.is_empty() {
-            results.push(current);
-            return;
-        }
-
-        for i in 0..remaining.len() {
-            let mut next_current = current.clone();
-            next_current.push(remaining[i]);
-
-            let mut next_remaining = remaining.clone();
-            next_remaining.remove(i);
-
-            backtrack(next_current, next_remaining, results);
-        }
-    }
-
-    backtrack(Vec::new(), notes, &mut results);
-    results
-}
-
 /// Voice-leading smoothness, normalized to roughly [-1, 1] so it trades off on an
 /// equal footing with the (also bounded) consonance term via w_smooth / w_harmony.
 /// Previously this returned +30 for a unison and -(10·dist) for leaps — a dynamic
@@ -281,29 +172,8 @@ fn melody_force_term(c: i32, lasts: &[i32], weight: f64) -> f64 {
     t * weight
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize)]
-pub struct ScoreBreakdown {
-    pub harmony: f64,
-    pub distance: f64,
-    pub repeat: f64,
-    pub crossing: f64,
-    pub parallel: f64,
-    pub contour: f64,
-    pub same_direction: f64,
-    pub total: f64,
-}
-
-#[derive(Clone)]
-pub struct NoteScore {
-    pub note: i32,
-    pub score: f64,
-    pub distance: f64,
-    pub crossing: bool,
-    pub breakdown: ScoreBreakdown,
-}
-
 #[derive(Clone, Debug)]
-pub struct Boundries {
+pub struct Boundaries {
     pub min: i32,
     pub max: i32,
 }
@@ -399,43 +269,16 @@ fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &
     apply_bound(result, notes, config, current_lasts_lead, current_note.channel)
 }
 
-fn is_harmony_moving_to_same_direction(last: &[Note], current: &[Note], going_down: bool) -> bool {
-    let mut last_map = HashMap::new();
-    for n in last { last_map.insert(n.channel, n.pitch); }
-
-    let mut cur_map = HashMap::new();
-    for n in current { cur_map.insert(n.channel, n.pitch); }
-
-    let mut up = 0;
-    let mut down = 0;
-    let mut compared = 0;
-
-    for (ch, last_p) in last_map {
-        if let Some(cur_p) = cur_map.get(&ch) {
-            compared += 1;
-            if cur_p > &last_p { up += 1; }
-            else if cur_p < &last_p { down += 1; }
-        }
-    }
-
-    if compared == 0 { return false; }
-
-    if going_down { down > up } else { up > down }
-}
-
 pub struct PrecomputedHarmonyData {
     pub sustaining_notes: Vec<i32>,
-    pub sustaining_note_events: Vec<Note>,
-    pub boundries_by_channel: Vec<Boundries>,
+    pub boundaries_by_channel: Vec<Boundaries>,
     pub last_notes_by_channel: Vec<Vec<i32>>,
     pub notes_ending_at_start: Vec<Note>,
     pub lead_pitch: Option<i32>,
-    pub last_notes_bitset_by_channel: Vec<PitchSet>,
 }
 
 fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: f64) -> PrecomputedHarmonyData {
     let mut sustaining_notes = Vec::new();
-    let mut sustaining_note_events = Vec::new();
     let mut notes_ending_at_start = Vec::new();
     let mut sustaining_at_minus_0_1 = Vec::new();
     let mut last_notes_by_channel: Vec<Vec<i32>> = vec![Vec::new(); 16];
@@ -446,7 +289,6 @@ fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: 
         // sustaining_notes: start <= start && end > start
         if n.start <= start_time && n.start + n.duration > start_time && n.muted == 0 {
             sustaining_notes.push(n.pitch);
-            sustaining_note_events.push(*n);
             if n.channel == 0 {
                 sustaining_lead_pitch = Some(n.pitch);
             }
@@ -486,7 +328,7 @@ fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: 
         notes.reverse();
     }
 
-    let mut boundries_by_channel = Vec::with_capacity(16);
+    let mut boundaries_by_channel = Vec::with_capacity(16);
     for ch in 0..16 {
         let mut lower = Vec::new();
         let mut upper = Vec::new();
@@ -499,13 +341,8 @@ fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: 
         }
         let min = if lower.is_empty() { 24 } else { *lower.iter().max().unwrap() };
         let max = if upper.is_empty() { 90 } else { *upper.iter().min().unwrap() };
-        boundries_by_channel.push(Boundries { min, max });
+        boundaries_by_channel.push(Boundaries { min, max });
     }
-
-    let last_notes_bitset_by_channel: Vec<PitchSet> = last_notes_by_channel
-        .iter()
-        .map(|notes| pitch_set_from_slice(notes))
-        .collect();
 
     // Lead pitch priority: current group > sustaining from context > most recent past lead
     let lead_pitch = current_group.iter()
@@ -516,444 +353,12 @@ fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: 
 
     PrecomputedHarmonyData {
         sustaining_notes,
-        sustaining_note_events,
-        boundries_by_channel,
+        boundaries_by_channel,
         last_notes_by_channel,
         notes_ending_at_start,
         lead_pitch,
-        last_notes_bitset_by_channel,
     }
 }
-
-fn motion_direction(from: i32, to: i32) -> i32 {
-    (to - from).signum()
-}
-
-fn parallel_motion_contribution(
-    candidate_pitch: i32,
-    candidate_channel: i32,
-    candidate_previous_pitch: i32,
-    harmony_events: &[Note],
-    last_notes_by_channel: &[Vec<i32>],
-    penalty_weight: f64,
-) -> f64 {
-    if penalty_weight == 0.0 {
-        return 0.0;
-    }
-
-    let candidate_motion = motion_direction(candidate_previous_pitch, candidate_pitch);
-    if candidate_motion == 0 {
-        return 0.0;
-    }
-
-    let mut contribution = 0.0;
-    for other in harmony_events {
-        if other.muted != 0 || other.channel == candidate_channel {
-            continue;
-        }
-
-        let other_channel = other.channel as usize;
-        if other_channel >= last_notes_by_channel.len() {
-            continue;
-        }
-
-        let Some(&other_previous_pitch) = last_notes_by_channel[other_channel].first() else {
-            continue;
-        };
-
-        let other_motion = motion_direction(other_previous_pitch, other.pitch);
-        if other_motion == 0 || other_motion != candidate_motion {
-            continue;
-        }
-
-        let previous_interval = (candidate_previous_pitch - other_previous_pitch).abs() % 12;
-        let current_interval = (candidate_pitch - other.pitch).abs() % 12;
-        if previous_interval == current_interval && (current_interval == 0 || current_interval == 7) {
-            contribution -= penalty_weight;
-        }
-    }
-
-    contribution
-}
-
-pub fn get_harmony_scores(
-    current_note: &Note,
-    current_on_same_start_harmony: &[Note],
-    no_same_note_penalty: bool,
-    config: &Config,
-    state: &HarmonizerState,
-    precomputed: &PrecomputedHarmonyData
-) -> Vec<NoteScore> {
-
-    // === Phase 1: Build context ===
-
-    if current_note.channel == 0 && config.use_leading_voice {
-        let candidate: i32 = if config.schillinger_progression {
-            let sch_scale = get_schillinger_scale(current_note, state, config, Vec::new());
-            let center_octave = (current_note.pitch as f64 / 12.0).floor() as i32;
-            gen_scale(&sch_scale, center_octave)
-                .into_iter()
-                .min_by_key(|&p| (p - current_note.pitch).abs())
-                .unwrap_or(current_note.pitch)
-        } else {
-            current_note.pitch
-        };
-
-        return vec![NoteScore {
-            note: candidate,
-            score: 0.0,
-            distance: 0.0,
-            crossing: false,
-            breakdown: ScoreBreakdown::default(),
-        }];
-    }
-
-    let channel_idx = current_note.channel as usize;
-
-    // Merge sustaining + same-start into current harmony
-    let mut harmony_pitches: Vec<i32> = Vec::with_capacity(precomputed.sustaining_notes.len() + current_on_same_start_harmony.len());
-    harmony_pitches.extend_from_slice(&precomputed.sustaining_notes);
-    let mut harmony_events: Vec<Note> = Vec::with_capacity(precomputed.sustaining_note_events.len() + current_on_same_start_harmony.len());
-    harmony_events.extend(precomputed.sustaining_note_events.iter().copied());
-    for n in current_on_same_start_harmony {
-        harmony_pitches.push(n.pitch);
-        harmony_events.push(*n);
-    }
-    let harmony_len = harmony_pitches.len();
-
-    // Build bitsets for O(1) membership tests
-    let harmony_pitch_set = pitch_set_from_slice(&harmony_pitches);
-    let harmony_interval_set = {
-        let mut intervals = Vec::with_capacity(if harmony_len > 0 { harmony_len * (harmony_len - 1) / 2 } else { 0 });
-        for i in 0..harmony_len {
-            for j in (i+1)..harmony_len {
-                intervals.push((harmony_pitches[i] - harmony_pitches[j]).abs() % 12);
-            }
-        }
-        interval_set_from_slice(&intervals)
-    };
-
-    let current_on_same_end_harmony = &precomputed.notes_ending_at_start;
-
-    let mut current_lasts = if channel_idx < precomputed.last_notes_by_channel.len() {
-        precomputed.last_notes_by_channel[channel_idx].clone()
-    } else {
-        Vec::new()
-    };
-
-    let current_lasts_lead: Vec<i32> = if current_note.channel == 0 {
-        Vec::new()
-    } else {
-        let from_ending: Vec<i32> = current_on_same_start_harmony.iter()
-            .filter(|n| n.channel == 0)
-            .map(|n| n.pitch)
-            .collect();
-        if from_ending.is_empty() {
-            precomputed.lead_pitch.map(|p| vec![p]).unwrap_or_default()
-        } else {
-            from_ending
-        }
-    };
-
-    let last_notes_set: PitchSet = if channel_idx < precomputed.last_notes_bitset_by_channel.len() {
-        precomputed.last_notes_bitset_by_channel[channel_idx]
-    } else { 0 };
-
-    let bounds_p = if channel_idx < precomputed.boundries_by_channel.len() {
-        &precomputed.boundries_by_channel[channel_idx]
-    } else {
-        &Boundries { min: 24, max: 90 }
-    };
-
-    // Outer voices = soprano (ch0) and bass (ch4) — the pair contrary motion matters for.
-    let is_outer_voice = current_note.channel == 0 || current_note.channel == 4;
-
-    if current_lasts.is_empty() {
-        current_lasts.push(current_note.pitch);
-    }
-
-    let mut no_same_note_penalty = no_same_note_penalty;
-    if current_lasts.len() >= 4 {
-        let first_val = current_lasts[0];
-        if current_lasts.iter().all(|&x| x == first_val) {
-            no_same_note_penalty = false;
-        }
-    }
-
-    let mut target_offset: i32 = 0;
-    let use_contour = if let Some(ref contours) = state.voice_contour {
-        if !contours.is_empty() {
-            let contour = &contours[mod_shim(channel_idx as i32, contours.len() as i32) as usize];
-            if !contour.is_empty() {
-                let idx = (current_note.start / state.contour_resolution).floor() as usize;
-                target_offset = *contour.get_wrapped(idx);
-            }
-        }
-        true // use_contour is always set to false in original
-    } else {
-        false
-    };
-
-    let seq = 0;
-
-    let last_note = if !current_lasts.is_empty() { current_lasts[0] } else { current_note.pitch };
-    let range = config.candidate_range.max(1);
-    let min_pitch = (last_note - range).max(24);
-    let max_pitch = (last_note + range).min(96);
-
-    // Generate candidates
-    let sp = 0.0;
-    let candidates: Vec<i32> = if config.schillinger_progression {
-        let sch_scale = get_schillinger_scale(current_note, state, config, current_lasts_lead);
-        let center_octave = (current_lasts[0] as f64 / 12.0).floor() as i32;
-        gen_scale(&sch_scale, center_octave)
-    } else {
-        (min_pitch..=max_pitch).collect()
-    };
-    let n = candidates.len();
-
-    // Precompute weights (loop-invariant)
-    let r = if let Some(ref contour) = state.harmony_contour {
-        if !contour.is_empty() {
-            let idx = (current_note.start / state.harmony_contour_resolution).floor() as usize;
-            *contour.get_wrapped(idx)
-        } else {
-            config.harmony_distance_balance
-        }
-    } else {
-        config.harmony_distance_balance
-    };
-    let w_harmony = 0.5 + r;
-    let w_smooth = 0.5 - r;
-    let eff_melody_force = melody_force_at(state, config, channel_idx, current_note.start);
-
-    let channel_boundry_max = [2,2,2,2,7].get_wrapped(channel_idx);
-    let channel_boundry_min = [2,2,2,7,1].get_wrapped(channel_idx);
-
-    let has_lasts = !current_lasts.is_empty();
-    let input_pitch_f = current_note.pitch;
-
-    // Precompute direction check: call only 2x instead of Nx
-    let (dir_penalty_down, dir_penalty_up) = if is_outer_voice
-        && !current_on_same_end_harmony.is_empty()
-        && !current_on_same_start_harmony.is_empty()
-        && has_lasts
-    {
-        (
-            is_harmony_moving_to_same_direction(current_on_same_end_harmony, current_on_same_start_harmony, true),
-            is_harmony_moving_to_same_direction(current_on_same_end_harmony, current_on_same_start_harmony, false),
-        )
-    } else {
-        (false, false)
-    };
-    let check_direction = dir_penalty_down || dir_penalty_up;
-    let last0 = if has_lasts { current_lasts[0] } else { 0 };
-
-    // === Phase 2: Separate scoring passes ===
-
-    let mut consonance_scores = vec![0.0f64; n];
-    let mut distance_scores = vec![0.0f64; n];
-    let mut harmony_contribs = vec![0.0f64; n];
-    let mut distance_contribs = vec![0.0f64; n];
-    let mut repeat_contribs = vec![0.0f64; n];
-    let mut crossing_contribs = vec![0.0f64; n];
-    let mut parallel_contribs = vec![0.0f64; n];
-    let mut contour_contribs = vec![0.0f64; n];
-    let mut same_direction_contribs = vec![0.0f64; n];
-    let mut crossing_flags = vec![false; n];
-
-    // Pass A: Consonance — harmony matrix lookup averaged over harmony notes
-    // Select row from harmony matrix contour (default row 0 = Strict Classical)
-    let harmony_ctx = if let Some(ref contour) = state.harmony_matrix_contour {
-        if !contour.is_empty() {
-            let idx = (current_note.start / state.harmony_contour_resolution).floor() as usize;
-            *contour.get_wrapped(idx)
-        } else {
-            0.0
-        }
-    } else {
-        0.0
-    };
-    let consonance_row = get_harmony_row(harmony_ctx, state.harmony_matrix.as_ref());
-
-    if harmony_len > 0 {
-        // Bass = lowest sounding pitch; its interval is weighted extra so chord
-        // root/inversion identity is respected rather than averaged away.
-        let bass_pitch = *harmony_pitches.iter().min().unwrap();
-        for (i, &c) in candidates.iter().enumerate() {
-            let mut sum = 0.0;
-            let mut worst = f64::INFINITY;
-            let mut bass_pair = 0.0;
-            let mut hard = false;
-            for &h in &harmony_pitches {
-                let ic = ((c - h).abs() % 12) as usize;
-                if consonance_row.forbidden[ic] {
-                    hard = true;
-                }
-                // Layer 3: blend pitch-class style preference with register-aware
-                // roughness, so m2 ≠ m9 and the same chord clusters worse down low.
-                let style = consonance_row.soft[ic];
-                let rough = pair_roughness(c, h);
-                let pair = (1.0 - ROUGHNESS_WEIGHT) * style - ROUGHNESS_WEIGHT * rough;
-                sum += pair;
-                if pair < worst { worst = pair; }
-                if h == bass_pitch { bass_pair = pair; }
-            }
-            consonance_scores[i] = if hard {
-                HARD_REJECT
-            } else {
-                // Layer 2: chord-level aggregation — overall fit, worst single
-                // clash (so one harsh interval can't hide behind consonant ones),
-                // and the bass interval.
-                let mean = sum / harmony_len as f64;
-                AGG_MEAN * mean + AGG_WORST * worst + AGG_BASS * bass_pair
-            };
-        }
-    }
-    for i in 0..n {
-        harmony_contribs[i] += (consonance_scores[i] - sp) * w_harmony;
-    }
-
-    // Pass B: Duplicate & interval penalties (bitset O(1))
-    for (i, &c) in candidates.iter().enumerate() {
-        // Exact unison with a sounding voice = a real voice collision (two voices on
-        // the identical MIDI pitch). Treat it as a hard constraint, consistent with
-        // forbidden intervals, instead of the old -10000 no-man's-land magnitude.
-        if pitch_set_contains(harmony_pitch_set, c) {
-            harmony_contribs[i] += HARD_REJECT;
-        }
-        // NOTE: octave-equivalent doubling is intentionally NOT penalized. P1/P8 score
-        // 1.0 in the H-matrix and octave doubling (especially of the root) is
-        // foundational; the old `harmony_len < 3` ban hard-rejected exactly the
-        // doublings the matrix rewards. Doubling is now governed by the matrix.
-        // Interval already in harmony (only when harmony < 3)
-        if harmony_len < 3 {
-            for &h in &harmony_pitches {
-                let dif = ((h - c).abs() % 12) as u16;
-                if (harmony_interval_set >> dif) & 1 != 0 {
-                    harmony_contribs[i] -= config.interval_exists_in_harmony;
-                }
-            }
-        }
-    }
-
-    // Pass C: Parallel 5ths/octaves by channel-pair motion
-    if config.consecutive_octav_fift != 0.0 && !harmony_events.is_empty() {
-        for (i, &c) in candidates.iter().enumerate() {
-            parallel_contribs[i] += parallel_motion_contribution(
-                c,
-                current_note.channel,
-                last_note,
-                &harmony_events,
-                &precomputed.last_notes_by_channel,
-                config.consecutive_octav_fift,
-            );
-        }
-    }
-
-    // Pass D: Voice crossing
-    for (i, &c) in candidates.iter().enumerate() {
-        if bounds_p.max - c < *channel_boundry_max {
-            crossing_contribs[i] -= config.no_crossing;
-            crossing_flags[i] = true;
-        }
-        if c - bounds_p.min < *channel_boundry_min {
-            crossing_contribs[i] -= config.no_crossing;
-            crossing_flags[i] = true;
-        }
-    }
-
-    // Pass E-G: Distance, cubic, and history penalties
-    if has_lasts {
-        for (i, &c) in candidates.iter().enumerate() {
-            // E: Distance score
-            distance_scores[i] = get_distance_score(last_note, c);
-            distance_contribs[i] = distance_scores[i] * w_smooth;
-
-            // F: Quartic pull toward the voice's pitch-contour target.
-            // Scaled by config.voice_contour_weight (0 = contour has no effect).
-            if config.voice_contour_weight != 0.0 {
-                let base_dist = if use_contour {
-                    (c - (input_pitch_f + target_offset)).abs()
-                } else {
-                    (c - current_note.pitch + seq).abs()
-                };
-                let normalized = base_dist as f64 / 24.0;
-                contour_contribs[i] -= config.voice_contour_weight * normalized * normalized * normalized * normalized;
-            }
-
-            // Melody force: every-voice line shaping (see melody_force_term).
-            // Weight is the per-step contour value when set, else the scalar.
-            repeat_contribs[i] += melody_force_term(c, &current_lasts, eff_melody_force);
-
-            // G: History penalties (leader) / hold bonus (non-leader).
-            // `no_same_note_penalty` is true for every voice except the
-            // permutation leader. Non-leaders get a "stickiness" bonus for keeping
-            // their previous pitch (common tone) so they hold unless moving is
-            // clearly better; the leader is penalized for holding so it moves.
-            if no_same_note_penalty {
-                if c == last_note {
-                    repeat_contribs[i] += config.same_note_bonus;
-                }
-            } else {
-                if c == last_note {
-                    repeat_contribs[i] -= config.last_note_same;
-                }
-                if pitch_set_contains(last_notes_set, c) {
-                    let count = current_lasts.iter().filter(|&&x| x == c).count();
-                    if count >= 2 {
-                        repeat_contribs[i] -= config.last_note_exist_in_voice;
-                    }
-                }
-            }
-        }
-    }
-
-    // Pass H: Same direction penalty (precomputed for both directions).
-    // A held note (c == last0) is oblique motion, not similar motion — exempt it.
-    if check_direction {
-        for (i, &c) in candidates.iter().enumerate() {
-            if c == last0 { continue; }
-            let going_down = last0 > c;
-            if (going_down && dir_penalty_down) || (!going_down && dir_penalty_up) {
-                same_direction_contribs[i] -= config.same_direction;
-            }
-        }
-    }
-
-    // === Phase 3: Combine — element-wise vectorized ===
-
-    let mut scores = Vec::with_capacity(n);
-    for i in 0..n {
-        let sum_score = harmony_contribs[i]
-            + distance_contribs[i]
-            + repeat_contribs[i]
-            + crossing_contribs[i]
-            + parallel_contribs[i]
-            + contour_contribs[i]
-            + same_direction_contribs[i];
-        let breakdown = ScoreBreakdown {
-            harmony: harmony_contribs[i],
-            distance: distance_contribs[i],
-            repeat: repeat_contribs[i],
-            crossing: crossing_contribs[i],
-            parallel: parallel_contribs[i],
-            contour: contour_contribs[i],
-            same_direction: same_direction_contribs[i],
-            total: sum_score,
-        };
-        scores.push(NoteScore {
-            note: candidates[i],
-            score: sum_score,
-            distance: distance_scores[i],
-            crossing: crossing_flags[i],
-            breakdown,
-        });
-    }
-
-    scores
-}
-
 
 pub fn gen_voice_from_notes(pattern: &[Note], source_length: f64, config: &Config) -> Vec<Note> {
     let clip_len = (config.pl * 4 * config.render_length) as f64;
@@ -1041,19 +446,22 @@ pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channe
 }
 
 fn group_by_start_array(notes: Vec<Note>) -> Vec<Vec<Note>> {
-    let mut map: HashMap<String, Vec<Note>> = HashMap::new();
-    let quantize = |f: f64| format!("{:.4}", f);
+    // Quantize start to 1e-4-beat ticks (matches the old "{:.4}" key) and group on
+    // the integer tick — a BTreeMap keeps groups in ascending-start order for free,
+    // with no per-note string allocation.
+    let mut map: BTreeMap<i64, Vec<Note>> = BTreeMap::new();
 
     for n in notes {
-        let key = quantize(n.start);
-        map.entry(key).or_insert(Vec::new()).push(n);
+        let key = (n.start * 10_000.0).round() as i64;
+        map.entry(key).or_default().push(n);
     }
 
     let mut groups: Vec<Vec<Note>> = map.into_values().collect();
-    groups.sort_by(|a, b| a[0].start.partial_cmp(&b[0].start).unwrap());
 
+    // Channel order within a group; the beam re-sorts by channel anyway, so this
+    // just makes the grouping output match that ordering directly.
     for g in &mut groups {
-        g.sort_by(|a, b| b.pitch.cmp(&a.pitch));
+        g.sort_by_key(|n| n.channel);
     }
 
     groups
@@ -1070,140 +478,6 @@ struct IntermediateCandidate {
     added_notes: Vec<Note>,
     actual_score: f64,
     rank_score: f64,
-}
-
-fn score_note_group(
-    current_notes_in: &[Note],
-    temp_group_notes: &mut Vec<Note>,
-    no_same_note_penalty: bool,
-    config: &Config,
-    state: &HarmonizerState,
-    precomputed: &PrecomputedHarmonyData
-) -> f64 {
-    let current_notes = current_notes_in.to_vec();
-    let n = current_notes.len();
-    let permu_first_channel = current_notes.last().unwrap().channel;
-    let base_len = temp_group_notes.len();
-
-    let prev_pitch = |ch: i32| -> Option<i32> {
-        precomputed.last_notes_by_channel.get(ch as usize).and_then(|v| v.first()).copied()
-    };
-    let skip_for = |ch: i32| no_same_note_penalty || (permu_first_channel != ch);
-
-    // ---- Pass 1: greedy best pitch per voice; record the "hold previous pitch"
-    // alternative so we know each voice's benefit of moving. ----
-    let mut chosen = vec![0i32; n];
-    let mut best_score = vec![0.0f64; n];
-    let mut hold_pitch = vec![None::<i32>; n];   // previous pitch, if this voice can hold it
-    let mut hold_score = vec![f64::NEG_INFINITY; n];
-    let mut group_score = 0.0;
-
-    for j in 0..n {
-        let mut scores = get_harmony_scores(&current_notes[j], temp_group_notes, skip_for(current_notes[j].channel), config, state, precomputed);
-        scores.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-
-        // The leading voice's pitch is fixed by the input melody — not eligible.
-        let is_lead = current_notes[j].channel == 0 && config.use_leading_voice;
-        if !is_lead {
-            if let Some(hp) = prev_pitch(current_notes[j].channel) {
-                if let Some(h) = scores.iter().find(|s| s.note == hp) {
-                    hold_pitch[j] = Some(hp);
-                    hold_score[j] = h.score;
-                }
-            }
-        }
-
-        if let Some(best) = scores.first() {
-            chosen[j] = best.note;
-            best_score[j] = best.score;
-            let mut note = current_notes[j];
-            note.pitch = best.note;
-            note.muted = 0;
-            temp_group_notes.push(note);
-            group_score += best.score;
-        } else {
-            chosen[j] = current_notes[j].pitch;
-            temp_group_notes.push(current_notes[j]);
-        }
-    }
-
-    // ---- Voice-change budget: cap/floor how many eligible voices change pitch
-    // between consecutive chords, by forcing the least-worthwhile movers to hold
-    // (or the most-worthwhile holders to move) and re-scoring. ----
-    let max_changed = config.max_voices_changed;
-    let min_changed = config.min_voices_changed;
-    if max_changed >= 0 || min_changed >= 0 {
-        let movers: Vec<usize> = (0..n)
-            .filter(|&j| hold_pitch[j].is_some() && chosen[j] != hold_pitch[j].unwrap())
-            .collect();
-        let benefit = |j: usize| best_score[j] - hold_score[j];
-
-        let mut force_hold: Vec<usize> = Vec::new();
-        let mut force_move: Vec<usize> = Vec::new();
-
-        if max_changed >= 0 && movers.len() as i32 > max_changed {
-            // Keep the highest-benefit movers; hold the rest on their old pitch.
-            let mut m = movers.clone();
-            m.sort_by(|&a, &b| benefit(a).partial_cmp(&benefit(b)).unwrap_or(std::cmp::Ordering::Equal));
-            let to_hold = m.len() - max_changed as usize;
-            force_hold = m.into_iter().take(to_hold).collect();
-        } else if min_changed >= 0 && (movers.len() as i32) < min_changed {
-            // Force the highest-benefit holders to move.
-            let mut h: Vec<usize> = (0..n)
-                .filter(|&j| hold_pitch[j].is_some() && chosen[j] == hold_pitch[j].unwrap())
-                .collect();
-            h.sort_by(|&a, &b| benefit(b).partial_cmp(&benefit(a)).unwrap_or(std::cmp::Ordering::Equal));
-            let to_move = ((min_changed as usize).saturating_sub(movers.len())).min(h.len());
-            force_move = h.into_iter().take(to_move).collect();
-        }
-
-        if !force_hold.is_empty() || !force_move.is_empty() {
-            // Pass 2: rebuild the chord. Forced holds are placed first so the
-            // remaining voices are scored against them.
-            temp_group_notes.truncate(base_len);
-            group_score = 0.0;
-            let mut order: Vec<usize> = force_hold.clone();
-            order.extend((0..n).filter(|j| !force_hold.contains(j)));
-
-            for &j in &order {
-                let skip = skip_for(current_notes[j].channel);
-                let mut scores = get_harmony_scores(&current_notes[j], temp_group_notes, skip, config, state, precomputed);
-                scores.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-
-                let pick = if force_hold.contains(&j) {
-                    let hp = hold_pitch[j].unwrap();
-                    scores.iter().find(|s| s.note == hp).cloned()
-                        .unwrap_or(NoteScore { note: hp, score: 0.0, distance: 0.0, crossing: false, breakdown: ScoreBreakdown::default() })
-                } else if force_move.contains(&j) {
-                    // Must not pick the held pitch.
-                    let hp = hold_pitch[j];
-                    scores.iter().find(|s| Some(s.note) != hp).or_else(|| scores.first()).cloned()
-                        .unwrap_or(NoteScore { note: current_notes[j].pitch, score: 0.0, distance: 0.0, crossing: false, breakdown: ScoreBreakdown::default() })
-                } else {
-                    match scores.first() {
-                        Some(b) => b.clone(),
-                        None => NoteScore { note: current_notes[j].pitch, score: 0.0, distance: 0.0, crossing: false, breakdown: ScoreBreakdown::default() },
-                    }
-                };
-
-                let mut note = current_notes[j];
-                note.pitch = pick.note;
-                note.muted = 0;
-                temp_group_notes.push(note);
-                group_score += pick.score;
-            }
-        }
-    }
-
-    // Optional soft per-common-tone penalty (in addition to the hard budget above).
-    if config.common_tone_penalty != 0.0 {
-        let common = temp_group_notes[base_len..].iter()
-            .filter(|nnote| prev_pitch(nnote.channel) == Some(nnote.pitch))
-            .count();
-        group_score -= config.common_tone_penalty * common as f64;
-    }
-
-    group_score
 }
 
 // ===================== Joint chord scoring (config.use_joint_scoring) =========
@@ -1315,7 +589,7 @@ fn build_joint_voices(
             let center_octave = (last_note as f64 / 12.0).floor() as i32;
             gen_scale(&sch_scale, center_octave)
         } else {
-            ((last_note - range).max(24)..=(last_note + range).min(96)).collect()
+            ((last_note - range).max(PITCH_MIN)..=(last_note + range).min(PITCH_MAX)).collect()
         };
         if candidates.is_empty() {
             candidates.push(note.pitch);
@@ -1341,12 +615,12 @@ fn build_joint_voices(
             false
         };
 
-        let default_bounds = Boundries { min: 24, max: 90 };
-        let bounds = precomputed.boundries_by_channel
+        let default_bounds = Boundaries { min: DEFAULT_BOUND_MIN, max: DEFAULT_BOUND_MAX };
+        let bounds = precomputed.boundaries_by_channel
             .get(channel_idx)
             .unwrap_or(&default_bounds);
-        let cb_max = *[2, 2, 2, 2, 7].get_wrapped(channel_idx);
-        let cb_min = *[2, 2, 2, 7, 1].get_wrapped(channel_idx);
+        let cb_max = *CROSSING_BUFFER_UPPER.get_wrapped(channel_idx);
+        let cb_min = *CROSSING_BUFFER_LOWER.get_wrapped(channel_idx);
 
         let eff_melody_force = melody_force_at(state, config, channel_idx, note.start);
         let cands = candidates.into_iter().map(|c| {
@@ -1359,7 +633,7 @@ fn build_joint_voices(
                 } else {
                     (c - note.pitch).abs()
                 };
-                let normalized = base_dist as f64 / 24.0;
+                let normalized = base_dist as f64 / CONTOUR_PITCH_SPAN;
                 soft_base -= config.voice_contour_weight
                     * normalized * normalized * normalized * normalized;
             }
@@ -1393,87 +667,92 @@ fn build_joint_voices(
     }).collect()
 }
 
-fn score_note_group_joint(
-    current_notes_in: &[Note],
-    temp_group_notes: &mut Vec<Note>,
-    no_same_note_penalty: bool,
-    config: &Config,
-    state: &HarmonizerState,
-    precomputed: &PrecomputedHarmonyData,
-) -> f64 {
-    if current_notes_in.is_empty() {
-        return 0.0;
-    }
-    let group_start = current_notes_in[0].start;
+const BEAM_WIDTH: usize = 5;
 
-    // Group-level weights and consonance profile (one start time per group).
-    let r = if let Some(ref contour) = state.harmony_contour {
-        if !contour.is_empty() {
-            let idx = (group_start / state.harmony_contour_resolution).floor() as usize;
-            *contour.get_wrapped(idx)
-        } else {
-            config.harmony_distance_balance
-        }
-    } else {
-        config.harmony_distance_balance
+/// Group-level harmony/smoothness weights and the consonance-matrix context for a
+/// group, resolved from the optional contours or the scalar config fall-backs.
+/// Returns `(w_harmony, w_smooth, harmony_ctx)`.
+fn group_weights(group_start: f64, config: &Config, state: &HarmonizerState) -> (f64, f64, f64) {
+    let idx = (group_start / state.harmony_contour_resolution).floor() as usize;
+    let r = match &state.harmony_contour {
+        Some(c) if !c.is_empty() => *c.get_wrapped(idx),
+        _ => config.harmony_distance_balance,
     };
-    let w_harmony = 0.5 + r;
-    let w_smooth = 0.5 - r;
-    let harmony_ctx = if let Some(ref contour) = state.harmony_matrix_contour {
-        if !contour.is_empty() {
-            let idx = (group_start / state.harmony_contour_resolution).floor() as usize;
-            *contour.get_wrapped(idx)
-        } else {
-            0.0
-        }
-    } else {
-        0.0
+    let harmony_ctx = match &state.harmony_matrix_contour {
+        Some(c) if !c.is_empty() => *c.get_wrapped(idx),
+        _ => 0.0,
     };
-    let row = get_harmony_row(harmony_ctx, state.harmony_matrix.as_ref());
+    (0.5 + r, 0.5 - r, harmony_ctx)
+}
 
-    let voices = build_joint_voices(current_notes_in, w_smooth, config, state, precomputed);
-    let n = voices.len();
+/// Precomputed pairwise consonance over every pitch that can appear in the
+/// sonority, so the chord-scoring hot loop is pure index lookups. `soft`/`forbidden`
+/// are flat `m × m` tables indexed by `idx_of[pitch]`.
+struct PairTable {
+    pitches: Vec<i32>,
+    idx_of: HashMap<i32, usize>,
+    m: usize,
+    soft: Vec<f64>,
+    forbidden: Vec<bool>,
+    sustaining_idx: Vec<usize>,
+}
 
-    // Pair-score table over every pitch that can appear in the sonority, so the
-    // enumeration hot loop is pure lookups.
-    let mut pitches: Vec<i32> = voices.iter()
-        .flat_map(|v| v.cands.iter().map(|c| c.pitch))
-        .collect();
-    pitches.extend_from_slice(&precomputed.sustaining_notes);
-    pitches.sort_unstable();
-    pitches.dedup();
-    let idx_of: HashMap<i32, usize> = pitches.iter().enumerate().map(|(i, &p)| (p, i)).collect();
-    let m = pitches.len();
-    let mut pair_soft = vec![0.0f64; m * m];
-    let mut pair_forbidden = vec![false; m * m];
-    for a in 0..m {
-        for b in 0..m {
-            let ic = ((pitches[a] - pitches[b]).abs() % 12) as usize;
-            pair_forbidden[a * m + b] = row.forbidden[ic];
-            pair_soft[a * m + b] = (1.0 - ROUGHNESS_WEIGHT) * row.soft[ic]
-                - ROUGHNESS_WEIGHT * pair_roughness(pitches[a], pitches[b]);
+impl PairTable {
+    fn build(voices: &[JointVoice], precomputed: &PrecomputedHarmonyData, row: &HarmonyRow) -> Self {
+        let mut pitches: Vec<i32> = voices.iter()
+            .flat_map(|v| v.cands.iter().map(|c| c.pitch))
+            .collect();
+        pitches.extend_from_slice(&precomputed.sustaining_notes);
+        pitches.sort_unstable();
+        pitches.dedup();
+        let idx_of: HashMap<i32, usize> = pitches.iter().enumerate().map(|(i, &p)| (p, i)).collect();
+        let m = pitches.len();
+        let mut soft = vec![0.0f64; m * m];
+        let mut forbidden = vec![false; m * m];
+        for a in 0..m {
+            for b in 0..m {
+                let ic = ((pitches[a] - pitches[b]).abs() % 12) as usize;
+                forbidden[a * m + b] = row.forbidden[ic];
+                soft[a * m + b] = (1.0 - ROUGHNESS_WEIGHT) * row.soft[ic]
+                    - ROUGHNESS_WEIGHT * pair_roughness(pitches[a], pitches[b]);
+            }
         }
+        let sustaining_idx = precomputed.sustaining_notes.iter().map(|p| idx_of[p]).collect();
+        Self { pitches, idx_of, m, soft, forbidden, sustaining_idx }
     }
-    let sustaining_idx: Vec<usize> = precomputed.sustaining_notes.iter()
-        .map(|p| idx_of[p])
-        .collect();
+}
 
-    let ending_by_channel: HashMap<i32, i32> = precomputed.notes_ending_at_start.iter()
-        .map(|nn| (nn.channel, nn.pitch))
-        .collect();
-    let check_dir = !ending_by_channel.is_empty() && config.same_direction != 0.0;
+/// Lexicographic order on `(hard violations, soft score)`: fewer violations wins;
+/// ties broken by the higher soft score. Returns true if `a` is strictly better.
+fn chord_better(a: (u32, f64), b: (u32, f64)) -> bool {
+    a.0 < b.0 || (a.0 == b.0 && a.1 > b.1)
+}
 
-    // Lexicographic comparison: fewer hard violations beats any soft score.
-    let better = |a: (u32, f64), b: (u32, f64)| a.0 < b.0 || (a.0 == b.0 && a.1 > b.1);
+/// Scores complete chords (one candidate index per voice) against a prebuilt
+/// `PairTable`. Holds only borrows, so it is cheap to share across rayon workers.
+struct ChordScorer<'a> {
+    voices: &'a [JointVoice],
+    n: usize,
+    table: &'a PairTable,
+    sustaining_notes: &'a [i32],
+    ending_by_channel: &'a HashMap<i32, i32>,
+    check_dir: bool,
+    w_harmony: f64,
+    config: &'a Config,
+}
 
-    // Score one COMPLETE chord (candidate index per voice).
-    let eval_chord = |chosen: &[usize]| -> (u32, f64) {
+impl ChordScorer<'_> {
+    /// `(hard violations, soft score)` for one complete chord.
+    fn eval(&self, chosen: &[usize]) -> (u32, f64) {
+        let voices = self.voices;
+        let n = self.n;
+        let t = self.table;
+        let m = t.m;
         let mut hard: u32 = 0;
         let mut soft = 0.0;
 
-        // Per-voice base terms + leader selection. Total with leader L =
-        // base + Σ nonlead + (lead(L) - nonlead(L)); maximizing over L matches
-        // what the legacy permutation sweep (one leader per ordering) found.
+        // Per-voice base terms + leader selection: total with leader L =
+        // base + Σ nonlead + max_L(lead(L) - nonlead(L)).
         let mut nonlead_sum = 0.0;
         let mut best_delta = f64::NEG_INFINITY;
         for (v, &ci) in voices.iter().zip(chosen) {
@@ -1481,14 +760,11 @@ fn score_note_group_joint(
             soft += c.soft_base;
             if !v.is_fixed_lead {
                 nonlead_sum += c.nonlead_term;
-                let d = c.lead_term - c.nonlead_term;
-                if d > best_delta {
-                    best_delta = d;
-                }
+                best_delta = best_delta.max(c.lead_term - c.nonlead_term);
             }
         }
         soft += nonlead_sum;
-        if !no_same_note_penalty && best_delta > f64::NEG_INFINITY {
+        if best_delta > f64::NEG_INFINITY {
             soft += best_delta;
         }
 
@@ -1499,7 +775,7 @@ fn score_note_group_joint(
         for (v, &ci) in voices.iter().zip(chosen) {
             bass = bass.min(v.cands[ci].pitch);
         }
-        for &s in &precomputed.sustaining_notes {
+        for &s in self.sustaining_notes {
             bass = bass.min(s);
         }
         let mut sum = 0.0;
@@ -1509,18 +785,18 @@ fn score_note_group_joint(
         let mut bass_cnt = 0usize;
         for i in 0..n {
             let pi = voices[i].cands[chosen[i]].pitch;
-            let ii = idx_of[&pi];
+            let ii = t.idx_of[&pi];
             for j in (i + 1)..n {
                 let pj = voices[j].cands[chosen[j]].pitch;
                 if pi == pj {
                     hard += 1; // exact unison collision between two voices
                     continue;
                 }
-                let k = ii * m + idx_of[&pj];
-                if pair_forbidden[k] {
+                let k = ii * m + t.idx_of[&pj];
+                if t.forbidden[k] {
                     hard += 1;
                 }
-                let ps = pair_soft[k];
+                let ps = t.soft[k];
                 sum += ps;
                 cnt += 1;
                 if ps < worst {
@@ -1531,17 +807,17 @@ fn score_note_group_joint(
                     bass_cnt += 1;
                 }
             }
-            for &sj in &sustaining_idx {
-                let pj = pitches[sj];
+            for &sj in &t.sustaining_idx {
+                let pj = t.pitches[sj];
                 if pi == pj {
                     hard += 1;
                     continue;
                 }
                 let k = ii * m + sj;
-                if pair_forbidden[k] {
+                if t.forbidden[k] {
                     hard += 1;
                 }
-                let ps = pair_soft[k];
+                let ps = t.soft[k];
                 sum += ps;
                 cnt += 1;
                 if ps < worst {
@@ -1556,15 +832,12 @@ fn score_note_group_joint(
         if cnt > 0 {
             let mean = sum / cnt as f64;
             let bass_term = if bass_cnt > 0 { bass_sum / bass_cnt as f64 } else { mean };
-            soft += w_harmony * (AGG_MEAN * mean + AGG_WORST * worst + AGG_BASS * bass_term);
+            soft += self.w_harmony * (AGG_MEAN * mean + AGG_WORST * worst + AGG_BASS * bass_term);
         }
-        // NOTE: the legacy interval_exists_in_harmony term (only active when the
-        // incremental harmony had < 3 notes) is intentionally dropped here — the
-        // worst-pair aggregation over the full sonority covers its purpose.
 
         // Parallel 5ths/octaves among the new voices (sustaining notes have zero
-        // motion at this instant, matching legacy behavior).
-        if config.consecutive_octav_fift != 0.0 {
+        // motion at this instant).
+        if self.config.consecutive_octav_fift != 0.0 {
             for i in 0..n {
                 let Some(qi) = voices[i].prev else { continue };
                 let pi = voices[i].cands[chosen[i]].pitch;
@@ -1581,15 +854,15 @@ fn score_note_group_joint(
                     let prev_int = (qi - qj).abs() % 12;
                     let cur_int = (pi - pj).abs() % 12;
                     if prev_int == cur_int && (cur_int == 0 || cur_int == 7) {
-                        soft -= config.consecutive_octav_fift;
+                        soft -= self.config.consecutive_octav_fift;
                     }
                 }
             }
         }
 
         // Same-direction penalty for outer voices moving with the chord majority
-        // (held notes are oblique motion and exempt, as in legacy).
-        if check_dir {
+        // (held notes are oblique motion and exempt).
+        if self.check_dir {
             for (v, &ci) in voices.iter().zip(chosen) {
                 if v.note.channel != 0 && v.note.channel != 4 {
                     continue;
@@ -1605,7 +878,7 @@ fn score_note_group_joint(
                     if w.note.channel == v.note.channel {
                         continue;
                     }
-                    let Some(&from) = ending_by_channel.get(&w.note.channel) else { continue };
+                    let Some(&from) = self.ending_by_channel.get(&w.note.channel) else { continue };
                     let d = (w.cands[cj].pitch - from).signum();
                     if d > 0 {
                         up += 1;
@@ -1614,7 +887,7 @@ fn score_note_group_joint(
                     }
                 }
                 if (mv > 0 && up > down) || (mv < 0 && down > up) {
-                    soft -= config.same_direction;
+                    soft -= self.config.same_direction;
                 }
             }
         }
@@ -1633,35 +906,31 @@ fn score_note_group_joint(
                 }
             }
         }
-        if config.max_voices_changed >= 0 && movers > config.max_voices_changed {
-            hard += (movers - config.max_voices_changed) as u32;
+        if self.config.max_voices_changed >= 0 && movers > self.config.max_voices_changed {
+            hard += (movers - self.config.max_voices_changed) as u32;
         }
-        if config.min_voices_changed >= 0 && movers < config.min_voices_changed {
-            hard += (config.min_voices_changed - movers) as u32;
+        if self.config.min_voices_changed >= 0 && movers < self.config.min_voices_changed {
+            hard += (self.config.min_voices_changed - movers) as u32;
         }
-        if config.common_tone_penalty != 0.0 {
-            soft -= config.common_tone_penalty * common as f64;
+        if self.config.common_tone_penalty != 0.0 {
+            soft -= self.config.common_tone_penalty * common as f64;
         }
 
         (hard, soft)
-    };
+    }
 
-    let product = voices.iter()
-        .map(|v| v.cands.len())
-        .try_fold(1usize, |acc, l| acc.checked_mul(l))
-        .unwrap_or(usize::MAX);
-
-    let best: Option<(Vec<usize>, (u32, f64))> = if product <= JOINT_ENUM_CAP {
-        // Full enumeration — parallel over the first voice's candidates, odometer
-        // over the rest. Guaranteed optimum within the candidate window.
-        (0..voices[0].cands.len()).into_par_iter()
+    /// Exhaustive search over the candidate product — parallel across the first
+    /// voice's candidates, odometer over the rest. Optimal within the window.
+    fn enumerate(&self) -> Option<(Vec<usize>, (u32, f64))> {
+        let n = self.n;
+        (0..self.voices[0].cands.len()).into_par_iter()
             .map(|c0| {
                 let mut chosen = vec![0usize; n];
                 chosen[0] = c0;
                 let mut local_best: Option<(Vec<usize>, (u32, f64))> = None;
                 loop {
-                    let sc = eval_chord(&chosen);
-                    if local_best.as_ref().map_or(true, |b| better(sc, b.1)) {
+                    let sc = self.eval(&chosen);
+                    if local_best.as_ref().map_or(true, |b| chord_better(sc, b.1)) {
                         local_best = Some((chosen.clone(), sc));
                     }
                     // Advance the odometer over voices 1..n.
@@ -1671,7 +940,7 @@ fn score_note_group_joint(
                             return local_best;
                         }
                         chosen[pos] += 1;
-                        if chosen[pos] < voices[pos].cands.len() {
+                        if chosen[pos] < self.voices[pos].cands.len() {
                             break;
                         }
                         chosen[pos] = 0;
@@ -1680,47 +949,53 @@ fn score_note_group_joint(
                 }
             })
             .reduce(|| None, |a, b| match (a, b) {
-                (Some(x), Some(y)) => Some(if better(x.1, y.1) { x } else { y }),
+                (Some(x), Some(y)) => Some(if chord_better(x.1, y.1) { x } else { y }),
                 (x, None) => x,
                 (None, y) => y,
             })
-    } else {
-        // Within-chord beam, bass first. Partial states are ranked by running
-        // (violations, pair-sum + base) — survivors get the exact chord score.
+    }
+
+    /// Bass-first within-chord beam for groups whose candidate product exceeds
+    /// `JOINT_ENUM_CAP`. Partial states are ranked by running
+    /// `(violations, partial soft)`; survivors get the exact chord score.
+    fn beam_search(&self) -> Option<(Vec<usize>, (u32, f64))> {
+        let n = self.n;
+        let t = self.table;
+        let m = t.m;
         let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by_key(|&i| std::cmp::Reverse(voices[i].note.channel));
+        order.sort_by_key(|&i| std::cmp::Reverse(self.voices[i].note.channel));
 
         let mut states: Vec<(Vec<usize>, u32, f64)> = vec![(Vec::new(), 0, 0.0)];
         for &vi in &order {
             let mut next: Vec<(Vec<usize>, u32, f64)> =
-                Vec::with_capacity(states.len() * voices[vi].cands.len());
+                Vec::with_capacity(states.len() * self.voices[vi].cands.len());
             for (part, hard, soft) in &states {
-                for (ci, cand) in voices[vi].cands.iter().enumerate() {
+                for (ci, cand) in self.voices[vi].cands.iter().enumerate() {
                     let mut h = *hard;
                     let mut s = *soft + cand.soft_base + cand.nonlead_term;
-                    let ii = idx_of[&cand.pitch];
+                    let ii = t.idx_of[&cand.pitch];
                     for (pos, &cj) in part.iter().enumerate() {
-                        let pj = voices[order[pos]].cands[cj].pitch;
+                        let pj = self.voices[order[pos]].cands[cj].pitch;
                         if pj == cand.pitch {
                             h += 1;
                             continue;
                         }
-                        let k = ii * m + idx_of[&pj];
-                        if pair_forbidden[k] {
+                        let k = ii * m + t.idx_of[&pj];
+                        if t.forbidden[k] {
                             h += 1;
                         }
-                        s += pair_soft[k];
+                        s += t.soft[k];
                     }
-                    for &sj in &sustaining_idx {
-                        if pitches[sj] == cand.pitch {
+                    for &sj in &t.sustaining_idx {
+                        if t.pitches[sj] == cand.pitch {
                             h += 1;
                             continue;
                         }
                         let k = ii * m + sj;
-                        if pair_forbidden[k] {
+                        if t.forbidden[k] {
                             h += 1;
                         }
-                        s += pair_soft[k];
+                        s += t.soft[k];
                     }
                     let mut cp = part.clone();
                     cp.push(ci);
@@ -1739,20 +1014,71 @@ fn score_note_group_joint(
                 for (pos, &ci) in part.iter().enumerate() {
                     chosen[order[pos]] = ci;
                 }
-                let sc = eval_chord(&chosen);
+                let sc = self.eval(&chosen);
                 (chosen, sc)
             })
             .fold(None, |acc: Option<(Vec<usize>, (u32, f64))>, x| {
                 match acc {
-                    Some(a) if better(a.1, x.1) => Some(a),
+                    Some(a) if chord_better(a.1, x.1) => Some(a),
                     _ => Some(x),
                 }
             })
+    }
+}
+
+/// Score one rhythmic group: build each voice's candidate set, then search the
+/// joint candidate space for the chord with the fewest hard violations and the
+/// best soft score. The chosen pitches (one per input note) are appended to
+/// `temp_group_notes`; the return value is the group's soft score net of the
+/// hard-violation penalty.
+fn score_group(
+    group: &[Note],
+    temp_group_notes: &mut Vec<Note>,
+    config: &Config,
+    state: &HarmonizerState,
+    precomputed: &PrecomputedHarmonyData,
+) -> f64 {
+    if group.is_empty() {
+        return 0.0;
+    }
+
+    let (w_harmony, w_smooth, harmony_ctx) = group_weights(group[0].start, config, state);
+    let row = get_harmony_row(harmony_ctx, state.harmony_matrix.as_ref());
+
+    let voices = build_joint_voices(group, w_smooth, config, state, precomputed);
+    let n = voices.len();
+    let table = PairTable::build(&voices, precomputed, &row);
+
+    let ending_by_channel: HashMap<i32, i32> = precomputed.notes_ending_at_start.iter()
+        .map(|nn| (nn.channel, nn.pitch))
+        .collect();
+    let check_dir = !ending_by_channel.is_empty() && config.same_direction != 0.0;
+
+    let scorer = ChordScorer {
+        voices: &voices,
+        n,
+        table: &table,
+        sustaining_notes: &precomputed.sustaining_notes,
+        ending_by_channel: &ending_by_channel,
+        check_dir,
+        w_harmony,
+        config,
+    };
+
+    let product = voices.iter()
+        .map(|v| v.cands.len())
+        .try_fold(1usize, |acc, l| acc.checked_mul(l))
+        .unwrap_or(usize::MAX);
+
+    let best = if product <= JOINT_ENUM_CAP {
+        scorer.enumerate()
+    } else {
+        scorer.beam_search()
     };
 
     let Some((chosen, (hard, soft))) = best else {
         // No candidates at all — pass the group through unchanged.
-        for nn in current_notes_in {
+        for nn in group {
             let mut note = *nn;
             note.muted = 0;
             temp_group_notes.push(note);
@@ -1770,25 +1096,11 @@ fn score_note_group_joint(
     soft - hard as f64 * VIOLATION_PENALTY
 }
 
-/// Dispatch between legacy greedy-permutation scoring and joint chord scoring.
-fn score_group(
-    perm: &[Note],
-    temp_group_notes: &mut Vec<Note>,
-    no_same_note_penalty: bool,
-    config: &Config,
-    state: &HarmonizerState,
-    precomputed: &PrecomputedHarmonyData,
-) -> f64 {
-    if config.use_joint_scoring {
-        score_note_group_joint(perm, temp_group_notes, no_same_note_penalty, config, state, precomputed)
-    } else {
-        score_note_group(perm, temp_group_notes, no_same_note_penalty, config, state, precomputed)
-    }
-}
-
-
+/// Greedy look-ahead: score the remaining groups one at a time (each conditioned
+/// on the running context), memoized on a hash of `(group index, depth, recent
+/// context)`. Returns the summed soft score over the look-ahead horizon.
 fn score_lookahead(
-    all_permutations: &[Vec<Vec<Note>>],
+    groups: &[Vec<Note>],
     start_idx: usize,
     depth: i32,
     context: &[Note],
@@ -1796,7 +1108,7 @@ fn score_lookahead(
     state: &HarmonizerState,
     cache: &DashMap<u64, f64>,
 ) -> f64 {
-    if depth == 0 || start_idx >= all_permutations.len() {
+    if depth == 0 || start_idx >= groups.len() {
         return 0.0;
     }
 
@@ -1817,33 +1129,18 @@ fn score_lookahead(
         return *val;
     }
 
-    let permutations = &all_permutations[start_idx];
+    let group = &groups[start_idx];
+    let start_time = group[0].start;
+    let precomputed = build_precomputed_data(context, group, start_time);
 
-    let start_time = permutations[0][0].start;
-    let precomputed = build_precomputed_data(context, &permutations[0], start_time);
+    let mut temp_notes = Vec::new();
+    let local_score = score_group(group, &mut temp_notes, config, state, &precomputed);
 
-    let candidates: Vec<(f64, Vec<Note>)> = permutations.par_iter()
-        .map(|perm| {
-            let mut temp_notes = Vec::new();
-            let score = score_group(perm, &mut temp_notes, false, config, state, &precomputed);
-            (score, temp_notes)
-        })
-        .collect();
+    let mut next_context = context.to_vec();
+    next_context.extend(temp_notes);
 
-    let mut sorted_candidates = candidates;
-    sorted_candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    let k = 2;
-    let top_candidates: Vec<_> = sorted_candidates.into_iter().take(k).collect();
-
-    let best_score = top_candidates.par_iter()
-        .map(|(local_score, temp_notes)| {
-            let mut next_context = context.to_vec();
-            next_context.extend(temp_notes.iter().cloned());
-
-            *local_score + score_lookahead(all_permutations, start_idx + 1, depth - 1, &next_context, config, state, cache)
-        })
-        .reduce(|| -f64::INFINITY, |a, b| a.max(b));
+    let best_score = local_score
+        + score_lookahead(groups, start_idx + 1, depth - 1, &next_context, config, state, cache);
 
     cache.insert(key, best_score);
     best_score
@@ -1852,84 +1149,63 @@ fn score_lookahead(
 use std::sync::mpsc::Sender;
 
 fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState, progress_sender: Option<&Sender<(usize, usize)>>) -> Vec<Note> {
-    let grouped_notes = group_by_start_array(income);
-
-    let all_permutations: Vec<Vec<Vec<Note>>> = grouped_notes.par_iter()
-        .map(|g| {
-            if config.use_joint_scoring {
-                // Joint scoring evaluates complete chords (and the leader choice)
-                // in one call — orderings are meaningless, so one "perm" per group.
-                let mut p = g.clone();
-                p.sort_by_key(|n| n.channel);
-                vec![p]
-            } else {
-                get_permutations(g, config.use_leading_voice)
-            }
-        })
-        .collect();
-
-    let beam_width = 5;
+    // Each group's notes come back in channel order from group_by_start_array.
+    let groups = group_by_start_array(income);
     let lookahead = config.lookahead_depth;
 
     let mut beam = vec![BeamCandidate {
         notes: Vec::new(),
         actual_score: 0.0,
     }];
-    for (i, _) in grouped_notes.iter().enumerate() {
+    for (i, group) in groups.iter().enumerate() {
         if let Some(sender) = progress_sender {
-            let _ = sender.send((i, grouped_notes.len()));
+            let _ = sender.send((i, groups.len()));
         }
 
-        let permutations = &all_permutations[i];
-
         let cache: DashMap<u64, f64> = DashMap::new();
-        let all_permutations_ref = &all_permutations;
+        let groups_ref = &groups;
         let cache_ref = &cache;
-
         let current_beam = &beam;
 
         let mut candidates: Vec<IntermediateCandidate> = current_beam
             .par_iter()
             .enumerate()
-            .flat_map(|(parent_idx, beam_state)| {
-                let start_time = permutations[0][0].start;
-                // Trim the scoring context to a recent window (the old `start`
-                // variable computed a 30-note suffix but was never applied, so
-                // build_precomputed_data scanned the entire accumulated output).
-                // 32 beats comfortably covers the longest sustain (notes are
-                // clamped to one 4-beat bar) and the 5-note-per-channel history.
+            .map(|(parent_idx, beam_state)| {
+                let start_time = group[0].start;
+                // Trim the scoring context to a recent window. 32 beats comfortably
+                // covers the longest sustain (notes are clamped to one 4-beat bar)
+                // and the 5-note-per-channel history.
                 let cutoff = start_time - 32.0;
                 let begin = beam_state.notes.partition_point(|n| n.start < cutoff);
                 let trimmed_notes = &beam_state.notes[begin..];
 
-                let precomputed = build_precomputed_data(trimmed_notes, &permutations[0], start_time);
+                let precomputed = build_precomputed_data(trimmed_notes, group, start_time);
 
-                permutations.par_iter().map(move |perm| {
-                    let mut temp_notes = Vec::new();
-                    let group_score =
-                        score_group(perm, &mut temp_notes, false, config, state, &precomputed);
+                let mut temp_notes = Vec::new();
+                let group_score = score_group(group, &mut temp_notes, config, state, &precomputed);
 
-                    let mut next_context = trimmed_notes.to_vec();
-                    next_context.extend(temp_notes.clone());
+                let mut next_context = trimmed_notes.to_vec();
+                next_context.extend(temp_notes.iter().cloned());
 
-                    let lookahead_score = score_lookahead(
-                        all_permutations_ref, i + 1, lookahead, &next_context, config, state, cache_ref,
-                    );
+                let lookahead_score = score_lookahead(
+                    groups_ref, i + 1, lookahead, &next_context, config, state, cache_ref,
+                );
 
-                    let actual_score = beam_state.actual_score + group_score;
-                    IntermediateCandidate {
-                        parent_idx,
-                        added_notes: temp_notes,
-                        actual_score,
-                        rank_score: actual_score + lookahead_score,
-                    }
-                })
+                let actual_score = beam_state.actual_score + group_score;
+                IntermediateCandidate {
+                    parent_idx,
+                    added_notes: temp_notes,
+                    actual_score,
+                    rank_score: actual_score + lookahead_score,
+                }
             })
             .collect();
 
-        candidates.sort_by(|a, b| b.rank_score.partial_cmp(&a.rank_score).unwrap());
+        candidates.sort_by(|a, b| {
+            b.rank_score.partial_cmp(&a.rank_score).unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        beam = candidates.into_iter().take(beam_width).map(|c| {
+        beam = candidates.into_iter().take(BEAM_WIDTH).map(|c| {
             let mut new_notes = current_beam[c.parent_idx].notes.clone();
             new_notes.extend(c.added_notes);
             BeamCandidate {
@@ -1939,13 +1215,336 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
         }).collect();
     }
 
-    if beam.is_empty() {
-        return Vec::new();
-    }
-    //   println!("Final Score: {}", beam[0].score);
-    beam[0].notes.clone()
+    beam.first().map(|b| b.notes.clone()).unwrap_or_default()
 }
 
 pub fn harmonise2(income: Vec<Note>, config: &Config, state: &HarmonizerState, progress_sender: Option<&Sender<(usize, usize)>>) -> Vec<Note> {
     score_group_beam(income, config, state, progress_sender)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Config, Note};
+
+    fn approx(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    /// Minimal state with all optional contours/matrix unset — exercises the
+    /// scalar fall-back paths only.
+    fn test_state() -> HarmonizerState {
+        HarmonizerState {
+            schillinger_notes: vec![],
+            voice_contour: None,
+            contour_resolution: 4.0,
+            harmony_contour: None,
+            harmony_contour_resolution: 4.0,
+            harmony_matrix_contour: None,
+            harmony_matrix: None,
+            melody_force_contour: None,
+        }
+    }
+
+    /// Default config switched to the simple (non-Schillinger) candidate path so
+    /// tests don't need to populate `state.schillinger_notes`.
+    fn test_config() -> Config {
+        Config {
+            schillinger_progression: false,
+            use_leading_voice: false,
+            ..Config::default()
+        }
+    }
+
+    // ----- get_distance_score -----
+
+    #[test]
+    fn distance_score_unison_is_max() {
+        assert!(approx(get_distance_score(60, 60), 1.0));
+    }
+
+    #[test]
+    fn distance_score_fifth_is_zero() {
+        // dist 7 → 1 - 7/7 = 0
+        assert!(approx(get_distance_score(60, 67), 0.0));
+    }
+
+    #[test]
+    fn distance_score_large_leap_clamps_to_minus_one() {
+        assert!(approx(get_distance_score(60, 90), -1.0));
+    }
+
+    #[test]
+    fn distance_score_symmetric_and_monotonic() {
+        assert!(approx(get_distance_score(60, 67), get_distance_score(67, 60)));
+        assert!(get_distance_score(60, 61) > get_distance_score(60, 63));
+        assert!(get_distance_score(60, 63) > get_distance_score(60, 67));
+    }
+
+    // ----- melody_force_term -----
+
+    #[test]
+    fn melody_force_zero_weight_is_noop() {
+        assert_eq!(melody_force_term(60, &[60, 60, 60], 0.0), 0.0);
+    }
+
+    #[test]
+    fn melody_force_penalizes_immediate_repeat() {
+        // c == lasts[0], no stepwise reward (dist 0) → -1.0 * weight
+        assert!(approx(melody_force_term(60, &[60], 1.0), -1.0));
+    }
+
+    #[test]
+    fn melody_force_recency_decays_and_caps_at_five() {
+        // six repeats; only the first five count: -(1 + .8 + .6 + .4 + .2) = -3.0
+        let lasts = [60, 60, 60, 60, 60, 60];
+        assert!(approx(melody_force_term(60, &lasts, 1.0), -3.0));
+    }
+
+    #[test]
+    fn melody_force_rewards_stepwise_motion() {
+        assert!(approx(melody_force_term(61, &[60], 1.0), 0.25)); // step of 1
+        assert!(approx(melody_force_term(62, &[60], 1.0), 0.25)); // step of 2
+        assert!(approx(melody_force_term(63, &[60], 1.0), 0.0)); // leap of 3: neither
+    }
+
+    #[test]
+    fn melody_force_scales_with_weight() {
+        assert!(approx(melody_force_term(60, &[60], 2.0), -2.0));
+    }
+
+    // ----- pair_roughness -----
+
+    #[test]
+    fn roughness_unison_is_zero() {
+        assert_eq!(pair_roughness(60, 60), 0.0);
+    }
+
+    #[test]
+    fn roughness_symmetric_and_bounded() {
+        for &(a, b) in &[(60, 61), (48, 55), (36, 37), (72, 84)] {
+            let r = pair_roughness(a, b);
+            assert!((0.0..=1.0).contains(&r), "{r} out of range");
+            assert!(approx(pair_roughness(a, b), pair_roughness(b, a)));
+        }
+    }
+
+    #[test]
+    fn roughness_minor_second_rougher_than_fifth() {
+        assert!(pair_roughness(60, 61) > pair_roughness(60, 67));
+    }
+
+    #[test]
+    fn roughness_decays_with_spacing() {
+        // Same pitch class: a narrow minor 2nd is far rougher than a wide minor 9th.
+        assert!(pair_roughness(60, 61) > pair_roughness(60, 73));
+        assert!(pair_roughness(48, 49) > pair_roughness(48, 61));
+        // Beyond ~an octave the fundamentals barely interfere → roughness ≈ 0.
+        assert!(pair_roughness(60, 73) < 0.01);
+    }
+
+    // ----- get_harmony_row -----
+
+    #[test]
+    fn harmony_row_default_is_strict_classical() {
+        let row = get_harmony_row(0.0, None); // row 0 of HARMONY_MATRIX
+        assert!(approx(row.soft[0], 1.0)); // P1
+        assert!(approx(row.soft[7], 1.0)); // P5
+        assert!(row.forbidden[1]); // m2 (-100)
+        assert!(row.forbidden[6]); // tritone (-100)
+        assert!(!row.forbidden[0]);
+        // A forbidden cell contributes only -1 to the soft surface, not -100.
+        assert!(approx(row.soft[1], -1.0));
+    }
+
+    #[test]
+    fn harmony_row_clamps_context() {
+        let hi = get_harmony_row(100.0, None);
+        let cap = get_harmony_row(8.0, None);
+        assert_eq!(hi.soft, cap.soft);
+        assert_eq!(hi.forbidden, cap.forbidden);
+
+        let lo = get_harmony_row(-5.0, None);
+        let zero = get_harmony_row(0.0, None);
+        assert_eq!(lo.soft, zero.soft);
+    }
+
+    #[test]
+    fn harmony_row_custom_matrix_lerps() {
+        // row 0 all 0.0, row 1 all 1.0 → ctx 0.5 yields 0.5 everywhere.
+        let mut m = vec![vec![0.0; 12]; 9];
+        for v in m[1].iter_mut() {
+            *v = 1.0;
+        }
+        let row = get_harmony_row(0.5, Some(&m));
+        for i in 0..12 {
+            assert!(approx(row.soft[i], 0.5), "col {i} = {}", row.soft[i]);
+        }
+    }
+
+    #[test]
+    fn harmony_row_custom_forbidden_blend() {
+        // row 0 col 0 forbidden (-100), row 1 col 0 = 0.5.
+        let mut m = vec![vec![0.0; 12]; 9];
+        m[0][0] = -100.0;
+        m[1][0] = 0.5;
+        let row = get_harmony_row(0.5, Some(&m));
+        // t = 0.5: lo_forb && (1-t) >= 0.5 → forbidden.
+        assert!(row.forbidden[0]);
+        // soft = clamp(-100 → -1)*0.5 + 0.5*0.5 = -0.25.
+        assert!(approx(row.soft[0], -0.25));
+    }
+
+    #[test]
+    fn harmony_row_malformed_custom_falls_back_to_default() {
+        let bad = vec![vec![0.0; 11]; 9]; // 11 columns ≠ 12 → invalid
+        let row = get_harmony_row(0.0, Some(&bad));
+        let def = get_harmony_row(0.0, None);
+        assert_eq!(row.soft, def.soft);
+        assert_eq!(row.forbidden, def.forbidden);
+    }
+
+    // ----- build_precomputed_data -----
+
+    #[test]
+    fn precomputed_history_is_most_recent_first() {
+        let ctx = vec![
+            Note::new(60, 0.0, 1.0, 100, 0, 1),
+            Note::new(62, 1.0, 1.0, 100, 0, 1),
+            Note::new(64, 2.0, 1.0, 100, 0, 1),
+        ];
+        let group = vec![Note::new(65, 3.0, 1.0, 100, 0, 1)];
+        let pc = build_precomputed_data(&ctx, &group, 3.0);
+        assert_eq!(pc.last_notes_by_channel[1], vec![64, 62, 60]);
+    }
+
+    #[test]
+    fn precomputed_history_capped_at_five() {
+        let ctx: Vec<Note> = (0..8i32)
+            .map(|i| Note::new(60 + i, i as f64, 1.0, 100, 0, 1))
+            .collect();
+        let group = vec![Note::new(80, 8.0, 1.0, 100, 0, 1)];
+        let pc = build_precomputed_data(&ctx, &group, 8.0);
+        // Only the 5 most recent (starts 3..7, pitches 63..67), newest first.
+        assert_eq!(pc.last_notes_by_channel[1], vec![67, 66, 65, 64, 63]);
+    }
+
+    #[test]
+    fn precomputed_detects_sustaining_note() {
+        let ctx = vec![Note::new(48, 0.0, 4.0, 100, 0, 4)]; // spans t=2
+        let group = vec![Note::new(60, 2.0, 1.0, 100, 0, 0)];
+        let pc = build_precomputed_data(&ctx, &group, 2.0);
+        assert!(pc.sustaining_notes.contains(&48));
+    }
+
+    // ----- harmonise2 (end-to-end) -----
+
+    fn two_chord_input() -> Vec<Note> {
+        vec![
+            Note::new(48, 0.0, 4.0, 100, 0, 4),
+            Note::new(60, 0.0, 4.0, 100, 0, 0),
+            Note::new(48, 4.0, 4.0, 100, 0, 4),
+            Note::new(60, 4.0, 4.0, 100, 0, 0),
+        ]
+    }
+
+    #[test]
+    fn harmonise_empty_input_yields_empty_output() {
+        assert!(harmonise2(vec![], &test_config(), &test_state(), None).is_empty());
+    }
+
+    #[test]
+    fn harmonise_preserves_count_channels_and_starts() {
+        let input = two_chord_input();
+        let out = harmonise2(input.clone(), &test_config(), &test_state(), None);
+
+        assert_eq!(out.len(), input.len());
+        for n in &out {
+            assert_eq!(n.muted, 0);
+        }
+        // Each (channel, start) slot is preserved; only the pitch is reassigned.
+        let key = |n: &Note| (n.channel, (n.start * 1000.0).round() as i64);
+        let mut in_keys: Vec<_> = input.iter().map(key).collect();
+        let mut out_keys: Vec<_> = out.iter().map(key).collect();
+        in_keys.sort();
+        out_keys.sort();
+        assert_eq!(in_keys, out_keys);
+    }
+
+    #[test]
+    fn harmonise_first_chord_stays_within_candidate_range() {
+        let cfg = test_config(); // candidate_range = 3, no prior history
+        let input = vec![
+            Note::new(48, 0.0, 4.0, 100, 0, 4),
+            Note::new(60, 0.0, 4.0, 100, 0, 0),
+        ];
+        let out = harmonise2(input, &cfg, &test_state(), None);
+        for n in &out {
+            let base = if n.channel == 4 { 48 } else { 60 };
+            assert!(
+                (n.pitch - base).abs() <= cfg.candidate_range,
+                "ch{} pitch {} outside ±{} of {}",
+                n.channel,
+                n.pitch,
+                cfg.candidate_range,
+                base
+            );
+        }
+    }
+
+    #[test]
+    fn harmonise_is_deterministic() {
+        let cfg = test_config();
+        let input: Vec<Note> = (0..6i32)
+            .flat_map(|g| {
+                let s = g as f64 * 4.0;
+                [
+                    Note::new(48, s, 4.0, 100, 0, 4),
+                    Note::new(60, s, 4.0, 100, 0, 0),
+                ]
+            })
+            .collect();
+        let a: Vec<i32> = harmonise2(input.clone(), &cfg, &test_state(), None)
+            .iter()
+            .map(|n| n.pitch)
+            .collect();
+        let b: Vec<i32> = harmonise2(input, &cfg, &test_state(), None)
+            .iter()
+            .map(|n| n.pitch)
+            .collect();
+        assert_eq!(a, b);
+    }
+
+    fn pitch_by_channel(out: &[Note], start: f64) -> HashMap<i32, i32> {
+        out.iter()
+            .filter(|n| (n.start - start).abs() < 1e-6)
+            .map(|n| (n.channel, n.pitch))
+            .collect()
+    }
+
+    #[test]
+    fn budget_max_zero_forces_voices_to_hold() {
+        let mut cfg = test_config();
+        cfg.max_voices_changed = 0; // no voice may change pitch
+        cfg.min_voices_changed = -1;
+        let out = harmonise2(two_chord_input(), &cfg, &test_state(), None);
+        let g1 = pitch_by_channel(&out, 0.0);
+        let g2 = pitch_by_channel(&out, 4.0);
+        // Second chord holds the first chord's pitches in every voice.
+        assert_eq!(g1.get(&0), g2.get(&0));
+        assert_eq!(g1.get(&4), g2.get(&4));
+    }
+
+    #[test]
+    fn budget_min_overrides_hold_bias_and_forces_movement() {
+        let mut cfg = test_config();
+        cfg.min_voices_changed = 2; // both non-lead voices must move
+        cfg.max_voices_changed = -1;
+        cfg.same_note_bonus = 5.0; // strong stickiness the budget must override
+        let out = harmonise2(two_chord_input(), &cfg, &test_state(), None);
+        let g1 = pitch_by_channel(&out, 0.0);
+        let g2 = pitch_by_channel(&out, 4.0);
+        assert_ne!(g1.get(&0), g2.get(&0), "ch0 should have moved");
+        assert_ne!(g1.get(&4), g2.get(&4), "ch4 should have moved");
+    }
 }
