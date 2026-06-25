@@ -17,6 +17,18 @@ declare global {
   var mod: (x: number, n: number) => number;
 }
 
+console.log("var a = (i, n, s, v) => {\n" +
+    "var x = (i - s)% 8;\n" +
+    "if(n.indexOf(x) > -1){\n" +
+    " return v.get(i);\n" +
+    "}\n" +
+    " return 1;\n" +
+    "}\n" +
+    "\n" +
+    "range(5).map((n) => config.voice_rhythm_contour[n] = range(128).map(i=>a(i, [0,3], n, [[3,0.25,1,2,1], [0.5, 0.75,1,2,3], [1,2],[1,2],[1,2],[1,2]].get(n))));\n" +
+    "config.mode_contour = range(128).map(i=>(Math.floor(i/16)*4)%7);\n" +
+    "config.schillinger_sequence = range(128).map(i=>mod(i*-2,7));");
+
 (Number.prototype as any).mod = function (n: number) {
   "use strict";
   return ((this as number % n) + n) % n;
