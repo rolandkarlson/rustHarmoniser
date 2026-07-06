@@ -1,7 +1,58 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { ContourEditor } from './ContourEditor'
 import { saveSnapshot, listSnapshots, loadSnapshot, deleteSnapshot, renameSnapshot, toggleFavorite, type Snapshot } from './snapshots'
+import CodeMirror, { keymap, Prec, EditorView, type Extension } from '@uiw/react-codemirror'
+import { javascript } from '@codemirror/lang-javascript'
+import { oneDark } from '@codemirror/theme-one-dark'
 import './index.css'
+
+// Shared CodeMirror-based script editor. Used both docked at the bottom and
+// blown up to a fullscreen modal. `onRun` fires on ⌘/Ctrl+Enter.
+function ScriptEditor({
+  value,
+  onChange,
+  onRun,
+  height,
+  autoFocus,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onRun: () => void;
+  height: string;
+  autoFocus?: boolean;
+}) {
+  // Keep the latest onRun in a ref so the keymap closure never goes stale
+  // (extensions are memoised once and shouldn't be rebuilt on every keystroke).
+  const runRef = useRef(onRun);
+  runRef.current = onRun;
+  const extensions = useMemo<Extension[]>(() => [
+    javascript(),
+    EditorView.lineWrapping,
+    Prec.highest(keymap.of([
+      { key: 'Mod-Enter', preventDefault: true, run: () => { runRef.current(); return true; } },
+    ])),
+  ], []);
+  return (
+    <CodeMirror
+      value={value}
+      onChange={onChange}
+      height={height}
+      theme={oneDark}
+      extensions={extensions}
+      autoFocus={autoFocus}
+      basicSetup={{
+        lineNumbers: true,
+        highlightActiveLine: true,
+        bracketMatching: true,
+        closeBrackets: true,
+        autocompletion: true,
+        foldGutter: false,
+        highlightActiveLineGutter: true,
+      }}
+      className="text-sm rounded-lg overflow-hidden border border-slate-800 focus-within:border-cyan-500/50"
+    />
+  );
+}
 
 const MODE_NAMES = ['Ion', 'Dor', 'Phr', 'Lyd', 'Mix', 'Aeo', 'Loc'];
 
@@ -90,6 +141,7 @@ function App() {
   const [renameValue, setRenameValue] = useState('');
   const [broadcastVoices, setBroadcastVoices] = useState(false);
   const [showConsole, setShowConsole] = useState(false);
+  const [consoleFullscreen, setConsoleFullscreen] = useState(false);
   const [script, setScript] = useState<string>(() => localStorage.getItem('contourScript') || '');
   const [scriptMsg, setScriptMsg] = useState<{ text: string; error: boolean } | null>(null);
   const snapRef = useRef<HTMLDivElement>(null);
@@ -140,6 +192,14 @@ function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
+
+  // Close the fullscreen script editor on Escape.
+  useEffect(() => {
+    if (!consoleFullscreen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setConsoleFullscreen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [consoleFullscreen]);
 
   // Broadcast-to-all-voices modifier (hold Shift while editing a per-voice contour)
   useEffect(() => {

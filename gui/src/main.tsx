@@ -34,6 +34,15 @@ console.log("var a = (i, n, s, v) => {\n" +
   return ((this as number % n) + n) % n;
 };
 
+(Number.prototype as any).step = function (n: number) {
+  "use strict";
+  return Math.floor((this as number / n)) ;
+};
+(Number.prototype as any).a = function (n: ()=>{}) {
+  "use strict";
+  return n(this) ;
+};
+
 (Array.prototype as any).get = function (i: number) {
   "use strict";
   const len = this.length;
