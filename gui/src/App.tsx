@@ -49,7 +49,7 @@ function ScriptEditor({
         foldGutter: false,
         highlightActiveLineGutter: true,
       }}
-      className="text-sm rounded-lg overflow-hidden border border-slate-800 focus-within:border-cyan-500/50"
+      className="h-full text-sm rounded-lg overflow-hidden border border-slate-800 focus-within:border-cyan-500/50"
     />
   );
 }
@@ -96,6 +96,20 @@ const DEFAULT_HARMONY_MATRIX: number[][] = [
   [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
 ];
 
+// Seed pitches for the 5 generated voices (high → low; voice 0 = leading).
+// Mirrors DEFAULT_START_NOTES in src/model.rs.
+const DEFAULT_START_NOTES = [70, 65, 60, 50, 34];
+
+// MIDI number → note name (e.g. 60 → "C3"). Middle C (60) = C3 here, matching
+// Ableton's octave numbering.
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+function midiName(n: number): string {
+  if (!Number.isFinite(n)) return '—';
+  const p = ((Math.round(n) % 12) + 12) % 12;
+  const oct = Math.floor(Math.round(n) / 12) - 2;
+  return `${NOTE_NAMES[p]}${oct}`;
+}
+
 // Text input for numeric config values. Keeps the raw typed string while editing
 // (so intermediate states like "-", "." and "1." are allowed) and only commits a
 // finite parsed number — never writes NaN. Syncs to the external value on blur.
@@ -136,6 +150,11 @@ function App() {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [showMatrix, setShowMatrix] = useState(false);
+  const [showStartNotes, setShowStartNotes] = useState(false);
+  const [snTrack, setSnTrack] = useState(0);
+  const [snClip, setSnClip] = useState(0);
+  const [fetchingChord, setFetchingChord] = useState(false);
+  const [chordMsg, setChordMsg] = useState<{ text: string; error: boolean } | null>(null);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -368,6 +387,54 @@ function App() {
 
   const resetMatrix = () => {
     updateConfig('harmony_matrix', DEFAULT_HARMONY_MATRIX.map(r => [...r]));
+  };
+
+  // Start notes — the 5 seed pitches (high → low) for the generated voices.
+  // Always normalised to exactly 5 slots, filling gaps from the defaults.
+  const getStartNotes = (): number[] => {
+    const s = config?.start_notes;
+    return Array.from({ length: 5 }, (_, i) =>
+      Array.isArray(s) && Number.isFinite(s[i]) ? s[i] : DEFAULT_START_NOTES[i]
+    );
+  };
+
+  const updateStartNote = (i: number, v: number) => {
+    const s = getStartNotes();
+    s[i] = Number.isFinite(v) ? Math.round(v) : DEFAULT_START_NOTES[i];
+    updateConfig('start_notes', s);
+  };
+
+  const resetStartNotes = () => {
+    updateConfig('start_notes', [...DEFAULT_START_NOTES]);
+    setChordMsg(null);
+  };
+
+  // Fetch the last chord of an Ableton clip and drop its pitches (high → low)
+  // into the start-note slots — the "gen a phrase, seed the next one from the
+  // resolving chord" loop. Fewer pitches than slots leaves the rest untouched.
+  const fetchLastChord = async () => {
+    setFetchingChord(true);
+    setChordMsg(null);
+    try {
+      const res = await fetch(`http://127.0.0.1:3000/api/last-chord/${snTrack}/${snClip}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+      const notes: number[] = Array.isArray(data.notes) ? data.notes : [];
+      if (notes.length === 0) {
+        setChordMsg({ text: 'Clip has no notes', error: true });
+        return;
+      }
+      const s = getStartNotes();
+      for (let i = 0; i < 5 && i < notes.length; i++) s[i] = Math.round(notes[i]);
+      updateConfig('start_notes', s);
+      setChordMsg({
+        text: `Loaded ${Math.min(notes.length, 5)} note(s): ${notes.slice(0, 5).map(midiName).join(' ')}`,
+        error: false,
+      });
+    } catch (err: any) {
+      setChordMsg({ text: `Fetch failed: ${err.message || err}`, error: true });
+    }
+    setFetchingChord(false);
   };
 
   const handleDuplicate = () => {
@@ -1242,6 +1309,13 @@ function App() {
             >
               H. Matrix
             </button>
+            <button
+              onClick={() => setShowStartNotes(true)}
+              title="Set the 5 starting seed notes for the generated voices, or fetch them from the last chord of an Ableton clip"
+              className="px-4 py-2 bg-teal-700 hover:bg-teal-600 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Start Notes
+            </button>
             <div className="relative" ref={snapRef}>
               <button
                 onClick={() => setShowSnapshots(!showSnapshots)}
@@ -1412,25 +1486,24 @@ function App() {
           >
             {showConsole ? '▾' : '▸'} ⌨ Script Console
           </button>
-          {scriptMsg && (
-            <span className={`text-xs font-mono ${scriptMsg.error ? 'text-rose-400' : 'text-emerald-400'}`}>
-              {scriptMsg.text}
-            </span>
-          )}
+          <div className="flex items-center gap-3">
+            {scriptMsg && (
+              <span className={`text-xs font-mono ${scriptMsg.error ? 'text-rose-400' : 'text-emerald-400'}`}>
+                {scriptMsg.text}
+              </span>
+            )}
+            <button
+              onClick={() => { setShowConsole(true); setConsoleFullscreen(true); }}
+              className="text-xs font-mono text-slate-400 hover:text-cyan-400 transition-colors border border-slate-700 hover:border-cyan-500/50 rounded px-2 py-0.5"
+              title="Open the full-screen code editor"
+            >
+              ⛶ Full screen
+            </button>
+          </div>
         </div>
         {showConsole && (
           <div className="px-4 pb-3 flex flex-col gap-2">
-            <textarea
-              value={script}
-              onChange={(e) => setScript(e.target.value)}
-              onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); runScript(script); }
-              }}
-              spellCheck={false}
-              rows={5}
-              placeholder={'// config = live config (mutable)   $ = current tab+voice contour\n// helpers: range(n), clamp(x,lo,hi), lerp(a,b,t), steps, voice, res\nconfig.melody_force_contour[3] = range(128).map(i => i%11===0 ? 1 : 0)\n$ = range(steps).map(i => i%11===0 ? 1 : 0)'}
-              className="w-full font-mono text-xs bg-slate-950 border border-slate-800 rounded-lg p-3 text-slate-200 resize-y focus:outline-none focus:border-cyan-500/50 placeholder:text-slate-600"
-            />
+            <ScriptEditor value={script} onChange={setScript} onRun={() => runScript(script)} height="160px" />
             <div className="flex items-center gap-3">
               <button
                 onClick={() => runScript(script)}
@@ -1446,6 +1519,47 @@ function App() {
           </div>
         )}
       </div>
+
+      {/* Full-screen Script Editor */}
+      {consoleFullscreen && (
+        <div className="fixed inset-0 z-[110] bg-slate-950 flex flex-col">
+          <div className="flex items-center justify-between gap-4 px-5 py-3 border-b border-slate-800 bg-slate-900 shrink-0">
+            <div className="flex items-baseline gap-3">
+              <h2 className="text-lg font-bold text-cyan-300">⌨ Script Editor</h2>
+              <span className="text-xs text-slate-500 font-mono">
+                Targeting <span className="text-cyan-400">{CONTOUR_FIELDS[activeTab]?.field ?? '—'}</span>
+                {CONTOUR_FIELDS[activeTab]?.perVoice && <span className="text-cyan-400">[{selectedVoice}]</span>} for <span className="text-cyan-400">$</span>
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              {scriptMsg && (
+                <span className={`text-xs font-mono ${scriptMsg.error ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  {scriptMsg.text}
+                </span>
+              )}
+              <button
+                onClick={() => runScript(script)}
+                className="px-4 py-1.5 text-sm rounded-lg bg-cyan-600 text-slate-950 font-medium hover:bg-cyan-500 transition-colors"
+              >
+                Run <span className="opacity-60 text-xs">⌘↵</span>
+              </button>
+              <button
+                onClick={() => setConsoleFullscreen(false)}
+                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-bold rounded-lg transition-all active:scale-95"
+                title="Close (Esc)"
+              >
+                Close <span className="opacity-60 text-xs">Esc</span>
+              </button>
+            </div>
+          </div>
+          <div className="flex-1 min-h-0 overflow-hidden p-4">
+            <ScriptEditor value={script} onChange={setScript} onRun={() => runScript(script)} height="100%" autoFocus />
+          </div>
+          <div className="shrink-0 px-5 py-2 border-t border-slate-800 bg-slate-900 text-xs text-slate-500 font-mono">
+            <span className="text-slate-400">config</span> = live config (mutable) &nbsp;·&nbsp; <span className="text-slate-400">$</span> = current tab+voice contour &nbsp;·&nbsp; helpers: <span className="text-slate-400">range(n), clamp(x,lo,hi), lerp(a,b,t), steps, voice, res</span>
+          </div>
+        </div>
+      )}
 
       {/* Harmony Scoring Matrix Editor Modal */}
       {showMatrix && (
@@ -1507,6 +1621,91 @@ function App() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Start Notes Editor Modal */}
+      {showStartNotes && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-6"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setShowStartNotes(false); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-[440px] max-w-[95vw] max-h-[90vh] overflow-auto">
+            <div className="flex items-center justify-between gap-4 px-5 py-3 border-b border-slate-800">
+              <div>
+                <h2 className="text-lg font-bold text-teal-300">Start Notes</h2>
+                <p className="text-xs text-slate-500">Seed pitch for each of the 5 voices (high → low). Voice 0 is the leading voice.</p>
+              </div>
+              <div className="flex gap-2 items-center">
+                <button
+                  onClick={resetStartNotes}
+                  title="Restore the default seed pitches (70 65 60 50 34)"
+                  className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-bold rounded-lg transition-all active:scale-95"
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={() => setShowStartNotes(false)}
+                  className="px-3 py-1.5 bg-teal-700 hover:bg-teal-600 text-slate-100 text-sm font-bold rounded-lg transition-all active:scale-95"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="space-y-2">
+                {getStartNotes().map((n, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <span className="text-xs uppercase tracking-wider text-slate-500 w-16">
+                      Voice {i}{i === 0 ? ' *' : ''}
+                    </span>
+                    <NumberField
+                      integer
+                      value={n}
+                      onChange={(v) => updateStartNote(i, v)}
+                      className="w-20 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-sm text-right font-mono text-teal-300 outline-none focus:border-teal-500"
+                    />
+                    <span className="text-sm font-mono text-slate-400 w-12">{midiName(n)}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="border-t border-slate-800 pt-4">
+                <p className="text-xs uppercase tracking-wider text-slate-500 mb-2">Fetch last chord from Ableton clip</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-slate-500">Track</span>
+                  <NumberField
+                    integer
+                    value={snTrack}
+                    onChange={setSnTrack}
+                    title="Ableton track index"
+                    className="w-14 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-sm text-right font-mono outline-none focus:border-teal-500"
+                  />
+                  <span className="text-xs text-slate-500">Clip</span>
+                  <NumberField
+                    integer
+                    value={snClip}
+                    onChange={setSnClip}
+                    title="Ableton clip slot index"
+                    className="w-14 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-sm text-right font-mono outline-none focus:border-teal-500"
+                  />
+                  <button
+                    onClick={fetchLastChord}
+                    disabled={fetchingChord}
+                    title="Read the clip, take the pitches of its final chord (high → low), and load them into the slots above"
+                    className="px-3 py-1.5 bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 text-slate-100 text-sm font-bold rounded-lg transition-all active:scale-95"
+                  >
+                    {fetchingChord ? 'Fetching…' : 'Fetch last chord'}
+                  </button>
+                </div>
+                {chordMsg && (
+                  <p className={`mt-2 text-xs font-mono ${chordMsg.error ? 'text-rose-400' : 'text-emerald-400'}`}>
+                    {chordMsg.text}
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         </div>

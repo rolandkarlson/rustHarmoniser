@@ -85,28 +85,35 @@ pub fn run_generation_with_leading(
     
     let mut income = Vec::new();
 
+    // Starting/seed pitch per voice (high → low). Configurable via the GUI
+    // "Start Notes" modal; falls back per index to the historical defaults.
+    let start = |voice: usize| -> i32 {
+        config
+            .start_notes
+            .get(voice)
+            .copied()
+            .unwrap_or(model::DEFAULT_START_NOTES[voice])
+    };
 
-
-    
     if config.use_leading_voice {
         if let Some((pattern, source_len)) = leading.as_ref() {
             if !pattern.is_empty() {
                 income.extend(gen_voice_from_notes(pattern, *source_len, &config));
             } else {
-                income.extend(gen_voice(70, &config.voice_rhythm, &[0], 0, 1, &config));
+                income.extend(gen_voice(start(0), &config.voice_rhythm, &[0], 0, 1, &config));
             }
         } else {
-            income.extend(gen_voice(70, &config.voice_rhythm, &[0], 0, 1, &config));
+            income.extend(gen_voice(start(0), &config.voice_rhythm, &[0], 0, 1, &config));
         }
     } else {
-        income.extend(gen_voice(70, &config.voice_rhythm, &[0], 0, 1, &config));
+        income.extend(gen_voice(start(0), &config.voice_rhythm, &[0], 0, 1, &config));
     }
-    income.extend(gen_voice(65, &config.voice_rhythm, &[0], 1, 1, &config));
-    income.extend(gen_voice(60, &config.voice_rhythm, &[0], 2, 1, &config));
+    income.extend(gen_voice(start(1), &config.voice_rhythm, &[0], 1, 1, &config));
+    income.extend(gen_voice(start(2), &config.voice_rhythm, &[0], 2, 1, &config));
 
 
-    income.extend(gen_voice(50, &config.voice_rhythm, &[0], 3, 1, &config));
-    income.extend(gen_voice(34, &config.voice_rhythm, &[0], 4, 1, &config));
+    income.extend(gen_voice(start(3), &config.voice_rhythm, &[0], 3, 1, &config));
+    income.extend(gen_voice(start(4), &config.voice_rhythm, &[0], 4, 1, &config));
 
     // Sort income by start time then pitch
     income.sort_by(|a, b| {

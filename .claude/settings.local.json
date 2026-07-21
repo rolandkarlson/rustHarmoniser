@@ -33,7 +33,13 @@
       "Bash(command -v graphify)",
       "Bash(cargo test *)",
       "Bash(python3 /private/tmp/claude-501/-Users-roland-RustroverProjects-rustHarmoniser/be1296a0-e570-4379-8868-d9cb729f4101/scratchpad/rough.py)",
-      "Bash(cd *)"
+      "Bash(cd *)",
+      "Read(//Applications/**)",
+      "Read(//Users/roland/Music/Ableton/User Library/**)",
+      "Bash(git -C /Users/roland/RustroverProjects/rustHarmoniser log --oneline --all -i --grep=\"voice mode\")",
+      "Bash(git -C /Users/roland/RustroverProjects/rustHarmoniser log --oneline --all -i --grep=\"voice\")",
+      "Bash(git -C /Users/roland/RustroverProjects/rustHarmoniser show 51574f5:src/harmonizer.rs)",
+      "Bash(git -C /Users/roland/RustroverProjects/rustHarmoniser diff 51574f5 -- src/harmonizer.rs)"
     ]
   }
 }

@@ -61,6 +61,12 @@ const AGG_BASS: f64 = 0.25;
 // Candidate-generation register limits (MIDI pitch).
 const PITCH_MIN: i32 = 24; // search-window floor for the simple candidate path
 const PITCH_MAX: i32 = 96; // search-window ceiling for the simple candidate path
+
+// Soft penalty on holding a pitch that is outside the current candidate scale
+// (Schillinger mode). Sized to beat the max smoothness edge a hold can have
+// (distance score 1.0) so off-scale holds lose unless the voice-change budget
+// forces them.
+const OFF_SCALE_HOLD_PENALTY: f64 = 2.0;
 const DEFAULT_BOUND_MIN: i32 = 24; // register floor when no voice below constrains
 const DEFAULT_BOUND_MAX: i32 = 90; // register ceiling when no voice above constrains
 // Per-channel crossing buffers (soprano→bass): how many semitones a candidate must
@@ -222,6 +228,10 @@ fn get_modular_bound(n: i32, anchors: &[i32], m: i32, mode: BoundMode) -> i32 {
     }
 }
 
+/// Tintinnabuli bound (legacy semantics from the sequential scorer): each lower
+/// voice is confined to the anchor pitch class nearest above (Ceiling) / below
+/// (Floor) the lead's pitch offset by `i - 1` semitones (i = channel). The lead
+/// itself must be given an empty `current_lasts_lead` so it stays free.
 fn apply_bound(notes: Vec<i32>, anchors: &[i32], config: &Config, current_lasts_lead: Vec<i32>, i: i32) -> Vec<i32> {
     if !config.use_ceiling && !config.use_floor { return notes; }
     if current_lasts_lead.is_empty() || anchors.is_empty() { return notes; }
@@ -540,11 +550,16 @@ fn build_joint_voices(
     state: &HarmonizerState,
     precomputed: &PrecomputedHarmonyData,
 ) -> Vec<JointVoice> {
-    // The group's lead pitch (fixed by the melody) anchors Schillinger bounds.
+    // The lead pitch anchoring the ceil/floor tintinnabuli bounds: the melody
+    // pitch when the lead is fixed, otherwise the lead's most recent HARMONIZED
+    // pitch (the legacy sequential scorer bound lower voices to the lead note
+    // placed in the same chord — the raw input lead pitch is a constant seed, so
+    // anchoring to it would freeze every lower voice on one pitch class).
     let lead_fixed: Option<i32> = group.iter()
         .find(|n| n.channel == 0 && config.use_leading_voice)
         .map(|n| fixed_lead_pitch(n, state, config));
     let lead_for_bounds: Vec<i32> = lead_fixed
+        .or_else(|| precomputed.last_notes_by_channel.first().and_then(|v| v.first()).copied())
         .or(precomputed.lead_pitch)
         .map(|p| vec![p])
         .unwrap_or_default();
@@ -585,7 +600,10 @@ fn build_joint_voices(
 
         let range = config.candidate_range.max(1);
         let mut candidates: Vec<i32> = if config.schillinger_progression {
-            let sch_scale = get_schillinger_scale(note, state, config, lead_for_bounds.clone());
+            // The lead voice is never bound to itself (legacy: its lead-anchor
+            // list was empty), so ceil/floor confines only the lower voices.
+            let bounds_lead = if note.channel == 0 { Vec::new() } else { lead_for_bounds.clone() };
+            let sch_scale = get_schillinger_scale(note, state, config, bounds_lead);
             let center_octave = (last_note as f64 / 12.0).floor() as i32;
             gen_scale(&sch_scale, center_octave)
         } else {
@@ -595,9 +613,12 @@ fn build_joint_voices(
             candidates.push(note.pitch);
         }
         // Always offer the hold (common tone), even when the previous pitch has
-        // left the current scale — the stickiness bonus and the voice-change
-        // budget need the hold option to exist to act on this voice.
-        if !candidates.contains(&last_note) {
+        // left the current scale — the voice-change budget needs the hold option
+        // to exist to act on this voice. But an off-scale hold is second-class:
+        // it gets no stickiness bonus and takes a fixed penalty, so it only
+        // survives when the budget genuinely forces this voice to hold.
+        let off_scale_hold = !candidates.contains(&last_note);
+        if off_scale_hold {
             candidates.push(last_note);
         }
 
@@ -626,6 +647,9 @@ fn build_joint_voices(
         let cands = candidates.into_iter().map(|c| {
             let mut soft_base = get_distance_score(last_note, c) * w_smooth;
             soft_base += melody_force_term(c, &current_lasts, eff_melody_force);
+            if c == last_note && off_scale_hold {
+                soft_base -= OFF_SCALE_HOLD_PENALTY;
+            }
 
             if config.voice_contour_weight != 0.0 {
                 let base_dist = if use_contour {
@@ -654,7 +678,7 @@ fn build_joint_voices(
             }
             let nonlead_term = if stagnant {
                 lead_term
-            } else if c == last_note {
+            } else if c == last_note && !off_scale_hold {
                 config.same_note_bonus
             } else {
                 0.0
@@ -1256,6 +1280,17 @@ mod tests {
         }
     }
 
+    // ----- get_modular_bound (tintinnabuli bound, legacy semantics) -----
+
+    #[test]
+    fn modular_bound_snaps_to_nearest_anchor() {
+        let anchors = [0, 4, 7];
+        assert_eq!(get_modular_bound(60, &anchors, 12, BoundMode::Ceiling), 4); // strictly above
+        assert_eq!(get_modular_bound(62, &anchors, 12, BoundMode::Ceiling), 4);
+        assert_eq!(get_modular_bound(62, &anchors, 12, BoundMode::Floor), 0);
+        assert_eq!(get_modular_bound(60, &anchors, 12, BoundMode::Floor), 7); // wraps below
+    }
+
     // ----- get_distance_score -----
 
     #[test]
@@ -1533,6 +1568,45 @@ mod tests {
         // Second chord holds the first chord's pitches in every voice.
         assert_eq!(g1.get(&0), g2.get(&0));
         assert_eq!(g1.get(&4), g2.get(&4));
+    }
+
+    #[test]
+    fn schillinger_off_scale_input_snaps_to_scale() {
+        // The GUI "all penalties zero" scenario: with every penalty at 0 and the
+        // default same_note_bonus, non-leader voices must not hold their
+        // off-scale initial pitches — every output note belongs to the scale.
+        let mut cfg = test_config();
+        cfg.schillinger_progression = true;
+        cfg.last_note_same = 0.0;
+        cfg.last_note_exist_in_voice = 0.0;
+        cfg.same_direction = 0.0;
+        cfg.interval_exists_in_harmony = 0.0;
+        cfg.no_crossing = 0.0;
+        cfg.common_tone_penalty = 0.0;
+        cfg.melody_force = 0.0;
+        cfg.voice_contour_weight = 0.0;
+        let mut state = test_state();
+        // One scale entry (used by every channel), one bar, C-major triad.
+        state.schillinger_notes = vec![vec![vec![0, 4, 7]]];
+        // Off-scale inputs (C#4, C#3) held across two chords: the leader moves
+        // (min_voices_changed = 1) but the non-leader must not keep its
+        // off-scale common tone just because of the stickiness bonus.
+        let input = vec![
+            Note::new(61, 0.0, 4.0, 100, 0, 0),
+            Note::new(49, 0.0, 4.0, 100, 0, 4),
+            Note::new(61, 4.0, 4.0, 100, 0, 0),
+            Note::new(49, 4.0, 4.0, 100, 0, 4),
+        ];
+        let out = harmonise2(input, &cfg, &state, None);
+        for n in &out {
+            assert!(
+                [0, 4, 7].contains(&(n.pitch.rem_euclid(12))),
+                "pitch {} at start {} (ch {}) is not on the Schillinger scale",
+                n.pitch,
+                n.start,
+                n.channel
+            );
+        }
     }
 
     #[test]

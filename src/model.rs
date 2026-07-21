@@ -113,8 +113,16 @@ pub struct Config {
     /// gets a small reward. 0 = off; 1.0 ≈ the magnitude of the other ±1 terms.
     #[serde(default)]
     pub melody_force: f64,
+    /// Starting/seed pitches for the 5 generated voices (high → low). Voice 0 is
+    /// the leading voice. Editable in the GUI "Start Notes" modal, or fetched from
+    /// the last chord of an Ableton clip. Missing/short → falls back per index to
+    /// the historical defaults [70, 65, 60, 50, 34].
+    #[serde(default = "default_start_notes")]
+    pub start_notes: Vec<i32>,
 }
 
+pub const DEFAULT_START_NOTES: [i32; 5] = [70, 65, 60, 50, 34];
+fn default_start_notes() -> Vec<i32> { DEFAULT_START_NOTES.to_vec() }
 fn default_leading_clip() -> i32 { 1 }
 fn default_neg_one() -> i32 { -1 }
 fn default_same_note_bonus() -> f64 { 2.0 }
@@ -170,6 +178,7 @@ impl Default for Config {
             voice_contour_weight: 1.0,
             candidate_range: 3,
             melody_force: 0.0,
+            start_notes: default_start_notes(),
         }
     }
 }

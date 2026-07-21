@@ -1,5 +1,10 @@
 const STORAGE_KEY = 'harmoniser_snapshots';
 
+// Snapshots hold full configs (large per-voice contour arrays), so they eat
+// localStorage fast. Cap the number of auto-saved (non-favorite) entries;
+// favorites are never counted against the cap and never auto-evicted.
+const MAX_AUTO_SNAPSHOTS = 40;
+
 export interface Snapshot {
   id: string;
   name: string;
@@ -18,8 +23,41 @@ function readAll(): Snapshot[] {
   }
 }
 
+// Keep all favorites plus the newest MAX_AUTO_SNAPSHOTS non-favorites.
+// Input is expected newest-first, so this drops the oldest auto-saves.
+function enforceCap(all: Snapshot[]): Snapshot[] {
+  let kept = 0;
+  return all.filter(s => {
+    if (s.favorite) return true;
+    kept++;
+    return kept <= MAX_AUTO_SNAPSHOTS;
+  });
+}
+
+function tryPersist(snapshots: Snapshot[]): boolean {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshots));
+    return true;
+  } catch {
+    return false; // QuotaExceededError (or storage disabled)
+  }
+}
+
+// Persist, degrading gracefully on quota errors: evict the oldest non-favorite
+// snapshot and retry until it fits or only favorites remain. Never throws.
 function writeAll(snapshots: Snapshot[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshots));
+  let list = snapshots;
+  if (tryPersist(list)) return;
+  while (true) {
+    // Oldest non-favorite (list is newest-first, so scan from the end).
+    let dropAt = -1;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (!list[i].favorite) { dropAt = i; break; }
+    }
+    if (dropAt === -1) return; // only favorites left; nothing more we can shed
+    list = list.filter((_, i) => i !== dropAt);
+    if (tryPersist(list)) return;
+  }
 }
 
 export function saveSnapshot(config: any): Snapshot {
@@ -36,7 +74,7 @@ export function saveSnapshot(config: any): Snapshot {
   };
   const all = readAll();
   all.unshift(snap);
-  writeAll(all);
+  writeAll(enforceCap(all));
   return snap;
 }
 

@@ -19,6 +19,7 @@ pub async fn start_server() {
         .route("/api/config", get(get_config))
         .route("/api/generate", post(generate_music))
         .route("/api/clip-notes/:track/:clip", get(get_clip_notes))
+        .route("/api/last-chord/:track/:clip", get(get_last_chord))
         .layer(cors);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -40,6 +41,17 @@ async fn get_config() -> impl IntoResponse {
 async fn get_clip_notes(Path((track, clip)): Path<(i32, i32)>) -> impl IntoResponse {
     match ableton::get_clip_notes(track, clip).await {
         Ok(notes) => (StatusCode::OK, Json(notes)).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "status": "error", "message": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_last_chord(Path((track, clip)): Path<(i32, i32)>) -> impl IntoResponse {
+    match ableton::get_last_chord(track, clip).await {
+        Ok(notes) => (StatusCode::OK, Json(serde_json::json!({ "notes": notes }))).into_response(),
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({ "status": "error", "message": e.to_string() })),

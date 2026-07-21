@@ -94,3 +94,31 @@ fn finalize(resp: ClipNotesResponse) -> io::Result<AbletonClip> {
 pub async fn get_clip_notes(track_index: i32, clip_index: i32) -> io::Result<Vec<AbletonNote>> {
     Ok(get_clip(track_index, clip_index).await?.notes)
 }
+
+/// Fetch a clip and return the pitches of its LAST chord — the group of notes
+/// whose start times fall within `EPS` beats of the latest onset — sorted high
+/// → low. Used to seed the 5 voices' starting notes ("gen phrases, pull the
+/// resolving chord out of Ableton, use it as the next seed").
+pub async fn get_last_chord(track_index: i32, clip_index: i32) -> io::Result<Vec<i32>> {
+    const EPS: f64 = 0.05; // beats; groups near-simultaneous onsets into one chord
+    let clip = get_clip(track_index, clip_index).await?;
+
+    // Ignore muted notes; they aren't sounding.
+    let mut onsets: Vec<&AbletonNote> = clip.notes.iter().filter(|n| !n.mute).collect();
+    if onsets.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let max_start = onsets
+        .iter()
+        .map(|n| n.start_time)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    onsets.retain(|n| n.start_time >= max_start - EPS);
+    // High → low, matching the voice order (voice 0 = top).
+    onsets.sort_by(|a, b| b.pitch.cmp(&a.pitch));
+
+    let mut pitches: Vec<i32> = onsets.iter().map(|n| n.pitch).collect();
+    pitches.dedup();
+    Ok(pitches)
+}
