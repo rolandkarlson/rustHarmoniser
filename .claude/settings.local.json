@@ -39,7 +39,14 @@
       "Bash(git -C /Users/roland/RustroverProjects/rustHarmoniser log --oneline --all -i --grep=\"voice mode\")",
       "Bash(git -C /Users/roland/RustroverProjects/rustHarmoniser log --oneline --all -i --grep=\"voice\")",
       "Bash(git -C /Users/roland/RustroverProjects/rustHarmoniser show 51574f5:src/harmonizer.rs)",
-      "Bash(git -C /Users/roland/RustroverProjects/rustHarmoniser diff 51574f5 -- src/harmonizer.rs)"
+      "Bash(git -C /Users/roland/RustroverProjects/rustHarmoniser diff 51574f5 -- src/harmonizer.rs)",
+      "Bash(REPRO_CONFIG=/private/tmp/claude-501/-Users-roland-RustroverProjects-rustHarmoniser/498e1103-c01e-46ce-a220-6deacf28d403/scratchpad/repro_config.json cargo test repro_first_chord_scale -- --ignored --nocapture)",
+      "Bash(perl -0pi -e 's/&& !self\\\\.config\\\\.use_floor\\\\n            && !self\\\\.config\\\\.use_ceiling\\\\n            //' src/harmonizer.rs)",
+      "Bash(system_profiler SPAudioDataType)",
+      "Read(//Library/Audio/Plug-Ins/HAL/**)",
+      "Bash(brew list *)",
+      "Bash(REPRO_CONFIG=/private/tmp/claude-501/-Users-roland-RustroverProjects-rustHarmoniser/498e1103-c01e-46ce-a220-6deacf28d403/scratchpad/ceiling_config.json cargo test repro_first_chord_scale -- --ignored --nocapture)",
+      "Bash(python3)"
     ]
   }
 }

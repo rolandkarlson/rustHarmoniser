@@ -228,16 +228,20 @@ fn get_modular_bound(n: i32, anchors: &[i32], m: i32, mode: BoundMode) -> i32 {
     }
 }
 
-/// Tintinnabuli bound (legacy semantics from the sequential scorer): each lower
-/// voice is confined to the anchor pitch class nearest above (Ceiling) / below
-/// (Floor) the lead's pitch offset by `i - 1` semitones (i = channel). The lead
-/// itself must be given an empty `current_lasts_lead` so it stays free.
+/// Tintinnabuli-style bound (original "p2rt" semantics, kept by preference over
+/// the strict Pärt T−n/T+n positions): each lower voice is confined to the
+/// anchor pitch class nearest above (Ceiling) / below (Floor) the lead's pitch
+/// offset by `i - 1` semitones (i = channel), in pitch-class space. Adjacent
+/// channels often land on the SAME class, giving the characteristic parallel
+/// octave stacks. The octave stays free (candidates span ±1 octave; smoothness
+/// + crossing pick the register). The lead itself must be given an empty
+/// `current_lasts_lead` so it stays free.
 fn apply_bound(notes: Vec<i32>, anchors: &[i32], config: &Config, current_lasts_lead: Vec<i32>, i: i32) -> Vec<i32> {
     if !config.use_ceiling && !config.use_floor { return notes; }
     if current_lasts_lead.is_empty() || anchors.is_empty() { return notes; }
     let mode = if config.use_ceiling { BoundMode::Ceiling } else { BoundMode::Floor };
     current_lasts_lead.into_iter()
-        .map(|n| get_modular_bound(n+i-1, anchors, 12, mode))
+        .map(|n| get_modular_bound(n + i - 1, anchors, 12, mode))
         .collect()
 }
 
@@ -752,6 +756,32 @@ fn chord_better(a: (u32, f64), b: (u32, f64)) -> bool {
     a.0 < b.0 || (a.0 == b.0 && a.1 > b.1)
 }
 
+/// Interval-variety duplicates within ONE sonority (no relation to the previous
+/// or next chord). Octave/unison doublings (interval class 0) count beyond the
+/// first at ANY chord size — a chord that is mostly one pitch class in different
+/// octaves racks up penalties fast. Other repeated interval classes (stacked
+/// fifths, augmented stacks, ...) count only while the sonority has at most 3
+/// notes, where each interval should be a distinct color; 4+ note chords are
+/// exempt from that part.
+fn duplicate_interval_classes(pitches: &[i32]) -> u32 {
+    let mut ic_count = [0u32; 12];
+    for i in 0..pitches.len() {
+        for j in (i + 1)..pitches.len() {
+            ic_count[((pitches[i] - pitches[j]).abs() % 12) as usize] += 1;
+        }
+    }
+    let mut dups = ic_count[0].saturating_sub(1);
+    if pitches.len() <= INTERVAL_VARIETY_MAX_NOTES {
+        dups += ic_count[1..].iter().map(|&c| c.saturating_sub(1)).sum::<u32>();
+    }
+    dups
+}
+
+/// Above this sonority size only octave/unison doublings are penalized; the
+/// general repeated-interval rule applies to chords this small or smaller
+/// (4+ note chords are free to repeat interval colors).
+const INTERVAL_VARIETY_MAX_NOTES: usize = 3;
+
 /// Scores complete chords (one candidate index per voice) against a prebuilt
 /// `PairTable`. Holds only borrows, so it is cheap to share across rayon workers.
 struct ChordScorer<'a> {
@@ -857,6 +887,27 @@ impl ChordScorer<'_> {
             let mean = sum / cnt as f64;
             let bass_term = if bass_cnt > 0 { bass_sum / bass_cnt as f64 } else { mean };
             soft += self.w_harmony * (AGG_MEAN * mean + AGG_WORST * worst + AGG_BASS * bass_term);
+        }
+
+        // Interval-variety pressure within this one sonority (new + sustaining):
+        // repeated octave doublings are penalized at any size, other repeated
+        // interval classes only while the chord has <= 3 notes — see
+        // duplicate_interval_classes (config.interval_exists_in_harmony, 0 = off).
+        // Skipped entirely in floor/ceiling mode: the bound confines every
+        // non-lead voice to one anchor pitch class, so octave doublings are the
+        // intended sonority there and the penalty would only push voices onto
+        // off-scale holds instead.
+        let total_notes = n + self.sustaining_notes.len();
+        if self.config.interval_exists_in_harmony != 0.0
+            && !self.config.use_floor
+            && !self.config.use_ceiling
+            && total_notes >= 3
+        {
+            let mut sonority: Vec<i32> = Vec::with_capacity(total_notes);
+            sonority.extend(voices.iter().zip(chosen).map(|(v, &ci)| v.cands[ci].pitch));
+            sonority.extend_from_slice(self.sustaining_notes);
+            let dups = duplicate_interval_classes(&sonority);
+            soft -= self.config.interval_exists_in_harmony * dups as f64;
         }
 
         // Parallel 5ths/octaves among the new voices (sustaining notes have zero
@@ -1280,7 +1331,7 @@ mod tests {
         }
     }
 
-    // ----- get_modular_bound (tintinnabuli bound, legacy semantics) -----
+    // ----- get_modular_bound (tintinnabuli bound, pc-space semantics) -----
 
     #[test]
     fn modular_bound_snaps_to_nearest_anchor() {
@@ -1376,6 +1427,48 @@ mod tests {
         assert!(pair_roughness(48, 49) > pair_roughness(48, 61));
         // Beyond ~an octave the fundamentals barely interfere → roughness ≈ 0.
         assert!(pair_roughness(60, 73) < 0.01);
+    }
+
+    // ----- duplicate_interval_classes -----
+
+    #[test]
+    fn interval_variety_distinct_triad_has_no_duplicates() {
+        // Major triad: ics 4, 3, 7 — all distinct.
+        assert_eq!(duplicate_interval_classes(&[60, 64, 67]), 0);
+    }
+
+    #[test]
+    fn interval_variety_counts_repeated_classes() {
+        // Augmented triad: ics 4, 4, 8 — one duplicate.
+        assert_eq!(duplicate_interval_classes(&[60, 64, 68]), 1);
+        // Stacked fifths: ics 7, 2, 7 — one duplicate.
+        assert_eq!(duplicate_interval_classes(&[60, 67, 74]), 1);
+    }
+
+    #[test]
+    fn interval_variety_two_notes_never_duplicate() {
+        assert_eq!(duplicate_interval_classes(&[60, 67]), 0);
+    }
+
+    #[test]
+    fn interval_variety_octave_doublings_penalized_at_any_size() {
+        // All C in five octaves: 10 pairs, all class 0 → 9 duplicates.
+        assert_eq!(duplicate_interval_classes(&[36, 48, 60, 72, 84]), 9);
+        // Three C octaves inside a 5-note chord: classes 0,0,0 among the Cs.
+        assert_eq!(duplicate_interval_classes(&[48, 60, 72, 64, 67]), 2);
+    }
+
+    #[test]
+    fn interval_variety_four_note_chords_only_count_octaves() {
+        // 4-note chords are exempt from the repeated-interval rule: a dim7
+        // (ics 3,6,9,3,6,3) and a quartal stack (5 x3, 10 x2, 3 x1) both pass.
+        assert_eq!(duplicate_interval_classes(&[60, 63, 66, 69]), 0);
+        assert_eq!(duplicate_interval_classes(&[50, 55, 60, 65]), 0);
+        // 5-note quartal stack likewise — no octave doublings, no penalty.
+        assert_eq!(duplicate_interval_classes(&[50, 55, 60, 65, 70]), 0);
+        // But octave doublings still count at 4 notes: C-G-C-G → two class-0
+        // pairs → 1 duplicate.
+        assert_eq!(duplicate_interval_classes(&[48, 55, 60, 67]), 1);
     }
 
     // ----- get_harmony_row -----
@@ -1602,6 +1695,57 @@ mod tests {
             assert!(
                 [0, 4, 7].contains(&(n.pitch.rem_euclid(12))),
                 "pitch {} at start {} (ch {}) is not on the Schillinger scale",
+                n.pitch,
+                n.start,
+                n.channel
+            );
+        }
+    }
+
+    #[test]
+    fn floor_bound_snaps_to_scale_despite_interval_penalty() {
+        // use_floor confines every non-lead voice to one anchor pitch class, so
+        // octave stacks are the INTENDED sonority. The interval-variety penalty
+        // (interval_exists_in_harmony) must not make off-scale holds cheaper
+        // than the bounded scale notes — it is skipped in floor/ceiling mode.
+        let mut cfg = test_config();
+        cfg.schillinger_progression = true;
+        cfg.use_floor = true;
+        cfg.use_leading_voice = true;
+        cfg.interval_exists_in_harmony = 1.0;
+        cfg.same_note_bonus = 0.0;
+        let mut state = test_state();
+        // Lead melody on pc 8 (its own richer scale), lower voices confined to
+        // the triad — the floor bound then puts EVERY lower voice on pc 7, an
+        // intentional octave stack.
+        state.schillinger_notes = vec![
+            vec![vec![0, 3, 7, 10, 2, 5, 8]],
+            vec![vec![0, 3, 7]],
+            vec![vec![0, 3, 7]],
+            vec![vec![0, 3, 7]],
+            vec![vec![0, 3, 7]],
+        ];
+        // Neutral consonance row + smoothness-heavy balance (the config that
+        // exposed the bug): with no consonance signal, the octave-dup penalty
+        // alone was enough to make off-scale holds win.
+        state.harmony_matrix_contour = Some(vec![8.0]);
+        state.harmony_contour = Some(vec![-0.2]);
+        // Non-lead voices seeded mostly off-scale (muted=1 engages the bound
+        // path, like generated voices), two chords.
+        let mut input = Vec::new();
+        for (ch, pitch) in [(0, 80), (1, 75), (2, 70), (3, 60), (4, 45)] {
+            input.push(Note::new(pitch, 0.0, 4.0, 100, 1, ch));
+            input.push(Note::new(pitch, 4.0, 4.0, 100, 1, ch));
+        }
+        let out = harmonise2(input, &cfg, &state, None);
+        // With the lead fixed on 80 (pc 8) over the [0,3,7] triad, the pc-space
+        // bound floor(80 + ch − 1) lands on pc 7 for every lower voice —
+        // anything else means an off-scale hold won.
+        for n in out.iter().filter(|n| n.channel != 0) {
+            assert_eq!(
+                n.pitch.rem_euclid(12),
+                7,
+                "pitch {} at start {} (ch {}) is not on the floor-bound anchor",
                 n.pitch,
                 n.start,
                 n.channel

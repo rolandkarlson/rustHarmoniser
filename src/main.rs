@@ -158,6 +158,79 @@ pub fn run_generation_with_leading(
     Ok(format!("Generated {} notes in {:?}", notes.len(), start_time.elapsed()))
 }
 
+#[cfg(test)]
+mod repro_tests {
+    use super::*;
+    use harmonizer::HarmonizerState;
+
+    /// TEMP repro: run the full generation pipeline (minus file side effects)
+    /// with a config supplied via REPRO_CONFIG and dump the first chords vs the
+    /// Schillinger scale per bar. Run with:
+    ///   REPRO_CONFIG=path cargo test repro_first_chord_scale -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn repro_first_chord_scale() {
+        let path = std::env::var("REPRO_CONFIG").expect("set REPRO_CONFIG");
+        let config: Config =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        utils::SeededRng::set_seed(config.rng_seed);
+
+        let start = |voice: usize| -> i32 {
+            config.start_notes.get(voice).copied().unwrap_or(model::DEFAULT_START_NOTES[voice])
+        };
+        let mut income = Vec::new();
+        for v in 0..5 {
+            income.extend(gen_voice(start(v), &config.voice_rhythm, &[0], v as i32, 1, &config));
+        }
+        income.sort_by(|a, b| {
+            if (a.start - b.start).abs() > 0.001 {
+                a.start.partial_cmp(&b.start).unwrap()
+            } else {
+                b.pitch.cmp(&a.pitch)
+            }
+        });
+
+        let schillinger_notes = schillinger::gen_schillinger_progression(&config);
+        for (v, bars) in schillinger_notes.iter().enumerate() {
+            println!("voice {v}: bar0={:?} bar1={:?}", bars.get(0), bars.get(1));
+        }
+
+        let state = HarmonizerState {
+            schillinger_notes: schillinger_notes.clone(),
+            voice_contour: config.voice_contour.clone(),
+            contour_resolution: config.voice_contour_resolution,
+            harmony_contour: config.harmony_distance_contour.clone(),
+            harmony_contour_resolution: config.voice_contour_resolution,
+            harmony_matrix_contour: config.harmony_matrix_contour.clone(),
+            harmony_matrix: config.harmony_matrix.clone(),
+            melody_force_contour: config.melody_force_contour.clone(),
+        };
+
+        let notes = harmonise2(income, &config, &state, None);
+
+        let mut starts: Vec<f64> = notes.iter().map(|n| n.start).collect();
+        starts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        starts.dedup_by(|a, b| (*a - *b).abs() < 0.001);
+        for &s in starts.iter().take(6) {
+            let bar = (s / 4.0).floor() as usize;
+            let mut group: Vec<&Note> = notes.iter()
+                .filter(|n| (n.start - s).abs() < 0.001)
+                .collect();
+            group.sort_by_key(|n| n.channel);
+            println!("--- start {s} (bar {bar}) ---");
+            for n in group {
+                let voice_bars = &schillinger_notes[(n.channel as usize) % schillinger_notes.len()];
+                let scale = &voice_bars[bar % voice_bars.len()];
+                let in_scale = scale.iter().any(|&p| (p % 12 + 12) % 12 == (n.pitch % 12 + 12) % 12);
+                println!(
+                    "ch {} pitch {} pc {} scale {:?} in_scale {}",
+                    n.channel, n.pitch, (n.pitch % 12 + 12) % 12, scale, in_scale
+                );
+            }
+        }
+    }
+}
+
 fn append_to_js_file(notes: &[Note]) -> std::io::Result<()> {
    // let path = "C:\\Users\\rolan\\Documents\\Ableton\\User Library\\Presets\\MIDI Effects\\Max MIDI Effect\\harmonizer\\harmonize.js";
     #[cfg(windows)]
