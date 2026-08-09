@@ -99,7 +99,7 @@ pub struct Config {
     #[serde(default = "default_same_note_bonus")]
     pub same_note_bonus: f64,
     /// How strongly the per-voice pitch contour pulls candidates toward its target
-    /// pitch (Pass F quartic). 1.0 = original strength, 0 = contour ignored.
+    /// pitch (quadratic spring, one octave = full weight). 0 = contour ignored.
     #[serde(default = "default_one_f64")]
     pub voice_contour_weight: f64,
     /// Pitch search window: each voice considers previous pitch ± this many

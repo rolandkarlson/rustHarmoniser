@@ -46,7 +46,8 @@
       "Read(//Library/Audio/Plug-Ins/HAL/**)",
       "Bash(brew list *)",
       "Bash(REPRO_CONFIG=/private/tmp/claude-501/-Users-roland-RustroverProjects-rustHarmoniser/498e1103-c01e-46ce-a220-6deacf28d403/scratchpad/ceiling_config.json cargo test repro_first_chord_scale -- --ignored --nocapture)",
-      "Bash(python3)"
+      "Bash(python3)",
+      "Bash(python3 *)"
     ]
   }
 }

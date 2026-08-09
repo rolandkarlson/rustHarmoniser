@@ -73,8 +73,11 @@ const DEFAULT_BOUND_MAX: i32 = 90; // register ceiling when no voice above const
 // stay clear of the bounding voice above (`UPPER`) and below (`LOWER`).
 const CROSSING_BUFFER_UPPER: [i32; 5] = [2, 2, 2, 2, 7];
 const CROSSING_BUFFER_LOWER: [i32; 5] = [2, 2, 2, 7, 1];
-// Pitch span (≈ two octaves) normalizing the quartic voice-contour pull to ~[0, 1].
-const CONTOUR_PITCH_SPAN: f64 = 24.0;
+// Scale of the quadratic voice-contour spring: one octave from the anchor costs the
+// full weight, and the penalty keeps growing (unclamped) beyond that so drift is
+// hard-capped. Small offsets stay nearly free ((3/12)² ≈ 0.06) so the voice can
+// oscillate around the anchor without being pinned to it.
+const CONTOUR_PITCH_SPAN: f64 = 12.0;
 
 /// A resolved consonance profile for one fractional harmony-context value.
 /// `soft` holds bounded style preferences per interval class (0..11); `forbidden`
@@ -662,8 +665,7 @@ fn build_joint_voices(
                     (c - note.pitch).abs()
                 };
                 let normalized = base_dist as f64 / CONTOUR_PITCH_SPAN;
-                soft_base -= config.voice_contour_weight
-                    * normalized * normalized * normalized * normalized;
+                soft_base -= config.voice_contour_weight * normalized * normalized;
             }
 
             if bounds.max - c < cb_max {
