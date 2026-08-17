@@ -41,6 +41,14 @@ pub struct Config {
     pub pl: i32,
     pub harmony_distance_balance: f64,
     pub lookahead_depth: i32,
+    /// Outer beam search over chord progressions: how many partial progressions
+    /// survive each group, AND how many alternative voicings each one branches
+    /// into for the next group (same knob for both). 1 = greedy — every group
+    /// takes its locally best chord and `lookahead_depth` has no effect, since
+    /// there is nothing to rank. Cost per group grows as beam_width² ×
+    /// (1 + lookahead_depth) group scorings, so raise it deliberately.
+    #[serde(default = "default_beam_width")]
+    pub beam_width: i32,
     pub render_length: i32,
     pub rng_seed: f64,
     pub voice_contour: Option<Vec<Vec<i32>>>,
@@ -119,6 +127,36 @@ pub struct Config {
     /// the historical defaults [70, 65, 60, 50, 34].
     #[serde(default = "default_start_notes")]
     pub start_notes: Vec<i32>,
+    /// Blend between the H-Matrix style preference and register-aware sensory
+    /// roughness in the pairwise consonance term. 0 = pure style/pitch-class,
+    /// 1 = pure psychoacoustics. See harmonizer::pair_roughness.
+    #[serde(default = "default_roughness_weight")]
+    pub roughness_weight: f64,
+    /// Scales the root-relative chord-quality term (major vs minor vs
+    /// suspended), which is the only part of the harmony score that can tell
+    /// chord qualities apart — the pairwise interval multiset cannot. 0 = off.
+    #[serde(default = "default_one_f64")]
+    pub chord_quality_weight: f64,
+    /// Preference for the bass on the chord root: full bonus in root position,
+    /// 0.4 with the third in the bass, 0 with the fifth (six-four), -0.3 for a
+    /// non-chord tone. 0 = inversions are free; at 1.0 and above the bass stops
+    /// taking inversions altogether.
+    #[serde(default = "default_root_position")]
+    pub root_position_weight: f64,
+    /// Reward for doubling the chord root (the first doubling only) and equal
+    /// penalty per extra voice on the key's leading tone. 0 = off.
+    #[serde(default = "default_root_doubling")]
+    pub root_doubling_weight: f64,
+    /// Tendency-tone pressure: leading tone up to the tonic, chordal minor 7th
+    /// down by step. Applied per voice on (previous pitch → candidate).
+    /// 0 = off. See harmonizer::tendency_term.
+    #[serde(default = "default_tendency_weight")]
+    pub tendency_weight: f64,
+    /// Generate `schillinger_sequence` from the mode's chord-transition table
+    /// instead of using the literal sequence: one phrase of `pl` bars per
+    /// `render_length`, each closing V → I. See schillinger::gen_cadenced_progression.
+    #[serde(default)]
+    pub use_generated_progression: bool,
 }
 
 pub const DEFAULT_START_NOTES: [i32; 5] = [70, 65, 60, 50, 34];
@@ -128,6 +166,11 @@ fn default_neg_one() -> i32 { -1 }
 fn default_same_note_bonus() -> f64 { 2.0 }
 fn default_one_f64() -> f64 { 1.0 }
 fn default_candidate_range() -> i32 { 3 }
+fn default_beam_width() -> i32 { 3 }
+fn default_roughness_weight() -> f64 { 0.5 }
+fn default_root_position() -> f64 { 0.5 }
+fn default_root_doubling() -> f64 { 0.5 }
+fn default_tendency_weight() -> f64 { 0.5 }
 
 impl Default for Config {
     fn default() -> Self {
@@ -146,6 +189,7 @@ impl Default for Config {
             pl: 4,
             harmony_distance_balance: 0.2,
             lookahead_depth: 2,
+            beam_width: default_beam_width(),
             render_length: 2,
             rng_seed: 1.0,
             voice_contour: None,
@@ -179,6 +223,14 @@ impl Default for Config {
             candidate_range: 3,
             melody_force: 0.0,
             start_notes: default_start_notes(),
+            roughness_weight: default_roughness_weight(),
+            chord_quality_weight: 1.0,
+            // 0.5 leaves the bass in root position roughly 60% of the time on a
+            // default render; at 1.0 it never takes an inversion at all.
+            root_position_weight: default_root_position(),
+            root_doubling_weight: default_root_doubling(),
+            tendency_weight: default_tendency_weight(),
+            use_generated_progression: false,
         }
     }
 }

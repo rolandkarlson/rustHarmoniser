@@ -47,7 +47,16 @@
       "Bash(brew list *)",
       "Bash(REPRO_CONFIG=/private/tmp/claude-501/-Users-roland-RustroverProjects-rustHarmoniser/498e1103-c01e-46ce-a220-6deacf28d403/scratchpad/ceiling_config.json cargo test repro_first_chord_scale -- --ignored --nocapture)",
       "Bash(python3)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new root@192.168.1.10 'echo CONNECTED_OK; hostname; pveversion; echo \"---\"; free -h | head -2; echo \"---\"; pvesm status')",
+      "Bash(ssh root@192.168.1.10 ' *)",
+      "Bash(ssh -o ConnectTimeout=8 root@192.168.1.10 'pgrep -a apt >/dev/null && echo \"apt still running\" || echo \"apt finished\"; echo \"---last apt update result---\"; tail -3 /var/log/apt/term.log 2>/dev/null | tr -d \"\\\\r\"')",
+      "Bash(ssh -o ConnectTimeout=8 root@192.168.1.10 'pgrep apt >/dev/null')",
+      "Bash(break)",
+      "Bash(ssh -o ConnectTimeout=8 root@192.168.1.10 'apt list --upgradable 2>/dev/null | grep -v \"^Listing\" > /tmp/upg.txt; echo \"Upgradable: $\\(wc -l < /tmp/upg.txt\\)\"; head -20 /tmp/upg.txt')",
+      "Bash(ssh -o ConnectTimeout=8 root@192.168.1.10 ' *)",
+      "Bash(ssh -o *)",
+      "Bash(ping -c2 -W2 192.168.1.51)"
     ]
   }
 }

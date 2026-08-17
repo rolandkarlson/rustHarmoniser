@@ -23,8 +23,12 @@ use fxhash::FxHasher64;
 // encode interval-class *character* per style, not raw acoustic dissonance.
 // Columns: P1 m2 M2 m3 M3 P4 TT P5 m6 M6 m7 M7
 pub const HARMONY_MATRIX: [[f64; 12]; 9] = [
-    // 0: STRICT CLASSICAL — consonance-first; m2 / tritone / M7 forbidden
-    [1.0, -100.0, -0.4, 0.8, 0.9, 0.5, -100.0, 1.0, 0.7, 0.8, -0.3, -100.0],
+    // 0: STRICT CLASSICAL — consonance-first; m2 / M7 forbidden. The tritone is
+    // strongly disfavoured but NOT forbidden: hard-forbidding it outlaws the
+    // dominant seventh and the diminished triad, i.e. exactly the sonorities
+    // tonal cadences are built from. Its resolution is handled as a tendency
+    // (see tendency_term) rather than by banning the interval.
+    [1.0, -100.0, -0.4, 0.8, 0.9, 0.5, -0.5, 1.0, 0.7, 0.8, -0.3, -100.0],
     // 1: JAZZ & COLOR — 7ths/9ths/tritone embraced; bare unison/octave duller
     [0.6, 0.0, 0.7, 0.8, 0.9, 0.5, 0.6, 0.9, 0.5, 0.8, 1.0, 0.8],
     // 2: TENSION/RESOLUTION — tritones and leading tones prized, triads dull
@@ -50,13 +54,18 @@ pub const HARMONY_MATRIX: [[f64; 12]; 9] = [
 // between style rows. Soft preferences now live in a clean [-1, 1] band.
 const FORBIDDEN_THRESHOLD: f64 = -5.0;
 // How much register-aware sensory roughness (Layer 3) modulates the pitch-class
-// style preference. 0 = pure style/pitch-class; 1 = pure psychoacoustic roughness.
-const ROUGHNESS_WEIGHT: f64 = 0.35;
+// style preference. 0 = pure style/pitch-class; 1 = pure psychoacoustic
+// roughness. Overridable per render via `config.roughness_weight`.
+const ROUGHNESS_WEIGHT: f64 = 0.5;
 // Chord-level aggregation weights (Layer 2): overall mean, worst single clash,
-// and the interval against the bass (root/inversion sensitivity). Sum ≈ 1.
-const AGG_MEAN: f64 = 0.40;
-const AGG_WORST: f64 = 0.35;
-const AGG_BASS: f64 = 0.25;
+// the interval against the bass (inversion sensitivity), and each pitch class
+// measured from the CHORD ROOT (quality — see the root_quality note in
+// ChordScorer). Sum ≈ 1; when no root is known the first three are renormalized
+// to sum to 1 on their own.
+const AGG_MEAN: f64 = 0.30;
+const AGG_WORST: f64 = 0.30;
+const AGG_BASS: f64 = 0.20;
+const AGG_ROOT: f64 = 0.20;
 
 // Candidate-generation register limits (MIDI pitch).
 const PITCH_MIN: i32 = 24; // search-window floor for the simple candidate path
@@ -124,20 +133,82 @@ fn midi_to_hz(p: i32) -> f64 {
     440.0 * 2f64.powf((p as f64 - 69.0) / 12.0)
 }
 
-/// Plomp–Levelt / Sethares sensory dissonance between two fundamentals,
-/// normalized to roughly [0, 1]. Roughness peaks ~1 semitone apart and decays to
-/// ~0 at unison and at wide spacing — and because it works on absolute frequency,
-/// it is register-aware: a literal minor 2nd is far rougher than a minor 9th, and
-/// the same pitch-class clash is rougher low than high. (Fundamental-only model.)
-fn pair_roughness(p1: i32, p2: i32) -> f64 {
+/// Plomp–Levelt roughness between two *sine* partials (Sethares' parameters).
+/// Peaks about a quarter of a critical band apart and decays to 0 at unison and
+/// at wide spacing.
+#[inline]
+fn partial_roughness(f_low: f64, f_high: f64) -> f64 {
+    let s = 0.24 / (0.0207 * f_low + 18.96);
+    let x = s * (f_high - f_low);
+    (-3.5 * x).exp() - (-5.75 * x).exp()
+}
+
+/// Harmonic partials per note in the sensory-dissonance model (amplitude 1/n).
+/// A fundamental-only model is monotone in interval width, which made it rank a
+/// major third as rougher than a tritone and gave a minor 9th ≈ 0 roughness —
+/// it was a "narrow spacing" penalty, not sensory dissonance. Summing over
+/// partials restores the classic curve: coinciding partials make P8/P5 smooth,
+/// near-misses make m2/M2/m9 rough, and the whole surface still scales with
+/// register.
+const N_PARTIALS: usize = 6;
+/// Divisor mapping the raw partial sum onto ~[0, 1]: the largest value the sum
+/// reaches anywhere in the MIDI range (a major 2nd near A0). Normalizing by the
+/// global maximum rather than a mid-register reference keeps the low bass —
+/// where every interval is genuinely rougher — from saturating at 1.0 and
+/// losing all discrimination exactly where spacing matters most.
+const ROUGHNESS_NORM: f64 = 0.92;
+
+/// Sensory dissonance between two notes with harmonic spectra, normalized to
+/// roughly [0, 1]. Register-aware: the same interval class is rougher low than
+/// high, and a literal minor 2nd is much rougher than a minor 9th (which is in
+/// turn clearly rougher than zero, unlike in the fundamental-only model).
+///
+/// At C4 this ranks m2 .46 > M2 .35 > m3 .26 > M3 .20 > M7 .18 > TT .17 >
+/// m6 .15 > P4 .13 > m7 .13 > M6 .11 > P5 .06 > P8 .003. The tritone landing
+/// mid-pack is not a bug: its bite is functional rather than sensory, and the
+/// style rows of HARMONY_MATRIX are where that character is expressed.
+fn pair_roughness_uncached(p1: i32, p2: i32) -> f64 {
     if p1 == p2 { return 0.0; }
     let f_low = midi_to_hz(p1.min(p2));
     let f_high = midi_to_hz(p1.max(p2));
-    let s = 0.24 / (0.0207 * f_low + 18.96);
-    let fdiff = f_high - f_low;
-    let r = (-3.5 * s * fdiff).exp() - (-5.75 * s * fdiff).exp();
-    // The curve e^{-3.5x} - e^{-5.75x} peaks at ≈0.1813; normalize to ~[0, 1].
-    (r / 0.1813).clamp(0.0, 1.0)
+    let mut total = 0.0;
+    for i in 1..=N_PARTIALS {
+        let a1 = 1.0 / i as f64;
+        let fi = f_low * i as f64;
+        for j in 1..=N_PARTIALS {
+            let a2 = 1.0 / j as f64;
+            let fj = f_high * j as f64;
+            let (lo, hi) = if fi <= fj { (fi, fj) } else { (fj, fi) };
+            total += a1.min(a2) * partial_roughness(lo, hi);
+        }
+    }
+    (total / ROUGHNESS_NORM).clamp(0.0, 1.0)
+}
+
+/// Roughness for every MIDI pair, built once. 36 exponential pairs per lookup is
+/// too much for the chord-scoring hot path, but the function only depends on the
+/// two pitches, so the whole 128×128 surface is precomputed on first use.
+fn roughness_table() -> &'static [f64; 128 * 128] {
+    static TABLE: std::sync::OnceLock<Box<[f64; 128 * 128]>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut t = Box::new([0.0f64; 128 * 128]);
+        for a in 0..128i32 {
+            for b in a..128i32 {
+                let r = pair_roughness_uncached(a, b);
+                t[(a * 128 + b) as usize] = r;
+                t[(b * 128 + a) as usize] = r;
+            }
+        }
+        t
+    })
+}
+
+fn pair_roughness(p1: i32, p2: i32) -> f64 {
+    if (0..128).contains(&p1) && (0..128).contains(&p2) {
+        roughness_table()[(p1 * 128 + p2) as usize]
+    } else {
+        pair_roughness_uncached(p1, p2)
+    }
 }
 
 /// Voice-leading smoothness, normalized to roughly [-1, 1] so it trades off on an
@@ -179,6 +250,66 @@ fn melody_force_term(c: i32, lasts: &[i32], weight: f64) -> f64 {
         }
     }
     t * weight
+}
+
+/// Tendency-tone pressure (`config.tendency_weight`): the two resolutions that
+/// carry most of tonal harmony's forward motion, applied per voice as a function
+/// of (previous pitch → candidate).
+///
+/// * **Leading tone → tonic.** A previous pitch a semitone below the KEY tonic
+///   is rewarded for stepping up onto it and penalized for leaping away.
+///   Because the test is literally "one semitone below the tonic", it simply
+///   never fires in modes that have no leading tone (Aeolian, Dorian, …), which
+///   is the musically correct behaviour rather than a special case.
+/// * **Chordal 7th → down by step.** A previous pitch a minor 7th above the
+///   root of the chord it belonged to resolves downward. Major 7ths are
+///   excluded: as a chord tone the M7 tends *up*, and when it is the key's
+///   leading tone the rule above already covers it.
+///
+/// `prev_root` is the root of the chord `prev` was part of (the previous bar at
+/// a bar line), not the chord being built now.
+fn tendency_term(prev: i32, c: i32, tonic: i32, prev_root: Option<i32>, weight: f64) -> f64 {
+    if weight == 0.0 {
+        return 0.0;
+    }
+    let mut t = 0.0;
+    let step = c - prev;
+    if prev.rem_euclid(12) == (tonic + 11).rem_euclid(12) {
+        if step == 1 {
+            t += 1.0;
+        } else if step.abs() > 2 {
+            t -= 0.5;
+        }
+    }
+    if let Some(r) = prev_root {
+        if (prev - r).rem_euclid(12) == 10 {
+            if step == -1 || step == -2 {
+                t += 1.0;
+            } else if step > 0 {
+                t -= 0.5;
+            }
+        }
+    }
+    t * weight
+}
+
+/// Pitch class of the chord root for the bar containing `start`.
+///
+/// The Schillinger layer builds each bar's chord as scale degrees
+/// `(itm * ex) + seq[bar]`, so the entry generated from `itm = 0` — the first
+/// one, for every built-in chord structure — IS the root. Voice 0's chord is
+/// used as the reference; `ex` and the chord-structure contour vary the stack
+/// per voice but not its root. `None` when there is no Schillinger data (the
+/// simple candidate path), which disables every root-aware term.
+fn bar_root_pc(state: &HarmonizerState, start: f64) -> Option<i32> {
+    let bars = state.schillinger_notes.first()?;
+    if bars.is_empty() {
+        return None;
+    }
+    let bar = (start / 4.0).floor() as i32;
+    bars[mod_shim(bar, bars.len() as i32) as usize]
+        .first()
+        .map(|&p| p.rem_euclid(12))
 }
 
 #[derive(Clone, Debug)]
@@ -571,6 +702,18 @@ fn build_joint_voices(
         .map(|p| vec![p])
         .unwrap_or_default();
 
+    // Tendency tones are keyed to the tonic (`config.root` is scale degree 1 —
+    // see generate_mode_from_steps) and to the root of the chord the voice's
+    // PREVIOUS pitch belonged to: at a bar line that is the previous bar, so
+    // step back a hair from this group's start before looking the root up.
+    let tonic = config.root.rem_euclid(12);
+    let prev_root = if config.schillinger_progression && config.tendency_weight != 0.0 {
+        let group_start = group.first().map(|n| n.start).unwrap_or(0.0);
+        bar_root_pc(state, (group_start - 0.001).max(0.0))
+    } else {
+        None
+    };
+
     group.iter().map(|note| {
         let channel_idx = note.channel as usize;
         let prev = precomputed.last_notes_by_channel
@@ -654,6 +797,7 @@ fn build_joint_voices(
         let cands = candidates.into_iter().map(|c| {
             let mut soft_base = get_distance_score(last_note, c) * w_smooth;
             soft_base += melody_force_term(c, &current_lasts, eff_melody_force);
+            soft_base += tendency_term(last_note, c, tonic, prev_root, config.tendency_weight);
             if c == last_note && off_scale_hold {
                 soft_base -= OFF_SCALE_HOLD_PENALTY;
             }
@@ -697,7 +841,8 @@ fn build_joint_voices(
     }).collect()
 }
 
-const BEAM_WIDTH: usize = 5;
+// The outer beam's width lives in `config.beam_width` (see model.rs) — it doubles
+// as the per-group branching factor, so it has to be tunable against runtime.
 
 /// Group-level harmony/smoothness weights and the consonance-matrix context for a
 /// group, resolved from the optional contours or the scalar config fall-backs.
@@ -728,7 +873,12 @@ struct PairTable {
 }
 
 impl PairTable {
-    fn build(voices: &[JointVoice], precomputed: &PrecomputedHarmonyData, row: &HarmonyRow) -> Self {
+    fn build(
+        voices: &[JointVoice],
+        precomputed: &PrecomputedHarmonyData,
+        row: &HarmonyRow,
+        roughness_weight: f64,
+    ) -> Self {
         let mut pitches: Vec<i32> = voices.iter()
             .flat_map(|v| v.cands.iter().map(|c| c.pitch))
             .collect();
@@ -743,8 +893,8 @@ impl PairTable {
             for b in 0..m {
                 let ic = ((pitches[a] - pitches[b]).abs() % 12) as usize;
                 forbidden[a * m + b] = row.forbidden[ic];
-                soft[a * m + b] = (1.0 - ROUGHNESS_WEIGHT) * row.soft[ic]
-                    - ROUGHNESS_WEIGHT * pair_roughness(pitches[a], pitches[b]);
+                soft[a * m + b] = (1.0 - roughness_weight) * row.soft[ic]
+                    - roughness_weight * pair_roughness(pitches[a], pitches[b]);
             }
         }
         let sustaining_idx = precomputed.sustaining_notes.iter().map(|p| idx_of[p]).collect();
@@ -756,6 +906,39 @@ impl PairTable {
 /// ties broken by the higher soft score. Returns true if `a` is strictly better.
 fn chord_better(a: (u32, f64), b: (u32, f64)) -> bool {
     a.0 < b.0 || (a.0 == b.0 && a.1 > b.1)
+}
+
+/// A scored chord: the per-voice candidate indices plus its `(hard, soft)` score.
+type ScoredChord = (Vec<usize>, (u32, f64));
+
+/// Total order over scored chords, best first — `chord_better`, with the
+/// candidate-index vector as a final tiebreak so an exact score tie always
+/// resolves the same way regardless of the order rayon happens to merge in.
+fn chord_cmp(a: &ScoredChord, b: &ScoredChord) -> std::cmp::Ordering {
+    a.1.0.cmp(&b.1.0)
+        .then_with(|| b.1.1.partial_cmp(&a.1.1).unwrap_or(std::cmp::Ordering::Equal))
+        .then_with(|| a.0.cmp(&b.0))
+}
+
+/// True if `sc` could still make a top-`k` list currently holding `list`.
+/// Score-only (no index tiebreak) so the enumeration hot loop can skip cloning
+/// the index vector for the overwhelming majority of chords; ties are admitted
+/// and settled by `push_topk`.
+fn topk_admits(list: &[ScoredChord], sc: (u32, f64), k: usize) -> bool {
+    list.len() < k || (k > 0 && !chord_better(list[k - 1].1, sc))
+}
+
+/// Insert into a list kept sorted best-first by `chord_cmp`, capped at `k`.
+fn push_topk(list: &mut Vec<ScoredChord>, item: ScoredChord, k: usize) {
+    if k == 0 {
+        return;
+    }
+    let pos = list.partition_point(|e| chord_cmp(e, &item) == std::cmp::Ordering::Less);
+    if pos >= k {
+        return;
+    }
+    list.insert(pos, item);
+    list.truncate(k);
 }
 
 /// Interval-variety duplicates within ONE sonority (no relation to the previous
@@ -794,6 +977,23 @@ struct ChordScorer<'a> {
     ending_by_channel: &'a HashMap<i32, i32>,
     check_dir: bool,
     w_harmony: f64,
+    /// Aggregation weights `(mean, worst, bass, root)` — already renormalized
+    /// and already scaled by `config.chord_quality_weight`.
+    agg: (f64, f64, f64, f64),
+    /// Style preference for each pitch class measured from the bar's CHORD ROOT:
+    /// `root_quality[pc] = row.soft[(pc - root) mod 12]`.
+    ///
+    /// The pairwise multiset cannot express chord quality — a major triad
+    /// {0,4,7} and a minor triad {0,3,7} both yield interval classes {3,4,7}, so
+    /// a style row that rewards the minor 3rd and punishes the major one steers
+    /// neither toward minor nor away from major. Intervals measured from the
+    /// root do carry quality (4+7 vs 3+7), and reusing the same style row means
+    /// the H-Matrix now controls chord colour as well as interval colour.
+    /// `None` on the non-Schillinger path, where no root is defined.
+    root_quality: Option<[f64; 12]>,
+    root_pc: Option<i32>,
+    /// Pitch class a semitone below the key tonic — the doubling to avoid.
+    leading_tone_pc: i32,
     config: &'a Config,
 }
 
@@ -885,10 +1085,66 @@ impl ChordScorer<'_> {
                 }
             }
         }
+        // Pitch-class census over the whole sonority, for the root-relative
+        // terms below (quality, inversion, doubling).
+        let mut pc_count = [0u8; 12];
+        for (v, &ci) in voices.iter().zip(chosen) {
+            pc_count[v.cands[ci].pitch.rem_euclid(12) as usize] += 1;
+        }
+        for &s in self.sustaining_notes {
+            pc_count[s.rem_euclid(12) as usize] += 1;
+        }
+
         if cnt > 0 {
             let mean = sum / cnt as f64;
             let bass_term = if bass_cnt > 0 { bass_sum / bass_cnt as f64 } else { mean };
-            soft += self.w_harmony * (AGG_MEAN * mean + AGG_WORST * worst + AGG_BASS * bass_term);
+            let (wm, ww, wb, wr) = self.agg;
+            let mut agg = wm * mean + ww * worst + wb * bass_term;
+            if let Some(rq) = self.root_quality {
+                // Mean over DISTINCT pitch classes: quality is about which
+                // degrees are present, not how often they are doubled (that is
+                // the doubling term's job).
+                let mut q = 0.0;
+                let mut qn = 0usize;
+                for (pc, &n) in pc_count.iter().enumerate() {
+                    if n > 0 {
+                        q += rq[pc];
+                        qn += 1;
+                    }
+                }
+                if qn > 0 {
+                    agg += wr * (q / qn as f64);
+                }
+            }
+            soft += self.w_harmony * agg;
+        }
+
+        // Inversion and doubling, both meaningless without a root.
+        if let Some(root) = self.root_pc {
+            if self.config.root_position_weight != 0.0 {
+                // Root position is the stable one; a third in the bass is a
+                // usable soft inversion; a fifth in the bass (six-four) is
+                // unstable and needs preparation this system cannot express;
+                // a non-chord tone in the bass blurs the harmony outright.
+                let iv = (bass.rem_euclid(12) - root).rem_euclid(12);
+                let bass_bonus = match iv {
+                    0 => 1.0,
+                    3 | 4 => 0.4,
+                    7 => 0.0,
+                    _ => -0.3,
+                };
+                soft += self.config.root_position_weight * bass_bonus;
+            }
+            if self.config.root_doubling_weight != 0.0 {
+                // Doubling the root is the default in part-writing; doubling
+                // the leading tone forces parallel octaves out of its
+                // resolution. Only the FIRST root doubling is rewarded — piling
+                // every voice onto the root is what the interval-variety term
+                // is there to stop.
+                let root_dup = (pc_count[root as usize] as i32 - 1).clamp(0, 1);
+                let lt_dup = (pc_count[self.leading_tone_pc as usize] as i32 - 1).max(0);
+                soft += self.config.root_doubling_weight * (root_dup - lt_dup) as f64;
+            }
         }
 
         // Interval-variety pressure within this one sonority (new + sustaining):
@@ -998,23 +1254,24 @@ impl ChordScorer<'_> {
 
     /// Exhaustive search over the candidate product — parallel across the first
     /// voice's candidates, odometer over the rest. Optimal within the window.
-    fn enumerate(&self) -> Option<(Vec<usize>, (u32, f64))> {
+    /// Returns the best `k` distinct chords, best first (empty if no candidates).
+    fn enumerate_topk(&self, k: usize) -> Vec<ScoredChord> {
         let n = self.n;
         (0..self.voices[0].cands.len()).into_par_iter()
             .map(|c0| {
                 let mut chosen = vec![0usize; n];
                 chosen[0] = c0;
-                let mut local_best: Option<(Vec<usize>, (u32, f64))> = None;
+                let mut local: Vec<ScoredChord> = Vec::with_capacity(k);
                 loop {
                     let sc = self.eval(&chosen);
-                    if local_best.as_ref().map_or(true, |b| chord_better(sc, b.1)) {
-                        local_best = Some((chosen.clone(), sc));
+                    if topk_admits(&local, sc, k) {
+                        push_topk(&mut local, (chosen.clone(), sc), k);
                     }
                     // Advance the odometer over voices 1..n.
                     let mut pos = n - 1;
                     loop {
                         if pos == 0 {
-                            return local_best;
+                            return local;
                         }
                         chosen[pos] += 1;
                         if chosen[pos] < self.voices[pos].cands.len() {
@@ -1025,17 +1282,19 @@ impl ChordScorer<'_> {
                     }
                 }
             })
-            .reduce(|| None, |a, b| match (a, b) {
-                (Some(x), Some(y)) => Some(if chord_better(x.1, y.1) { x } else { y }),
-                (x, None) => x,
-                (None, y) => y,
+            .reduce(Vec::new, |mut a, b| {
+                for item in b {
+                    push_topk(&mut a, item, k);
+                }
+                a
             })
     }
 
     /// Bass-first within-chord beam for groups whose candidate product exceeds
     /// `JOINT_ENUM_CAP`. Partial states are ranked by running
     /// `(violations, partial soft)`; survivors get the exact chord score.
-    fn beam_search(&self) -> Option<(Vec<usize>, (u32, f64))> {
+    /// Returns the best `k` of them, best first.
+    fn beam_search_topk(&self, k: usize) -> Vec<ScoredChord> {
         let n = self.n;
         let t = self.table;
         let m = t.m;
@@ -1085,51 +1344,76 @@ impl ChordScorer<'_> {
             states = next;
         }
 
-        states.into_iter()
-            .map(|(part, _, _)| {
-                let mut chosen = vec![0usize; n];
-                for (pos, &ci) in part.iter().enumerate() {
-                    chosen[order[pos]] = ci;
-                }
-                let sc = self.eval(&chosen);
-                (chosen, sc)
-            })
-            .fold(None, |acc: Option<(Vec<usize>, (u32, f64))>, x| {
-                match acc {
-                    Some(a) if chord_better(a.1, x.1) => Some(a),
-                    _ => Some(x),
-                }
-            })
+        let mut best: Vec<ScoredChord> = Vec::with_capacity(k);
+        for (part, _, _) in states {
+            let mut chosen = vec![0usize; n];
+            for (pos, &ci) in part.iter().enumerate() {
+                chosen[order[pos]] = ci;
+            }
+            let sc = self.eval(&chosen);
+            push_topk(&mut best, (chosen, sc), k);
+        }
+        best
     }
 }
 
 /// Score one rhythmic group: build each voice's candidate set, then search the
-/// joint candidate space for the chord with the fewest hard violations and the
-/// best soft score. The chosen pitches (one per input note) are appended to
-/// `temp_group_notes`; the return value is the group's soft score net of the
-/// hard-violation penalty.
-fn score_group(
+/// joint candidate space for the chords with the fewest hard violations and the
+/// best soft score. Returns up to `k` complete voicings, best first — each the
+/// chosen notes (one per input note) plus that voicing's soft score net of the
+/// hard-violation penalty. The outer beam branches on these alternatives; `k = 1`
+/// is the greedy "just give me the best chord" case.
+///
+/// Always returns at least one entry (a pass-through of the input group when the
+/// candidate search comes up empty).
+fn score_group_options(
     group: &[Note],
-    temp_group_notes: &mut Vec<Note>,
     config: &Config,
     state: &HarmonizerState,
     precomputed: &PrecomputedHarmonyData,
-) -> f64 {
+    k: usize,
+) -> Vec<(Vec<Note>, f64)> {
     if group.is_empty() {
-        return 0.0;
+        return vec![(Vec::new(), 0.0)];
     }
+    let k = k.max(1);
 
     let (w_harmony, w_smooth, harmony_ctx) = group_weights(group[0].start, config, state);
     let row = get_harmony_row(harmony_ctx, state.harmony_matrix.as_ref());
 
     let voices = build_joint_voices(group, w_smooth, config, state, precomputed);
     let n = voices.len();
-    let table = PairTable::build(&voices, precomputed, &row);
+    let table = PairTable::build(&voices, precomputed, &row, config.roughness_weight);
 
     let ending_by_channel: HashMap<i32, i32> = precomputed.notes_ending_at_start.iter()
         .map(|nn| (nn.channel, nn.pitch))
         .collect();
     let check_dir = !ending_by_channel.is_empty() && config.same_direction != 0.0;
+
+    // The bar's chord root turns the bare pitch-class set the Schillinger layer
+    // hands over back into a rooted chord, which is what the quality, inversion
+    // and doubling terms need.
+    let root_pc = if config.schillinger_progression {
+        bar_root_pc(state, group[0].start)
+    } else {
+        None
+    };
+    let root_quality = root_pc.map(|r| {
+        let mut q = [0.0f64; 12];
+        for (pc, slot) in q.iter_mut().enumerate() {
+            *slot = row.soft[(pc as i32 - r).rem_euclid(12) as usize];
+        }
+        q
+    });
+    // Without a root the fourth aggregation slot has nothing to score, so the
+    // other three are renormalized rather than silently losing 20% of the
+    // harmony weight.
+    let agg = if root_quality.is_some() {
+        (AGG_MEAN, AGG_WORST, AGG_BASS, AGG_ROOT * config.chord_quality_weight)
+    } else {
+        let k = 1.0 / (1.0 - AGG_ROOT);
+        (AGG_MEAN * k, AGG_WORST * k, AGG_BASS * k, 0.0)
+    };
 
     let scorer = ChordScorer {
         voices: &voices,
@@ -1139,6 +1423,10 @@ fn score_group(
         ending_by_channel: &ending_by_channel,
         check_dir,
         w_harmony,
+        agg,
+        root_quality,
+        root_pc,
+        leading_tone_pc: (config.root + 11).rem_euclid(12),
         config,
     };
 
@@ -1147,35 +1435,61 @@ fn score_group(
         .try_fold(1usize, |acc, l| acc.checked_mul(l))
         .unwrap_or(usize::MAX);
 
-    let best = if product <= JOINT_ENUM_CAP {
-        scorer.enumerate()
+    let ranked = if product <= JOINT_ENUM_CAP {
+        scorer.enumerate_topk(k)
     } else {
-        scorer.beam_search()
+        scorer.beam_search_topk(k)
     };
 
-    let Some((chosen, (hard, soft))) = best else {
+    if ranked.is_empty() {
         // No candidates at all — pass the group through unchanged.
-        for nn in group {
+        let notes = group.iter().map(|nn| {
             let mut note = *nn;
             note.muted = 0;
-            temp_group_notes.push(note);
-        }
-        return 0.0;
-    };
-
-    for (v, &ci) in voices.iter().zip(&chosen) {
-        let mut note = v.note;
-        note.pitch = v.cands[ci].pitch;
-        note.muted = 0;
-        temp_group_notes.push(note);
+            note
+        }).collect();
+        return vec![(notes, 0.0)];
     }
 
-    soft - hard as f64 * VIOLATION_PENALTY
+    ranked.into_iter().map(|(chosen, (hard, soft))| {
+        let notes = voices.iter().zip(&chosen).map(|(v, &ci)| {
+            let mut note = v.note;
+            note.pitch = v.cands[ci].pitch;
+            note.muted = 0;
+            note
+        }).collect();
+        (notes, soft - hard as f64 * VIOLATION_PENALTY)
+    }).collect()
+}
+
+/// Single-best wrapper around `score_group_options`: appends the winning
+/// voicing's notes to `temp_group_notes` and returns its score.
+fn score_group(
+    group: &[Note],
+    temp_group_notes: &mut Vec<Note>,
+    config: &Config,
+    state: &HarmonizerState,
+    precomputed: &PrecomputedHarmonyData,
+) -> f64 {
+    // `score_group_options` always yields at least one entry.
+    let (notes, score) = score_group_options(group, config, state, precomputed, 1)
+        .swap_remove(0);
+    temp_group_notes.extend(notes);
+    score
 }
 
 /// Greedy look-ahead: score the remaining groups one at a time (each conditioned
-/// on the running context), memoized on a hash of `(group index, depth, recent
+/// on the running context), memoized on a hash of `(group index, depth,
 /// context)`. Returns the summed soft score over the look-ahead horizon.
+///
+/// The key must describe the state COMPLETELY. It used to hash only the last 10
+/// notes, but the score depends on everything `build_precomputed_data` reads —
+/// the whole trimmed window, including sustains and the 5-note-per-channel
+/// history — so two beam branches that merely shared a 10-note suffix aliased
+/// onto one cache entry and the winner was decided by which rayon worker got
+/// there first. Same seed, different render. Hashing the full context (which is
+/// already bounded by the caller's 32-beat trim) makes the cache sound and the
+/// render reproducible.
 fn score_lookahead(
     groups: &[Vec<Note>],
     start_idx: usize,
@@ -1189,16 +1503,14 @@ fn score_lookahead(
         return 0.0;
     }
 
-    let context_len = context.len();
-    let suffix_len = if context_len > 10 { 10 } else { context_len };
-    let suffix = &context[context_len - suffix_len..];
-
     let mut hasher = FxHasher64::default();
     start_idx.hash(&mut hasher);
     depth.hash(&mut hasher);
-    for n in suffix {
+    for n in context {
         n.pitch.hash(&mut hasher);
         n.channel.hash(&mut hasher);
+        n.start.to_bits().hash(&mut hasher);
+        n.duration.to_bits().hash(&mut hasher);
     }
     let key = hasher.finish();
 
@@ -1229,6 +1541,11 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
     // Each group's notes come back in channel order from group_by_start_array.
     let groups = group_by_start_array(income);
     let lookahead = config.lookahead_depth;
+    // One knob for both directions of the search: how many progressions survive
+    // each group, and how many alternative voicings each one branches into. At
+    // width 1 the whole thing collapses to the greedy walk (and the look-ahead,
+    // having nothing to choose between, is skipped).
+    let beam_width = config.beam_width.max(1) as usize;
 
     let mut beam = vec![BeamCandidate {
         notes: Vec::new(),
@@ -1258,31 +1575,46 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
 
                 let precomputed = build_precomputed_data(trimmed_notes, group, start_time);
 
-                let mut temp_notes = Vec::new();
-                let group_score = score_group(group, &mut temp_notes, config, state, &precomputed);
-
-                let mut next_context = trimmed_notes.to_vec();
-                next_context.extend(temp_notes.iter().cloned());
-
-                let lookahead_score = score_lookahead(
-                    groups_ref, i + 1, lookahead, &next_context, config, state, cache_ref,
-                );
-
-                let actual_score = beam_state.actual_score + group_score;
-                IntermediateCandidate {
-                    parent_idx,
-                    added_notes: temp_notes,
-                    actual_score,
-                    rank_score: actual_score + lookahead_score,
-                }
+                // Branch: this parent's best `beam_width` voicings of the group,
+                // each scored on the horizon that follows it.
+                score_group_options(group, config, state, &precomputed, beam_width)
+                    .into_iter()
+                    .map(|(added_notes, group_score)| {
+                        let actual_score = beam_state.actual_score + group_score;
+                        // With a single option there is nothing to rank, so the
+                        // look-ahead can only burn CPU.
+                        let lookahead_score = if beam_width > 1 {
+                            let mut next_context = trimmed_notes.to_vec();
+                            next_context.extend(added_notes.iter().cloned());
+                            score_lookahead(
+                                groups_ref, i + 1, lookahead, &next_context, config, state, cache_ref,
+                            )
+                        } else {
+                            0.0
+                        };
+                        IntermediateCandidate {
+                            parent_idx,
+                            added_notes,
+                            actual_score,
+                            rank_score: actual_score + lookahead_score,
+                        }
+                    })
+                    .collect::<Vec<_>>()
             })
+            .flatten()
             .collect();
 
+        // Best rank first; exact ties fall back to the parent's own running score
+        // and then to beam position, so the survivor set never depends on the
+        // order rayon happened to finish the branches in.
         candidates.sort_by(|a, b| {
             b.rank_score.partial_cmp(&a.rank_score).unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.actual_score.partial_cmp(&a.actual_score).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| a.parent_idx.cmp(&b.parent_idx))
+                .then_with(|| a.added_notes.iter().map(|n| n.pitch).cmp(b.added_notes.iter().map(|n| n.pitch)))
         });
 
-        beam = candidates.into_iter().take(BEAM_WIDTH).map(|c| {
+        beam = candidates.into_iter().take(beam_width).map(|c| {
             let mut new_notes = current_beam[c.parent_idx].notes.clone();
             new_notes.extend(c.added_notes);
             BeamCandidate {
@@ -1427,8 +1759,36 @@ mod tests {
         // Same pitch class: a narrow minor 2nd is far rougher than a wide minor 9th.
         assert!(pair_roughness(60, 61) > pair_roughness(60, 73));
         assert!(pair_roughness(48, 49) > pair_roughness(48, 61));
-        // Beyond ~an octave the fundamentals barely interfere → roughness ≈ 0.
-        assert!(pair_roughness(60, 73) < 0.01);
+        // ...but octave displacement does NOT make the clash vanish: the upper
+        // partials still collide, so a m9 stays clearly rougher than a P5.
+        // (The fundamental-only model scored it at ~0.)
+        assert!(pair_roughness(60, 73) > pair_roughness(60, 67));
+    }
+
+    #[test]
+    fn roughness_ranks_intervals_like_a_harmonic_timbre() {
+        let r = |d: i32| pair_roughness(60, 60 + d);
+        // m2 > M2 > m3 > M3 — the classic ordering. The fundamental-only model
+        // made m2 and M2 all but indistinguishable (0.94 vs 0.93).
+        assert!(r(1) > r(2), "m2 {} !> M2 {}", r(1), r(2));
+        assert!(r(2) > r(3));
+        assert!(r(3) > r(4), "m3 {} !> M3 {}", r(3), r(4));
+        // Coinciding partials make the perfect consonances the smooth ones.
+        assert!(r(4) > r(7));
+        assert!(r(7) > r(12));
+        assert!(r(12) < 0.01, "the octave should be near-perfectly smooth");
+    }
+
+    #[test]
+    fn roughness_is_register_aware() {
+        // The same interval class is rougher in the bass than up top, so the
+        // low-interval limit falls out of the model instead of being bolted on.
+        for d in [3, 4, 7] {
+            assert!(
+                pair_roughness(36, 36 + d) > pair_roughness(72, 72 + d),
+                "interval {d} is not rougher low than high",
+            );
+        }
     }
 
     // ----- duplicate_interval_classes -----
@@ -1481,8 +1841,12 @@ mod tests {
         assert!(approx(row.soft[0], 1.0)); // P1
         assert!(approx(row.soft[7], 1.0)); // P5
         assert!(row.forbidden[1]); // m2 (-100)
-        assert!(row.forbidden[6]); // tritone (-100)
+        assert!(row.forbidden[11]); // M7 (-100)
         assert!(!row.forbidden[0]);
+        // The tritone is disfavoured but legal — hard-forbidding it would
+        // outlaw the dominant seventh and the diminished triad.
+        assert!(!row.forbidden[6]);
+        assert!(row.soft[6] < 0.0);
         // A forbidden cell contributes only -1 to the soft surface, not -100.
         assert!(approx(row.soft[1], -1.0));
     }
@@ -1716,6 +2080,13 @@ mod tests {
         cfg.use_leading_voice = true;
         cfg.interval_exists_in_harmony = 1.0;
         cfg.same_note_bonus = 0.0;
+        // Greedy: this is a property of the CHORD score, checked one group at a
+        // time. Under the branching beam the off-scale hold on ch1 wins here —
+        // not on the interval penalty this test is about, but because the floor
+        // anchor puts ch1 a semitone under the lead and eats `no_crossing`
+        // (100.0, two orders of magnitude above every other term). Zeroing
+        // no_crossing makes the wide search agree with the greedy one again.
+        cfg.beam_width = 1;
         let mut state = test_state();
         // Lead melody on pc 8 (its own richer scale), lower voices confined to
         // the triad — the floor bound then puts EVERY lower voice on pc 7, an
@@ -1755,6 +2126,252 @@ mod tests {
         }
     }
 
+    // ----- outer beam: branching + look-ahead -----
+
+    /// Three voices over eight groups — long enough that the look-ahead horizon
+    /// reaches groups the beam has not committed to yet.
+    fn eight_group_input() -> Vec<Note> {
+        (0..8i32)
+            .flat_map(|g| {
+                let s = g as f64 * 4.0;
+                [
+                    Note::new(48, s, 4.0, 100, 0, 4),
+                    Note::new(60, s, 4.0, 100, 0, 0),
+                    Note::new(67, s, 4.0, 100, 0, 2),
+                ]
+            })
+            .collect()
+    }
+
+    fn harmonised_pitches(input: &[Note], beam_width: i32, lookahead_depth: i32) -> Vec<i32> {
+        let mut cfg = test_config();
+        cfg.beam_width = beam_width;
+        cfg.lookahead_depth = lookahead_depth;
+        harmonise2(input.to_vec(), &cfg, &test_state(), None)
+            .iter()
+            .map(|n| n.pitch)
+            .collect()
+    }
+
+    #[test]
+    fn group_options_are_distinct_and_led_by_the_greedy_pick() {
+        let cfg = test_config();
+        let state = test_state();
+        let group = vec![
+            Note::new(60, 0.0, 4.0, 100, 0, 0),
+            Note::new(48, 0.0, 4.0, 100, 0, 4),
+        ];
+        let pc = build_precomputed_data(&[], &group, 0.0);
+
+        let opts = score_group_options(&group, &cfg, &state, &pc, 4);
+        assert_eq!(opts.len(), 4, "the beam has nothing to branch on");
+
+        // Every option is a complete voicing, and no two are the same chord.
+        let mut seen = std::collections::HashSet::new();
+        for (notes, _) in &opts {
+            assert_eq!(notes.len(), group.len());
+            let pitches: Vec<i32> = notes.iter().map(|n| n.pitch).collect();
+            assert!(seen.insert(pitches), "duplicate voicing among the options");
+        }
+
+        // Option 0 is exactly what the single-best path returns.
+        let mut greedy = Vec::new();
+        let greedy_score = score_group(&group, &mut greedy, &cfg, &state, &pc);
+        let best: Vec<i32> = opts[0].0.iter().map(|n| n.pitch).collect();
+        assert_eq!(best, greedy.iter().map(|n| n.pitch).collect::<Vec<_>>());
+        assert!(approx(opts[0].1, greedy_score));
+    }
+
+    #[test]
+    fn beam_width_one_is_greedy_and_ignores_lookahead() {
+        let input = eight_group_input();
+        let base = harmonised_pitches(&input, 1, 0);
+        for depth in [1, 3] {
+            assert_eq!(
+                harmonised_pitches(&input, 1, depth),
+                base,
+                "width 1 has nothing to rank, so depth {depth} must be a no-op",
+            );
+        }
+    }
+
+    #[test]
+    fn lookahead_depth_changes_the_progression_when_the_beam_branches() {
+        // Guards the regression this whole mechanism was built to fix: with the
+        // outer beam never branching, `lookahead_depth` was computed and then
+        // thrown away. If the scoring is retuned and these two happen to agree
+        // again, re-pick the scenario rather than deleting the test.
+        let input = eight_group_input();
+        assert_ne!(
+            harmonised_pitches(&input, 3, 0),
+            harmonised_pitches(&input, 3, 1),
+            "look-ahead is not affecting the beam's ranking",
+        );
+    }
+
+    // ----- tendency tones -----
+
+    #[test]
+    fn tendency_zero_weight_is_noop() {
+        assert_eq!(tendency_term(59, 60, 0, Some(7), 0.0), 0.0);
+    }
+
+    #[test]
+    fn tendency_leading_tone_resolves_up_to_the_tonic() {
+        // Key of C: B (59) is the leading tone.
+        assert!(approx(tendency_term(59, 60, 0, None, 1.0), 1.0)); // up a semitone
+        assert!(approx(tendency_term(59, 55, 0, None, 1.0), -0.5)); // leaps away
+        assert!(approx(tendency_term(59, 59, 0, None, 1.0), 0.0)); // holding is neutral
+        // Stepping away (B → A) is an ordinary inner-voice escape, not a
+        // frustrated leading tone — only leaps are penalized.
+        assert!(approx(tendency_term(59, 57, 0, None, 1.0), 0.0));
+    }
+
+    #[test]
+    fn tendency_has_no_leading_tone_in_modes_without_one() {
+        // Key of A minor: G (55) is a whole tone below the tonic, so the rule
+        // never fires — no special-casing needed, the semitone test does it.
+        for c in [56, 57, 53] {
+            assert!(approx(tendency_term(55, c, 9, None, 1.0), 0.0));
+        }
+    }
+
+    #[test]
+    fn tendency_chordal_seventh_falls_by_step() {
+        // F (65) is the minor 7th of a G7 chord (root pc 7).
+        assert!(approx(tendency_term(65, 64, 0, Some(7), 1.0), 1.0)); // down a semitone
+        assert!(approx(tendency_term(65, 63, 0, Some(7), 1.0), 1.0)); // down a whole tone
+        assert!(approx(tendency_term(65, 67, 0, Some(7), 1.0), -0.5)); // pushed upward
+    }
+
+    #[test]
+    fn tendency_ignores_the_major_seventh_as_a_chord_tone() {
+        // B (71) over a C root is a M7: as a chord tone it tends UP, so the
+        // falling-7th rule must not claim it.
+        assert!(approx(tendency_term(71, 69, 3, Some(0), 1.0), 0.0));
+    }
+
+    // ----- root-aware chord scoring -----
+
+    /// A scale offering BOTH thirds over the root, so the scorer has to choose.
+    fn quality_state(matrix_row: f64) -> HarmonizerState {
+        let mut state = test_state();
+        state.schillinger_notes = vec![vec![vec![0, 3, 4, 7]]];
+        state.harmony_matrix_contour = Some(vec![matrix_row]);
+        state
+    }
+
+    /// Distinct pitch classes of the first chord, with every melodic term off so
+    /// only the harmony score decides.
+    fn harmony_only_pcs(cfg: &mut Config, state: &HarmonizerState) -> Vec<i32> {
+        cfg.schillinger_progression = true;
+        cfg.same_note_bonus = 0.0;
+        cfg.voice_contour_weight = 0.0;
+        cfg.interval_exists_in_harmony = 0.0;
+        cfg.no_crossing = 0.0;
+        cfg.min_voices_changed = -1;
+        cfg.tendency_weight = 0.0;
+        cfg.harmony_distance_balance = 0.5; // w_smooth = 0: pure harmony
+        let input = vec![
+            Note::new(60, 0.0, 4.0, 100, 1, 0),
+            Note::new(55, 0.0, 4.0, 100, 1, 2),
+            Note::new(48, 0.0, 4.0, 100, 1, 4),
+        ];
+        let mut pcs: Vec<i32> = harmonise2(input, cfg, state, None)
+            .iter()
+            .map(|n| n.pitch.rem_euclid(12))
+            .collect();
+        pcs.sort();
+        pcs.dedup();
+        pcs
+    }
+
+    #[test]
+    fn chord_quality_follows_the_style_row() {
+        // A major and a minor triad have the IDENTICAL pairwise interval
+        // multiset {3, 4, 7}, so the mean/worst aggregation cannot tell them
+        // apart. Measuring each pitch class from the chord root can, and this
+        // is the term that does it — kill it and the two rows agree again.
+        let mut dark = Config { root_position_weight: 0.0, root_doubling_weight: 0.0, ..test_config() };
+        let minor = harmony_only_pcs(&mut dark, &quality_state(4.0)); // DARK row
+        assert!(minor.contains(&3), "dark row did not pick the minor 3rd: {minor:?}");
+        assert!(!minor.contains(&4), "dark row kept the major 3rd: {minor:?}");
+
+        let mut bright = Config { root_position_weight: 0.0, root_doubling_weight: 0.0, ..test_config() };
+        let major = harmony_only_pcs(&mut bright, &quality_state(5.0)); // BRIGHT row
+        assert!(major.contains(&4), "bright row did not pick the major 3rd: {major:?}");
+        assert!(!major.contains(&3), "bright row kept the minor 3rd: {major:?}");
+    }
+
+    #[test]
+    fn chord_quality_weight_zero_disables_the_distinction() {
+        let mut off = Config {
+            root_position_weight: 0.0,
+            root_doubling_weight: 0.0,
+            chord_quality_weight: 0.0,
+            ..test_config()
+        };
+        let dark = harmony_only_pcs(&mut off, &quality_state(4.0));
+        let mut off2 = off.clone();
+        let bright = harmony_only_pcs(&mut off2, &quality_state(5.0));
+        assert_eq!(
+            dark, bright,
+            "without the root-relative term the rows must be indistinguishable",
+        );
+    }
+
+    /// Pitch class the bass settles on, over a scale whose root is pc 0, with a
+    /// neutral consonance row so only the bass preference can steer it. The
+    /// seed pitches deliberately start the bass on the fifth (pc 7), i.e. in
+    /// second inversion.
+    fn bass_pc_with_root_weight(w: f64) -> i32 {
+        let mut cfg = Config {
+            root_position_weight: w,
+            root_doubling_weight: 0.0,
+            ..test_config()
+        };
+        cfg.schillinger_progression = true;
+        cfg.same_note_bonus = 0.0;
+        cfg.voice_contour_weight = 0.0;
+        cfg.interval_exists_in_harmony = 0.0;
+        cfg.no_crossing = 0.0;
+        cfg.min_voices_changed = -1;
+        cfg.tendency_weight = 0.0;
+        let state = quality_state(8.0); // NEUTRAL row: no interval preferences
+        let input = vec![
+            Note::new(64, 0.0, 4.0, 100, 1, 0),
+            Note::new(60, 0.0, 4.0, 100, 1, 2),
+            Note::new(43, 0.0, 4.0, 100, 1, 4),
+        ];
+        let out = harmonise2(input, &cfg, &state, None);
+        out.iter().map(|n| n.pitch).min().unwrap().rem_euclid(12)
+    }
+
+    #[test]
+    fn root_position_puts_the_chord_root_in_the_bass() {
+        // Weighted up, the bass gives up its seed fifth for the root even
+        // though moving there costs smoothness.
+        assert_eq!(bass_pc_with_root_weight(5.0), 0);
+    }
+
+    #[test]
+    fn root_position_weight_zero_leaves_inversions_free() {
+        // Guard that the preference is what did the work above: at 0 the bass
+        // is decided by smoothness alone and keeps the six-four.
+        assert_ne!(bass_pc_with_root_weight(0.0), 0);
+    }
+
+    #[test]
+    fn no_root_known_renormalizes_the_aggregation_weights() {
+        // On the non-Schillinger path there is no root, so the three remaining
+        // aggregation weights must still sum to 1 — otherwise the harmony term
+        // silently loses a fifth of its influence there.
+        let (m, w, b, r) = (AGG_MEAN, AGG_WORST, AGG_BASS, AGG_ROOT);
+        assert!(approx(m + w + b + r, 1.0));
+        let k = 1.0 / (1.0 - r);
+        assert!(approx(m * k + w * k + b * k, 1.0));
+    }
+
     #[test]
     fn budget_min_overrides_hold_bias_and_forces_movement() {
         let mut cfg = test_config();
@@ -1768,3 +2385,4 @@ mod tests {
         assert_ne!(g1.get(&4), g2.get(&4), "ch4 should have moved");
     }
 }
+

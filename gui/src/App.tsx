@@ -85,7 +85,10 @@ const HARMONY_MATRIX_ROWS = [
 ];
 const HARMONY_MATRIX_COLS = ['P1', 'm2', 'M2', 'm3', 'M3', 'P4', 'TT', 'P5', 'm6', 'M6', 'm7', 'M7'];
 const DEFAULT_HARMONY_MATRIX: number[][] = [
-  [1.0, -100.0, -0.4, 0.8, 0.9, 0.5, -100.0, 1.0, 0.7, 0.8, -0.3, -100.0],
+  // Row 0 STRICT CLASSICAL — the tritone is strongly disfavoured but NOT
+  // forbidden (-0.5): hard-forbidding it outlaws the dominant seventh and the
+  // diminished triad. Mirrors harmonizer::HARMONY_MATRIX; keep the two in sync.
+  [1.0, -100.0, -0.4, 0.8, 0.9, 0.5, -0.5, 1.0, 0.7, 0.8, -0.3, -100.0],
   [0.6, 0.0, 0.7, 0.8, 0.9, 0.5, 0.6, 0.9, 0.5, 0.8, 1.0, 0.8],
   [-0.2, 0.8, 0.2, -0.3, -0.3, -0.2, 1.0, 0.0, -0.3, -0.3, 0.5, 0.9],
   [1.0, -100.0, 0.8, -0.2, 0.2, 1.0, -0.5, 1.0, 0.0, 0.5, 0.4, -0.4],
@@ -669,6 +672,15 @@ function App() {
       nc.interval_exists_in_harmony = 0.5;
       nc.chord_structure = [0, 1, 2, 3, 4, 5]; // full 7th chord voicings
 
+      // Root-aware harmony: jazz plays inversions and rootless voicings freely
+      // and avoids octave doublings, but guide-tone resolution (7th → 3rd) is
+      // the whole point of a ii-V-I, so tendency stays strong.
+      nc.root_position_weight = 0.3;
+      nc.root_doubling_weight = 0.0;
+      nc.chord_quality_weight = 1.0;
+      nc.tendency_weight = 0.8;
+      nc.roughness_weight = 0.4;
+
       // Jazz progression: loop-friendly turnarounds — each 4-bar phrase
       // starts on I and lands on V so the I resolution falls on bar 1 of
       // the next iteration (across the loop seam).
@@ -773,8 +785,18 @@ function App() {
       nc.consecutive_octav_fift = 50.0; // strictly avoid parallel 5ths/octaves
       nc.no_crossing = 150.0; // strict voice separation
       nc.last_note_same = 15.0;
-      nc.interval_exists_in_harmony = 2.0;
+      // Lowered from 2.0: root doubling is now rewarded explicitly (below), and
+      // this term pushes the other way on exactly those octaves.
+      nc.interval_exists_in_harmony = 1.0;
       nc.chord_structure = [0, 1, 2, 4]; // triads & simple 7ths
+
+      // Root-aware harmony: functional bass, classical doubling policy (double
+      // the root, never the leading tone), and strong tendency-tone resolution.
+      nc.root_position_weight = 2.0;
+      nc.root_doubling_weight = 1.0;
+      nc.chord_quality_weight = 1.5;
+      nc.tendency_weight = 1.5;
+      nc.roughness_weight = 0.5;
 
       // Classical progressions: each 4-bar phrase starts on I and ends on V
       // so the authentic cadence (V -> I) resolves across the loop boundary.
@@ -1170,8 +1192,12 @@ function App() {
               <NumberField integer value={config.render_length} onChange={v => updateConfig('render_length', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Lookahead Depth — how many future steps the harmonizer evaluates. Higher = more coherent voice leading but slower.">Lookahead:</span>
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Lookahead Depth — how many future chords each candidate progression is scored on. Only has an effect when Beam > 1.">Lookahead:</span>
               <NumberField integer value={config.lookahead_depth ?? 0} onChange={v => updateConfig('lookahead_depth', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Beam Width — how many rival progressions are kept alive, and how many alternative voicings each chord branches into. 1 = greedy (fastest, and Lookahead does nothing). Cost grows as Beam² × (1 + Lookahead).">Beam:</span>
+              <NumberField integer value={config.beam_width ?? 3} onChange={v => updateConfig('beam_width', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Random seed — same seed produces identical output. Change for a different arrangement.">Seed:</span>
@@ -1200,6 +1226,10 @@ function App() {
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="At bar boundaries (first/last bar of each pl-length phrase), restrict candidate notes by channel: channel 4 → root only, channel 0 → third, others → root/third/fifth.">Resolve:</span>
               <input type="checkbox" checked={config.use_resolve ?? false} onChange={e => updateConfig('use_resolve', e.target.checked)} className="accent-cyan-500" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Generate the chord progression from the mode's own chord-transition table instead of using the Schillinger Sequence literally: one phrase of pl bars per render_length, each closing V → I. Overrides Schillinger Sequence while on.">Cadence:</span>
+              <input type="checkbox" checked={config.use_generated_progression ?? false} onChange={e => updateConfig('use_generated_progression', e.target.checked)} className="accent-cyan-500" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="Use the pitches from an Ableton clip as the leading voice (channel 0). Pitches are cycled through voice_rhythm timing.">Lead Clip:</span>
@@ -1256,6 +1286,27 @@ function App() {
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-500" title="How strongly each voice's pitch contour pulls its notes toward the target pitch. 1 = original strength, 0 = contour ignored.">Contour Wt:</span>
               <NumberField value={config.voice_contour_weight ?? 1} onChange={v => updateConfig('voice_contour_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+            </div>
+            <div className="border-l border-slate-700 h-5"></div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Blend between the H-Matrix style preference and register-aware sensory roughness (harmonic-spectrum Plomp-Levelt). 0 = pure style/pitch-class, 1 = pure psychoacoustics. Roughness is what makes the same interval muddier in the bass and a m2 harsher than a m9.">Roughness:</span>
+              <NumberField value={config.roughness_weight ?? 0.5} onChange={v => updateConfig('roughness_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Chord quality: scores each pitch class by its interval ABOVE THE CHORD ROOT, using the same H-Matrix row. This is the only term that can tell a major triad from a minor one — pairwise intervals give {3,4,7} for both. Raise it to make the H-Matrix row steer chord colour, not just interval colour. 0 = off. Schillinger mode only.">Quality:</span>
+              <NumberField value={config.chord_quality_weight ?? 1} onChange={v => updateConfig('chord_quality_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Bass on the chord root: full bonus in root position, 0.4 with the third in the bass, 0 with the fifth (six-four), -0.3 for a non-chord tone. Raise for solid functional harmony, drop to 0 to let inversions float freely. Schillinger mode only.">Root Pos:</span>
+              <NumberField value={config.root_position_weight ?? 0.5} onChange={v => updateConfig('root_position_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Rewards doubling the chord root (the first doubling only) and penalizes each extra voice on the key's leading tone. The classical doubling policy — pair with Dup Interval, which pushes the other way. 0 = off. Schillinger mode only.">Root Dbl:</span>
+              <NumberField value={config.root_doubling_weight ?? 0.5} onChange={v => updateConfig('root_doubling_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-slate-500" title="Tendency tones: rewards the leading tone stepping up to the tonic and a chordal minor 7th falling by step, penalizes abandoning either. Only fires in modes that actually have a leading tone. This is what gives cadences their pull. 0 = off.">Tendency:</span>
+              <NumberField value={config.tendency_weight ?? 0.5} onChange={v => updateConfig('tendency_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
             </div>
           </div>
 

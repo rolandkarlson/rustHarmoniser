@@ -5,6 +5,11 @@ use crate::model::Config;
 // PL was 8 in JS, now passed via Config
 const EXP: i32 = 2;
 
+/// A random walk of `length` scale-degree chord roots through the transition
+/// table of `mode`, starting on the tonic and — where the walk allows —
+/// finishing on the dominant (degree 4) so the caller can append the tonic for
+/// an authentic cadence. If no walk of that length lands on V within the
+/// attempt budget, the last chord is forced to V instead.
 pub fn generate_progression(length: usize, mode: i32) -> Vec<i32> {
     if length == 0 {
         return vec![];
@@ -85,14 +90,16 @@ pub fn generate_progression(length: usize, mode: i32) -> Vec<i32> {
         }
     }
 
-    // Fallback if we can't natively end on 0 (e.g. length is 2)
+    // Fallback if the walk never lands on the dominant by itself (e.g. very
+    // short phrases, or a mode whose table cannot reach degree 4 in `length`
+    // steps): force the final chord rather than returning an uncadenced walk.
     let mut progression = Vec::with_capacity(length);
     let mut current_chord = 0;
     progression.push(current_chord);
 
     for i in 1..length {
         if i == length - 1 {
-            progression.push(0);
+            progression.push(4);
             continue;
         }
         let possible_next_chords = transitions[current_chord as usize];
@@ -175,9 +182,38 @@ fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32) ->
 
 pub const NUM_VOICES: usize = 16;
 
+/// Phrase-structured chord-root sequence: `render_length` phrases of `pl` bars,
+/// each a mode-aware random walk that closes V → I, so every phrase ends on an
+/// authentic cadence instead of wherever the loop happened to stop.
+///
+/// Uses the scalar `config.mode` — the per-bar `mode_contour` still colours the
+/// scale each bar is realised in, but the transition table is chosen once.
+pub fn gen_cadenced_progression(config: &Config) -> Vec<i32> {
+    let phrase = config.pl.max(2) as usize;
+    let phrases = config.render_length.max(1) as usize;
+    let mode = mod_shim(config.mode, 7);
+    let mut out = Vec::with_capacity(phrase * phrases);
+    for _ in 0..phrases {
+        // The body ends on the dominant; the appended tonic completes the cadence.
+        let mut p = generate_progression(phrase - 1, mode);
+        p.push(0);
+        out.extend(p);
+    }
+    out
+}
+
 pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<Vec<i32>>> {
 
-    let seq = &config.schillinger_sequence;
+    let generated;
+    let seq: &Vec<i32> = if config.use_generated_progression {
+        generated = gen_cadenced_progression(config);
+        &generated
+    } else if config.schillinger_sequence.is_empty() {
+        generated = vec![0];
+        &generated
+    } else {
+        &config.schillinger_sequence
+    };
     let bars = seq.len();
 
     let chord_list = vec![
@@ -247,4 +283,83 @@ pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<Vec<i32>>> {
     }
 
     per_voice
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(pl: i32, render_length: i32, mode: i32) -> Config {
+        Config { pl, render_length, mode, use_generated_progression: true, ..Config::default() }
+    }
+
+    #[test]
+    fn cadenced_progression_has_one_phrase_per_render_length() {
+        SeededRng::set_seed(1.0);
+        for (pl, rl) in [(4, 2), (8, 1), (2, 3), (4, 8)] {
+            let p = gen_cadenced_progression(&cfg(pl, rl, 0));
+            assert_eq!(p.len(), (pl * rl) as usize, "pl {pl} render_length {rl}");
+        }
+    }
+
+    #[test]
+    fn every_phrase_starts_on_the_tonic_and_ends_with_an_authentic_cadence() {
+        SeededRng::set_seed(7.0);
+        for mode in 0..7 {
+            let pl = 4;
+            let p = gen_cadenced_progression(&cfg(pl, 3, mode));
+            for (i, phrase) in p.chunks(pl as usize).enumerate() {
+                assert_eq!(phrase[0], 0, "mode {mode} phrase {i} does not open on I");
+                assert_eq!(
+                    &phrase[phrase.len() - 2..],
+                    &[4, 0],
+                    "mode {mode} phrase {i} does not close V → I: {phrase:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cadenced_progression_is_deterministic_under_a_seed() {
+        SeededRng::set_seed(42.0);
+        let a = gen_cadenced_progression(&cfg(4, 4, 5));
+        SeededRng::set_seed(42.0);
+        let b = gen_cadenced_progression(&cfg(4, 4, 5));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn generated_progression_overrides_the_literal_sequence() {
+        SeededRng::set_seed(3.0);
+        let mut c = cfg(4, 2, 0);
+        c.schillinger_sequence = vec![0, 0]; // would otherwise give 2 bars
+        assert_eq!(gen_schillinger_progression(&c)[0].len(), 8);
+
+        c.use_generated_progression = false;
+        assert_eq!(gen_schillinger_progression(&c)[0].len(), 2);
+    }
+
+    #[test]
+    fn empty_sequence_does_not_panic() {
+        let mut c = cfg(4, 1, 0);
+        c.use_generated_progression = false;
+        c.schillinger_sequence = Vec::new();
+        assert_eq!(gen_schillinger_progression(&c)[0].len(), 1);
+    }
+
+    #[test]
+    fn chord_roots_track_the_progression_degrees() {
+        // The first note of each bar's chord is the degree the progression
+        // named — this is the invariant harmonizer::bar_root_pc relies on.
+        SeededRng::set_seed(11.0);
+        let mut c = cfg(4, 1, 0);
+        c.use_generated_progression = false;
+        c.schillinger_sequence = vec![0, 3, 4, 0];
+        c.root = 2; // D ionian
+        let scale = generate_mode_from_steps(2, &0);
+        let bars = &gen_schillinger_progression(&c)[0];
+        for (i, deg) in c.schillinger_sequence.iter().enumerate() {
+            assert_eq!(bars[i][0], scale[*deg as usize], "bar {i}");
+        }
+    }
 }

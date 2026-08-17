@@ -163,6 +163,159 @@ mod repro_tests {
     use super::*;
     use harmonizer::HarmonizerState;
 
+    /// Build the same voices + state `run_generation` does, minus file I/O.
+    fn pipeline(config: &Config) -> (Vec<Note>, Vec<Vec<Vec<i32>>>) {
+        utils::SeededRng::set_seed(config.rng_seed);
+        let start = |voice: usize| -> i32 {
+            config.start_notes.get(voice).copied().unwrap_or(model::DEFAULT_START_NOTES[voice])
+        };
+        let mut income = Vec::new();
+        for v in 0..5 {
+            income.extend(gen_voice(start(v), &config.voice_rhythm, &[0], v as i32, 1, config));
+        }
+        income.sort_by(|a, b| {
+            if (a.start - b.start).abs() > 0.001 {
+                a.start.partial_cmp(&b.start).unwrap()
+            } else {
+                b.pitch.cmp(&a.pitch)
+            }
+        });
+        let schillinger_notes = schillinger::gen_schillinger_progression(config);
+        let state = HarmonizerState {
+            schillinger_notes: schillinger_notes.clone(),
+            voice_contour: config.voice_contour.clone(),
+            contour_resolution: config.voice_contour_resolution,
+            harmony_contour: config.harmony_distance_contour.clone(),
+            harmony_contour_resolution: config.voice_contour_resolution,
+            harmony_matrix_contour: config.harmony_matrix_contour.clone(),
+            harmony_matrix: config.harmony_matrix.clone(),
+            melody_force_contour: config.melody_force_contour.clone(),
+        };
+        (harmonise2(income, config, &state, None), schillinger_notes)
+    }
+
+    fn default_config() -> Config {
+        let mut c = Config::default();
+        c.init_contours();
+        c
+    }
+
+    /// Share of bass notes (channel 4) sitting on the bar's chord root.
+    fn bass_on_root(notes: &[Note], sch: &[Vec<Vec<i32>>]) -> f64 {
+        let bars = &sch[0];
+        let mut hits = 0;
+        let mut total = 0;
+        for n in notes.iter().filter(|n| n.channel == 4) {
+            let bar = (n.start / 4.0).floor() as usize % bars.len();
+            let root = bars[bar][0].rem_euclid(12);
+            total += 1;
+            if n.pitch.rem_euclid(12) == root {
+                hits += 1;
+            }
+        }
+        hits as f64 / total.max(1) as f64
+    }
+
+    /// Musical read-out of a default render, for tuning by numbers rather than
+    /// by ear alone:
+    ///   cargo test --release musical_stats -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn musical_stats() {
+        for w in [0.0, 0.25, 0.5, 1.0, 2.0] {
+            let mut c = default_config();
+            c.root_position_weight = w;
+            let (notes, sch) = pipeline(&c);
+            println!("root_position_weight={w:<4} bass on root {:.2}", bass_on_root(&notes, &sch));
+        }
+        for w in [0.0, 0.5, 1.0, 1.5] {
+            println!(
+                "tendency_weight={w:<4}     leading tones resolving up {:.2}",
+                leading_tone_resolution_rate(w),
+            );
+        }
+    }
+
+    #[test]
+    fn full_pipeline_runs_and_is_deterministic() {
+        let cfg = default_config();
+        let (a, _) = pipeline(&cfg);
+        assert!(!a.is_empty(), "the pipeline produced no notes");
+        for n in &a {
+            assert!((0..128).contains(&n.pitch), "pitch {} out of MIDI range", n.pitch);
+            assert_eq!(n.muted, 0);
+        }
+        let (b, _) = pipeline(&cfg);
+        let pa: Vec<i32> = a.iter().map(|n| n.pitch).collect();
+        let pb: Vec<i32> = b.iter().map(|n| n.pitch).collect();
+        assert_eq!(pa, pb, "the same seed must give the same render");
+    }
+
+    #[test]
+    fn root_position_weight_moves_the_bass_onto_chord_roots() {
+        // End-to-end version of the unit test: over a whole default render, the
+        // bass sits on the chord root far more often with the preference on.
+        let mut on = default_config();
+        on.root_position_weight = 2.0;
+        let (notes_on, sch) = pipeline(&on);
+        let with = bass_on_root(&notes_on, &sch);
+
+        let mut off = default_config();
+        off.root_position_weight = 0.0;
+        let (notes_off, sch_off) = pipeline(&off);
+        let without = bass_on_root(&notes_off, &sch_off);
+
+        assert!(
+            with > without,
+            "bass-on-root {with:.2} with the preference vs {without:.2} without",
+        );
+    }
+
+    /// Share of leading tones (pc 11 in the default key of C) that resolve up
+    /// by semitone to the tonic, over a whole default render.
+    fn leading_tone_resolution_rate(tendency_weight: f64) -> f64 {
+        let mut c = default_config();
+        c.tendency_weight = tendency_weight;
+        let (notes, _) = pipeline(&c);
+        let mut by_channel: std::collections::HashMap<i32, Vec<&Note>> = std::collections::HashMap::new();
+        for n in &notes {
+            by_channel.entry(n.channel).or_default().push(n);
+        }
+        let (mut resolved, mut total) = (0, 0);
+        for line in by_channel.values_mut() {
+            line.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+            for pair in line.windows(2) {
+                if pair[0].pitch.rem_euclid(12) == 11 {
+                    total += 1;
+                    if pair[1].pitch - pair[0].pitch == 1 {
+                        resolved += 1;
+                    }
+                }
+            }
+        }
+        resolved as f64 / total.max(1) as f64
+    }
+
+    #[test]
+    fn tendency_weight_makes_leading_tones_resolve() {
+        // Without the term the leading tone is just another scale degree and
+        // resolves by accident (~6%); with it, a third of them step up to the
+        // tonic — the rest are bars where the next chord has no tonic to land
+        // on, or where crossing/budget constraints outrank it.
+        let off = leading_tone_resolution_rate(0.0);
+        let on = leading_tone_resolution_rate(1.5);
+        assert!(on > off + 0.15, "resolution rate {off:.2} → {on:.2} is not a real effect");
+    }
+
+    #[test]
+    fn generated_progression_renders_end_to_end() {
+        let mut cfg = default_config();
+        cfg.use_generated_progression = true;
+        let (notes, sch) = pipeline(&cfg);
+        assert!(!notes.is_empty());
+        assert_eq!(sch[0].len(), (cfg.pl * cfg.render_length) as usize);
+    }
+
     /// TEMP repro: run the full generation pipeline (minus file side effects)
     /// with a config supplied via REPRO_CONFIG and dump the first chords vs the
     /// Schillinger scale per bar. Run with:

@@ -104,6 +104,17 @@ pub fn get_harmonic_score_adjusted(note_a: i32, note_b: i32) -> f64 {
 }
 
 
+/// Pitch classes of `mode` (0 = Ionian … 6 = Locrian) built on `root`, returned
+/// in SCALE ORDER: index 0 is the tonic, index n is scale degree n+1.
+///
+/// The result is deliberately NOT sorted numerically. Sorting it (as this used
+/// to) rotates the degree mapping by however many pitch classes wrap past 12:
+/// for root = 2 Ionian the notes 2,4,6,7,9,11,1 sorted to [1,2,4,6,7,9,11], so
+/// `scale[0]` was C# rather than D and every degree index downstream — chord
+/// roots in `gen_schillinger_progression`, `notes[0..2]` in the `use_resolve`
+/// bass logic — pointed at the wrong scale degree. In other words, changing the
+/// key silently changed the mode. Callers that want ascending MIDI pitches get
+/// them from `gen_scale`, which sorts the realised pitches anyway.
 pub fn generate_mode_from_steps(root: i32, mode: &i32) -> Vec<i32> {
     let step_pattern = vec![2, 2, 1, 2, 2, 2, 1];
 
@@ -121,13 +132,44 @@ pub fn generate_mode_from_steps(root: i32, mode: &i32) -> Vec<i32> {
     let mut mode_pattern = steps_rot;
     mode_pattern.pop();
 
-    let mut mode_notes = vec![root];
-    let mut current_note = root;
+    let mut current_note = root.rem_euclid(12);
+    let mut mode_notes = vec![current_note];
 
     for step in mode_pattern {
-        current_note = (current_note + step) % 12;
+        current_note = (current_note + step).rem_euclid(12);
         mode_notes.push(current_note);
     }
-    mode_notes.sort();
     mode_notes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mode_starts_on_the_tonic_for_every_root() {
+        for root in 0..12 {
+            for mode in 0..7 {
+                let s = generate_mode_from_steps(root, &mode);
+                assert_eq!(s.len(), 7);
+                assert_eq!(s[0], root, "root {root} mode {mode} does not start on the tonic");
+            }
+        }
+    }
+
+    #[test]
+    fn mode_is_a_transposition_of_the_same_mode_at_c() {
+        // Degree-for-degree, D dorian is C dorian transposed up two semitones.
+        let at_c = generate_mode_from_steps(0, &1);
+        let at_d = generate_mode_from_steps(2, &1);
+        for i in 0..7 {
+            assert_eq!(at_d[i], (at_c[i] + 2).rem_euclid(12), "degree {i}");
+        }
+    }
+
+    #[test]
+    fn ionian_and_aeolian_have_the_expected_degrees() {
+        assert_eq!(generate_mode_from_steps(0, &0), vec![0, 2, 4, 5, 7, 9, 11]);
+        assert_eq!(generate_mode_from_steps(0, &5), vec![0, 2, 3, 5, 7, 8, 10]);
+    }
 }
