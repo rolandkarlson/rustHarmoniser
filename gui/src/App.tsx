@@ -91,9 +91,9 @@ const DEFAULT_HARMONY_MATRIX: number[][] = [
   [1.0, -100.0, -0.4, 0.8, 0.9, 0.5, -0.5, 1.0, 0.7, 0.8, -0.3, -100.0],
   [0.6, 0.0, 0.7, 0.8, 0.9, 0.5, 0.6, 0.9, 0.5, 0.8, 1.0, 0.8],
   [-0.2, 0.8, 0.2, -0.3, -0.3, -0.2, 1.0, 0.0, -0.3, -0.3, 0.5, 0.9],
-  [1.0, -100.0, 0.8, -0.2, 0.2, 1.0, -0.5, 1.0, 0.0, 0.5, 0.4, -0.4],
-  [1.0, -0.5, -0.1, 1.0, -0.4, 0.3, -0.2, 0.8, 1.0, -0.3, 0.5, -0.6],
-  [1.0, -0.7, 0.5, -0.3, 1.0, -0.2, 0.8, 0.9, -0.2, 1.0, -0.3, 0.6],
+  [1.0, -100.0, 0.8, -0.2, 0.2, 1.0, -0.5, 1.0, 0.0, 0.5, 0.7, -0.4],
+  [1.0, -0.5, -0.1, 1.0, -0.2, 0.3, -0.2, 0.8, 0.6, 0.2, 0.5, -0.6],
+  [1.0, -0.7, 0.5, -0.1, 1.0, -0.2, 0.8, 0.9, 0.2, 0.6, -0.3, 0.6],
   [-0.5, 1.0, 0.4, -0.6, -0.6, -0.4, 1.0, -0.5, -0.6, -0.6, 0.5, 1.0],
   [1.0, -100.0, -100.0, -100.0, -100.0, 1.0, -100.0, 1.0, -100.0, -100.0, -100.0, -100.0],
   [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -206,7 +206,6 @@ function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
       switch (e.key) {
-        case 'r': handleRandomise(); break;
         case 'd': handleDuplicate(); break;
         case 'g': handleGenerate(); break;
       }
@@ -650,7 +649,7 @@ function App() {
     return progression;
   };
 
-  const applyPreset = (preset: 'jazz' | 'classical') => {
+  const applyPreset = (preset: 'jazz' | 'classical' | 'ambient' | 'trance') => {
     if (!config) return;
     const nc = { ...config };
 
@@ -663,12 +662,17 @@ function App() {
       nc.harmony_distance_balance = 0.35;
       nc.rng_seed = Math.floor(Math.random() * 999999);
 
-      // Relaxed classical rules — jazz embraces parallel motion & voice overlap
-      nc.last_note_exist_in_voice = 60.0;
+      // Relaxed classical rules — jazz embraces parallel motion & voice
+      // overlap. Repeat/melodic terms live on the rescaled ±1 scale.
+      nc.last_note_exist_in_voice = 1.0;
       nc.same_direction = 0.3;
-      nc.consecutive_octav_fift = 0.0; // parallel 5ths are fine in jazz
-      nc.no_crossing = 30.0;
-      nc.last_note_same = 5.0;
+      nc.consecutive_octav_fift = 0.0; // parallel 5ths (and antiparallel octaves) are fine in jazz
+      nc.no_crossing = 1.5; // voice overlap tolerated
+      nc.last_note_same = 0.5;
+      nc.same_note_bonus = 0.5; // light hold bias: comping breathes, lines keep moving
+      nc.common_tone_penalty = 0.0;
+      nc.max_voices_changed = -1;
+      nc.min_voices_changed = -1;
       nc.interval_exists_in_harmony = 0.5;
       nc.chord_structure = [0, 1, 2, 3, 4, 5]; // full 7th chord voicings
 
@@ -680,6 +684,13 @@ function App() {
       nc.chord_quality_weight = 1.0;
       nc.tendency_weight = 0.8;
       nc.roughness_weight = 0.4;
+
+      // The preset writes its own progression — the generated progression
+      // would silently override it, and a custom matrix would override the
+      // style rows the matrix contour points at.
+      nc.schillinger_progression = true;
+      nc.use_generated_progression = false;
+      nc.harmony_matrix = DEFAULT_HARMONY_MATRIX.map(r => [...r]);
 
       // Jazz progression: loop-friendly turnarounds — each 4-bar phrase
       // starts on I and lands on V so the I resolution falls on bar 1 of
@@ -739,20 +750,21 @@ function App() {
         Array.from({ length: steps }, (_, i) => {
           const phase = i / steps;
           const localPhase = (i % nc.pl) / nc.pl;
-          // Walking bass (voice 0): steady quarter notes
-          if (v === 0) return 1.0;
+          // Walking bass (channel 4 is the bass): steady quarter notes
+          if (v === 4) return 1.0;
+          // Lead (channel 0): longer, more lyrical
+          if (v === 0) return [1.0, 2.0, 0.75, 1.0][Math.floor(i % 4)];
           // Comping voices: syncopated
-          if (v <= 2) return jazzSnaps[Math.floor((phase * 7 + localPhase * 3 + v) % jazzSnaps.length)];
-          // Upper voices: longer, more lyrical
-          return [1.0, 2.0, 0.75, 1.0][Math.floor((i + v) % 4)];
+          return jazzSnaps[Math.floor((phase * 7 + localPhase * 3 + v) % jazzSnaps.length)];
         })
       );
 
-      // Voice pitch contour: gentle melodic motion, voice 0 lower (bass)
+      // Voice pitch contour: gentle melodic motion around each voice's own
+      // register (channel 0 = lead on top, channel 4 = bass).
       nc.voice_contour = Array.from({ length: 16 }, (_, v) =>
         Array.from({ length: steps }, (_, i) => {
           const phase = i / steps;
-          const base = v === 0 ? -8 : v <= 2 ? 0 : 4;
+          const base = v === 0 ? 3 : v === 4 ? -3 : 0;
           return Math.round(base + 3 * Math.sin(phase * Math.PI * (2 + v * 0.3)));
         })
       );
@@ -770,7 +782,7 @@ function App() {
         return parseFloat((0.6 + tension * 0.3).toFixed(2));
       }));
 
-    } else {
+    } else if (preset === 'classical') {
       // Classical: Ionian/Aeolian modes, strict voice-leading, balanced phrases
       nc.pl = 4;
       nc.main_pitch = Math.floor(Math.random() * 12); // random key
@@ -779,12 +791,17 @@ function App() {
       nc.harmony_distance_balance = 0.2;
       nc.rng_seed = Math.floor(Math.random() * 999999);
 
-      // Strict classical voice-leading rules
-      nc.last_note_exist_in_voice = 120.0;
-      nc.same_direction = 2.0; // encourage contrary motion
-      nc.consecutive_octav_fift = 50.0; // strictly avoid parallel 5ths/octaves
-      nc.no_crossing = 150.0; // strict voice separation
-      nc.last_note_same = 15.0;
+      // Strict classical voice-leading rules (rescaled ±1 melodic terms;
+      // rule penalties a few × the soft-score range are already prohibitive)
+      nc.last_note_exist_in_voice = 1.0;
+      nc.same_direction = 1.0; // encourage contrary motion
+      nc.consecutive_octav_fift = 5.0; // parallel AND antiparallel 5ths/octaves effectively banned
+      nc.no_crossing = 10.0; // strict voice separation
+      nc.last_note_same = 0.5;
+      nc.same_note_bonus = 1.0; // chorale hold bias: non-leaders keep common tones
+      nc.common_tone_penalty = 0.0;
+      nc.max_voices_changed = -1;
+      nc.min_voices_changed = -1;
       // Lowered from 2.0: root doubling is now rewarded explicitly (below), and
       // this term pushes the other way on exactly those octaves.
       nc.interval_exists_in_harmony = 1.0;
@@ -796,7 +813,14 @@ function App() {
       nc.root_doubling_weight = 1.0;
       nc.chord_quality_weight = 1.5;
       nc.tendency_weight = 1.5;
-      nc.roughness_weight = 0.5;
+      // 0.4, not higher: pure roughness ranks 4ths/5ths above 3rds, and at
+      // high weight it drains the thirds out of the texture entirely.
+      nc.roughness_weight = 0.4;
+
+      // The preset writes its own progression and points at built-in matrix rows.
+      nc.schillinger_progression = true;
+      nc.use_generated_progression = false;
+      nc.harmony_matrix = DEFAULT_HARMONY_MATRIX.map(r => [...r]);
 
       // Classical progressions: each 4-bar phrase starts on I and ends on V
       // so the authentic cadence (V -> I) resolves across the loop boundary.
@@ -871,12 +895,13 @@ function App() {
         })
       );
 
-      // Voice pitch contour: smooth, arched, voice 0 = bass
+      // Voice pitch contour: smooth, arched (channel 0 = soprano, 4 = bass;
+      // the bass arcs against the upper voices for contrary large-scale motion)
       nc.voice_contour = Array.from({ length: 16 }, (_, v) =>
         Array.from({ length: steps }, (_, i) => {
           const phase = i / steps;
-          const base = v === 0 ? -10 : v === 1 ? -4 : v === 2 ? 0 : 5;
-          return Math.round(base + 4 * Math.sin(phase * Math.PI) * (v < 2 ? -0.5 : 1));
+          const base = v === 0 ? 4 : v === 3 ? -2 : v === 4 ? -5 : 0;
+          return Math.round(base + 4 * Math.sin(phase * Math.PI) * (v >= 3 ? -0.5 : 1));
         })
       );
 
@@ -892,10 +917,167 @@ function App() {
         const tension = Math.sin((i / Math.max(steps - 1, 1)) * Math.PI);
         return parseFloat((0.3 + tension * 0.2).toFixed(2));
       }));
+    } else if (preset === 'ambient') {
+      // Ambient: Lydian float over the Ethereal matrix row, glacial harmonic
+      // rhythm, deep hold bias with a 1-voice change budget — the texture
+      // drifts one voice at a time instead of progressing.
+      nc.pl = 4;
+      nc.main_pitch = Math.floor(Math.random() * 12);
+      nc.mode = 3; // Lydian
+      nc.lookahead_depth = 2;
+      nc.harmony_distance_balance = 0.1;
+      nc.rng_seed = Math.floor(Math.random() * 999999);
+
+      nc.last_note_exist_in_voice = 0.3;
+      nc.same_direction = 0.0;
+      nc.consecutive_octav_fift = 0.0;
+      nc.no_crossing = 2.0;
+      nc.last_note_same = 0.1;
+      nc.same_note_bonus = 3.0; // deep hold bias — the pad sound
+      nc.common_tone_penalty = 0.0;
+      nc.interval_exists_in_harmony = 0.0; // octave doublings welcome
+      nc.max_voices_changed = 1; // at most one voice moves per chord
+      nc.min_voices_changed = -1;
+      nc.chord_structure = [0, 1, 2];
+
+      nc.root_position_weight = 0.3;
+      nc.root_doubling_weight = 0.0;
+      nc.chord_quality_weight = 0.5;
+      nc.tendency_weight = 0.0; // no functional pull — stasis is the point
+      nc.roughness_weight = 0.6;
+
+      nc.schillinger_progression = true;
+      nc.use_generated_progression = false;
+      nc.harmony_matrix = DEFAULT_HARMONY_MATRIX.map(r => [...r]);
+
+      // Two-chord oscillations, four bars each — I↔II is the Lydian float,
+      // never a functional cadence.
+      const ambBars = nc.pl * nc.render_length;
+      const ambPatterns = [
+        [0, 0, 1, 1],   // I - II (the Lydian signature)
+        [0, 0, 5, 5],   // I - vi
+        [0, 1, 0, 1],   // faster I-II rocking
+        [0, 0, 4, 4],   // I - V as color, not cadence
+      ];
+      nc.schillinger_sequence = [];
+      for (let i = 0; i < ambBars; i += 4) {
+        const pat = ambPatterns[Math.floor(Math.random() * ambPatterns.length)];
+        nc.schillinger_sequence.push(...pat.slice(0, Math.min(4, ambBars - i)));
+      }
+
+      const steps = Math.ceil((nc.pl * 4 * nc.render_length) / nc.voice_contour_resolution);
+
+      // Barely-moving harmony weight with one slow swell.
+      nc.harmony_distance_contour = Array.from({ length: steps }, (_, i) =>
+        parseFloat((0.1 + 0.1 * Math.sin((i / Math.max(steps - 1, 1)) * Math.PI)).toFixed(2)));
+      nc.mode_contour = Array.from({ length: steps }, () => 3);
+      nc.harmony_matrix_contour = Array.from({ length: steps }, () => 3); // Ethereal throughout
+      // Open voicings: bare triads, spread wide by the expansion.
+      nc.chord_structure_contour = Array.from({ length: 16 }, () =>
+        Array.from({ length: steps }, () => 0));
+      nc.schillinger_ex_contour = Array.from({ length: 16 }, (_, v) =>
+        Array.from({ length: steps }, () => 3 + (v % 2)));
+      // Long tones phasing against each other: 2- and 4-beat notes, offset per voice.
+      nc.voice_rhythm_contour = Array.from({ length: 16 }, (_, v) =>
+        Array.from({ length: steps }, (_, i) => ((i + v) % 3 === 0 ? 2.0 : 4.0)));
+      nc.voice_contour = Array.from({ length: 16 }, (_, v) =>
+        Array.from({ length: steps }, (_, i) =>
+          Math.round(2 * Math.sin((i / Math.max(steps - 1, 1)) * Math.PI + v))));
+      // Almost no line pressure: lines are allowed to sleep.
+      nc.melody_force_contour = Array.from({ length: 16 }, () =>
+        Array.from({ length: steps }, () => 0.1));
+    } else {
+      // Trance: Aeolian anthem loops (i-VI-III-VII family), pumping bass and
+      // 8th-note lead over held pads, Dark matrix lifting to Bright at the
+      // climax. Parallel octaves/5ths and octave doubling ARE the genre.
+      nc.pl = 4;
+      nc.main_pitch = Math.floor(Math.random() * 12);
+      nc.mode = 5; // Aeolian
+      nc.lookahead_depth = 3;
+      nc.harmony_distance_balance = 0.3;
+      nc.rng_seed = Math.floor(Math.random() * 999999);
+
+      nc.last_note_exist_in_voice = 0.5;
+      nc.same_direction = 0.0;
+      nc.consecutive_octav_fift = 0.0;
+      nc.no_crossing = 3.0;
+      nc.last_note_same = 0.2;
+      nc.same_note_bonus = 2.0; // pads hold until the chord change forces them
+      nc.common_tone_penalty = 0.0;
+      nc.interval_exists_in_harmony = 0.0;
+      nc.max_voices_changed = -1;
+      nc.min_voices_changed = -1;
+      nc.chord_structure = [0, 1, 2];
+
+      nc.root_position_weight = 2.0; // the bass hammers chord roots
+      nc.root_doubling_weight = 1.0;
+      nc.chord_quality_weight = 1.0;
+      nc.tendency_weight = 0.3;
+      nc.roughness_weight = 0.5;
+
+      nc.schillinger_progression = true;
+      nc.use_generated_progression = false;
+      nc.harmony_matrix = DEFAULT_HARMONY_MATRIX.map(r => [...r]);
+
+      // Anthem loops. Degree-4 bars get the harmonic-minor leading tone
+      // automatically (Aeolian V), so patterns ending on V deliver real lift.
+      const trBars = nc.pl * nc.render_length;
+      const trPatterns = [
+        [0, 5, 2, 6],   // i-VI-III-VII (the anthem)
+        [0, 6, 5, 6],   // i-VII-VI-VII
+        [0, 5, 6, 4],   // i-VI-VII-V (V carries the raised leading tone)
+        [0, 3, 5, 6],   // i-iv-VI-VII
+      ];
+      nc.schillinger_sequence = [];
+      for (let i = 0; i < trBars; i += 4) {
+        const pat = trPatterns[Math.floor(Math.random() * trPatterns.length)];
+        nc.schillinger_sequence.push(...pat.slice(0, Math.min(4, trBars - i)));
+      }
+
+      const steps = Math.ceil((nc.pl * 4 * nc.render_length) / nc.voice_contour_resolution);
+
+      // Build: harmony weight rises steadily toward the end of the loop.
+      nc.harmony_distance_contour = Array.from({ length: steps }, (_, i) =>
+        parseFloat((0.2 + 0.15 * (i / Math.max(steps - 1, 1))).toFixed(2)));
+      nc.mode_contour = Array.from({ length: steps }, () => 5);
+      nc.harmony_matrix_contour = Array.from({ length: steps }, (_, i) => {
+        const section = Math.floor((i / steps) * 4);
+        return [4, 4, 5, 4][section] ?? 4; // Dark → Dark → Bright climax → Dark
+      });
+      // Triads, thickening briefly at the climax.
+      nc.chord_structure_contour = Array.from({ length: 16 }, () =>
+        Array.from({ length: steps }, (_, i) => {
+          const phase = i / steps;
+          return phase > 0.5 && phase < 0.75 ? 2 : 0;
+        }));
+      nc.schillinger_ex_contour = Array.from({ length: 16 }, () =>
+        Array.from({ length: steps }, () => 2));
+      // Lead (ch 0) and bass (ch 4) run 8ths; inner pads hold long tones.
+      nc.voice_rhythm_contour = Array.from({ length: 16 }, (_, v) =>
+        Array.from({ length: steps }, () => {
+          if (v === 0 || v === 4) return 0.5;
+          if (v === 3) return 2.0;
+          return 4.0;
+        }));
+      // Lead climbs through each half of the loop and resets — a riser.
+      nc.voice_contour = Array.from({ length: 16 }, (_, v) =>
+        Array.from({ length: steps }, (_, i) => {
+          if (v !== 0) return 0;
+          const half = Math.max(Math.ceil(steps / 2), 1);
+          const phase = (i % half) / Math.max(half - 1, 1);
+          return Math.round(phase * 7);
+        }));
+      // Line pressure on the lead only; pads stay glued to their tones.
+      nc.melody_force_contour = Array.from({ length: 16 }, (_, v) =>
+        Array.from({ length: steps }, (_, i) => {
+          if (v !== 0) return 0.15;
+          const tension = Math.sin((i / Math.max(steps - 1, 1)) * Math.PI);
+          return parseFloat((0.8 + 0.4 * tension).toFixed(2));
+        }));
     }
 
     setConfig(nc);
-    setMessage(`${preset === 'jazz' ? 'Jazz' : 'Classical'} preset loaded`);
+    setMessage(`${preset.charAt(0).toUpperCase() + preset.slice(1)} preset loaded`);
   };
 
   const handleInit = async () => {
@@ -1326,6 +1508,20 @@ function App() {
               Classical
             </button>
             <button
+              onClick={() => applyPreset('ambient')}
+              title="Ambient preset — Lydian float over the Ethereal matrix, glacial 2-chord oscillations, deep hold bias, one voice drifts at a time"
+              className="px-4 py-2 bg-teal-800 hover:bg-teal-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Ambient
+            </button>
+            <button
+              onClick={() => applyPreset('trance')}
+              title="Trance preset — Aeolian anthem loops (i-VI-III-VII), pumping 8th-note bass and lead over held pads, Dark→Bright climax"
+              className="px-4 py-2 bg-violet-800 hover:bg-violet-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Trance
+            </button>
+            <button
               onClick={handleInit}
               title="Reset to the server's default config (reasonable baseline). Does not delete snapshots."
               className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
@@ -1334,7 +1530,7 @@ function App() {
             </button>
             <button
               onClick={handleRandomise}
-              title="Randomise all contours [R]"
+              title="Randomise all contours"
               className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
             >
               Randomise

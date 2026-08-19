@@ -151,11 +151,56 @@ pub fn run_generation_with_leading(
 
     // Append to JS file
     append_to_js_file(&notes)?;
-    
-    // println!("Generated {} notes to output.json", notes.len());
-    // println!("Execution time: {:?}", start_time.elapsed());
 
-    Ok(format!("Generated {} notes in {:?}", notes.len(), start_time.elapsed()))
+    // 7. Archive the completed render: one self-contained JSON per render in
+    // render/, holding the full input (config + any leading clip) and the
+    // output notes. Best-effort — a failed archive write must not fail the
+    // render that already succeeded.
+    let archived = match archive_render("render", &config, leading.as_ref(), &notes) {
+        Ok(path) => format!(" — archived to {path}"),
+        Err(e) => {
+            eprintln!("render archive failed: {e}");
+            String::new()
+        }
+    };
+
+    Ok(format!("Generated {} notes in {:?}{}", notes.len(), start_time.elapsed(), archived))
+}
+
+/// Write one JSON document per completed render into `dir`: the input that
+/// fully determines the render (the config exactly as the GUI posted it,
+/// including rng_seed, plus the leading clip if one was fetched from Ableton)
+/// and the output notes. The unix-millis filename keeps renders from ever
+/// overwriting each other. Returns the path written.
+fn archive_render(
+    dir: &str,
+    config: &Config,
+    leading: Option<&(Vec<Note>, f64)>,
+    notes: &[Note],
+) -> std::io::Result<String> {
+    std::fs::create_dir_all(dir)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = format!("{dir}/render_{ts}.json");
+    let doc = serde_json::json!({
+        "timestamp_unix_ms": ts,
+        "input": {
+            "config": config,
+            "leading": leading.map(|(pattern, length)| serde_json::json!({
+                "notes": pattern,
+                "clip_length": length,
+            })),
+        },
+        "output": {
+            "note_count": notes.len(),
+            "notes": notes,
+        },
+    });
+    let mut file = File::create(&path)?;
+    file.write_all(serde_json::to_string_pretty(&doc)?.as_bytes())?;
+    Ok(path)
 }
 
 #[cfg(test)]
@@ -214,6 +259,40 @@ mod repro_tests {
             }
         }
         hits as f64 / total.max(1) as f64
+    }
+
+    #[test]
+    fn archive_render_round_trips_input_and_output() {
+        let dir = std::env::temp_dir().join(format!("rustnote_archive_test_{}", std::process::id()));
+        let dir = dir.to_str().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+
+        let mut config = default_config();
+        config.rng_seed = 1234.0;
+        let notes = vec![Note::new(60, 0.0, 4.0, 100, 0, 0), Note::new(48, 0.0, 4.0, 90, 0, 4)];
+        let leading = (vec![Note::new(72, 0.0, 2.0, 80, 0, 0)], 8.0);
+
+        let path = archive_render(dir, &config, Some(&leading), &notes).unwrap();
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+
+        // The input block reproduces the render: config (with seed) + leading clip.
+        assert_eq!(doc["input"]["config"]["rng_seed"], 1234.0);
+        assert_eq!(doc["input"]["leading"]["clip_length"], 8.0);
+        assert_eq!(doc["input"]["leading"]["notes"].as_array().unwrap().len(), 1);
+        // The output block holds the generated notes verbatim.
+        assert_eq!(doc["output"]["note_count"], 2);
+        let out: Vec<Note> = serde_json::from_value(doc["output"]["notes"].clone()).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].pitch, 60);
+
+        // Without a leading clip the field is null, not absent.
+        let path2 = archive_render(dir, &config, None, &notes).unwrap();
+        let doc2: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path2).unwrap()).unwrap();
+        assert!(doc2["input"]["leading"].is_null());
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// Musical read-out of a default render, for tuning by numbers rather than

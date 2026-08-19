@@ -33,12 +33,21 @@ pub const HARMONY_MATRIX: [[f64; 12]; 9] = [
     [0.6, 0.0, 0.7, 0.8, 0.9, 0.5, 0.6, 0.9, 0.5, 0.8, 1.0, 0.8],
     // 2: TENSION/RESOLUTION — tritones and leading tones prized, triads dull
     [-0.2, 0.8, 0.2, -0.3, -0.3, -0.2, 1.0, 0.0, -0.3, -0.3, 0.5, 0.9],
-    // 3: ETHEREAL & OPEN — quartal/quintal and open 2nds/9ths; m2 forbidden
-    [1.0, -100.0, 0.8, -0.2, 0.2, 1.0, -0.5, 1.0, 0.0, 0.5, 0.4, -0.4],
-    // 4: DARK & MELANCHOLIC — minor 3rd/6th favoured, major color avoided
-    [1.0, -0.5, -0.1, 1.0, -0.4, 0.3, -0.2, 0.8, 1.0, -0.3, 0.5, -0.6],
-    // 5: BRIGHT & LYDIAN — major 3rd/6th and the #4 tritone
-    [1.0, -0.7, 0.5, -0.3, 1.0, -0.2, 0.8, 0.9, -0.2, 1.0, -0.3, 0.6],
+    // 3: ETHEREAL & OPEN — quartal/quintal and open 2nds/9ths; m2 forbidden.
+    // m7 sits high: two stacked 4ths (the row's signature sonority) span one.
+    [1.0, -100.0, 0.8, -0.2, 0.2, 1.0, -0.5, 1.0, 0.0, 0.5, 0.7, -0.4],
+    // 4: DARK & MELANCHOLIC — minor 3rd/6th favoured, major color avoided.
+    // The 3rd/6th columns are kept only MILDLY asymmetric: m6 is the
+    // inversion of M3 (and M6 of m3), so hard-opposed signs made the row
+    // reward first-inversion MAJOR triads (3,5,8 pairwise) and punish
+    // first-inversion minor ones — backwards. Pairwise cells can't separate
+    // major from minor in root position anyway (identical {3,4,7} multiset);
+    // the root-relative quality term (chord_quality_weight) is what steers
+    // mode, and these cells only color voicings.
+    [1.0, -0.5, -0.1, 1.0, -0.2, 0.3, -0.2, 0.8, 0.6, 0.2, 0.5, -0.6],
+    // 5: BRIGHT & LYDIAN — major 3rd/6th and the #4 tritone; same mild
+    // 3rd/6th asymmetry as row 4, mirrored, for the same reason.
+    [1.0, -0.7, 0.5, -0.1, 1.0, -0.2, 0.8, 0.9, 0.2, 0.6, -0.3, 0.6],
     // 6: AGGRESSIVE/BRUTAL — dissonance rewarded, consonance dull
     [-0.5, 1.0, 0.4, -0.6, -0.6, -0.4, 1.0, -0.5, -0.6, -0.6, 0.5, 1.0],
     // 7: ANCIENT/HOLLOW — organum: only 1sts, 4ths, 5ths, 8ths
@@ -54,14 +63,16 @@ pub const HARMONY_MATRIX: [[f64; 12]; 9] = [
 // between style rows. Soft preferences now live in a clean [-1, 1] band.
 const FORBIDDEN_THRESHOLD: f64 = -5.0;
 // How much register-aware sensory roughness (Layer 3) modulates the pitch-class
-// style preference. 0 = pure style/pitch-class; 1 = pure psychoacoustic
-// roughness. Overridable per render via `config.roughness_weight`.
-const ROUGHNESS_WEIGHT: f64 = 0.5;
+// style preference is `config.roughness_weight` (default in model.rs):
+// 0 = pure style/pitch-class; 1 = pure psychoacoustic roughness.
+//
 // Chord-level aggregation weights (Layer 2): overall mean, worst single clash,
 // the interval against the bass (inversion sensitivity), and each pitch class
 // measured from the CHORD ROOT (quality — see the root_quality note in
-// ChordScorer). Sum ≈ 1; when no root is known the first three are renormalized
-// to sum to 1 on their own.
+// ChordScorer). The active set is always renormalized to sum to exactly 1
+// (see the `agg` construction in score_group_options), so neither a missing
+// root nor a chord_quality_weight away from 1 rescales the harmony term as a
+// whole — it only rebalances the mix.
 const AGG_MEAN: f64 = 0.30;
 const AGG_WORST: f64 = 0.30;
 const AGG_BASS: f64 = 0.20;
@@ -224,6 +235,26 @@ fn pair_roughness(p1: i32, p2: i32) -> f64 {
 pub fn get_distance_score(prev_note: i32, current_note: i32) -> f64 {
     let dist = (prev_note - current_note).abs() as f64;
     (1.0 - dist / 7.0).clamp(-1.0, 1.0)
+}
+
+/// Floor for the bass's idiomatic leaps: between the small-step scores
+/// (0.86 / 0.71) and a third (0.57) — a comfortable option, not a free one,
+/// so the bass still prefers a step when one is harmonically available.
+const BASS_LEAP_SCORE: f64 = 0.5;
+
+/// Channel-aware smoothness: `get_distance_score`, except that the bass
+/// (channel 4) has its idiomatic leaps — P4, P5, octave — floored at
+/// `BASS_LEAP_SCORE`. Root movement by 4th/5th IS the bass line's job in a
+/// progression; the raw ramp scored a cadential 5th leap at 0.0 and an octave
+/// at −0.71, so the bass was pressured to creep stepwise through changes the
+/// upper voices were free to sing over. Other channels keep the strict ramp.
+fn melodic_distance_score(prev_note: i32, current_note: i32, channel: i32) -> f64 {
+    let s = get_distance_score(prev_note, current_note);
+    if channel == 4 && matches!((prev_note - current_note).abs(), 5 | 7 | 12) {
+        s.max(BASS_LEAP_SCORE)
+    } else {
+        s
+    }
 }
 
 /// Melody force (config.melody_force): line-shaping pressure applied to EVERY
@@ -795,7 +826,7 @@ fn build_joint_voices(
 
         let eff_melody_force = melody_force_at(state, config, channel_idx, note.start);
         let cands = candidates.into_iter().map(|c| {
-            let mut soft_base = get_distance_score(last_note, c) * w_smooth;
+            let mut soft_base = melodic_distance_score(last_note, c, note.channel) * w_smooth;
             soft_base += melody_force_term(c, &current_lasts, eff_melody_force);
             soft_base += tendency_term(last_note, c, tonic, prev_root, config.tendency_weight);
             if c == last_note && off_scale_hold {
@@ -849,10 +880,15 @@ fn build_joint_voices(
 /// Returns `(w_harmony, w_smooth, harmony_ctx)`.
 fn group_weights(group_start: f64, config: &Config, state: &HarmonizerState) -> (f64, f64, f64) {
     let idx = (group_start / state.harmony_contour_resolution).floor() as usize;
+    // The balance is a MIX between harmony and smoothness, so it is clamped
+    // to the range where both weights stay non-negative: a contour value
+    // beyond ±0.5 used to flip a weight's sign, silently REWARDING leaps
+    // (or dissonance) instead of merely ignoring the other term.
     let r = match &state.harmony_contour {
         Some(c) if !c.is_empty() => *c.get_wrapped(idx),
         _ => config.harmony_distance_balance,
-    };
+    }
+    .clamp(-0.5, 0.5);
     let harmony_ctx = match &state.harmony_matrix_contour {
         Some(c) if !c.is_empty() => *c.get_wrapped(idx),
         _ => 0.0,
@@ -966,6 +1002,42 @@ fn duplicate_interval_classes(pitches: &[i32]) -> u32 {
 /// general repeated-interval rule applies to chords this small or smaller
 /// (4+ note chords are free to repeat interval colors).
 const INTERVAL_VARIETY_MAX_NOTES: usize = 3;
+
+/// True if the pair move (qi→pi against qj→pj) commits a forbidden parallel:
+/// perfect 5ths/octaves reached in SIMILAR motion, or octaves reached in
+/// CONTRARY motion (antiparallel octaves — octave collapsing to unison or
+/// opening to a double octave still exposes the doubled pitch class).
+/// Oblique motion (either voice holding) is never a violation, and
+/// contrary-motion fifths are tolerated, as is usual in a multi-voice texture.
+fn parallel_motion_violation(qi: i32, pi: i32, qj: i32, pj: i32) -> bool {
+    let mi = (pi - qi).signum();
+    let mj = (pj - qj).signum();
+    if mi == 0 || mj == 0 {
+        return false;
+    }
+    let prev_int = (qi - qj).abs() % 12;
+    let cur_int = (pi - pj).abs() % 12;
+    if mi == mj {
+        prev_int == cur_int && (cur_int == 0 || cur_int == 7)
+    } else {
+        prev_int == 0 && cur_int == 0
+    }
+}
+
+/// Doubling balance for the root-aware doubling term, in units of
+/// `config.root_doubling_weight`: +1 for the first root doubling (piling more
+/// voices on is the interval-variety term's business), −1 per extra copy of
+/// the leading tone (its resolution would force parallel octaves), and −1 per
+/// extra copy of the chordal minor 7th — the other classic error: both copies
+/// must fall by step, so one either breaks its resolution or they fall in
+/// octaves.
+fn doubling_balance(pc_count: &[u8; 12], root: i32, leading_tone_pc: i32) -> i32 {
+    let root_dup = (pc_count[root as usize] as i32 - 1).clamp(0, 1);
+    let lt_dup = (pc_count[leading_tone_pc as usize] as i32 - 1).max(0);
+    let seventh_pc = (root + 10).rem_euclid(12) as usize;
+    let seventh_dup = (pc_count[seventh_pc] as i32 - 1).max(0);
+    root_dup - lt_dup - seventh_dup
+}
 
 /// Scores complete chords (one candidate index per voice) against a prebuilt
 /// `PairTable`. Holds only borrows, so it is cheap to share across rayon workers.
@@ -1137,13 +1209,10 @@ impl ChordScorer<'_> {
             }
             if self.config.root_doubling_weight != 0.0 {
                 // Doubling the root is the default in part-writing; doubling
-                // the leading tone forces parallel octaves out of its
-                // resolution. Only the FIRST root doubling is rewarded — piling
-                // every voice onto the root is what the interval-variety term
-                // is there to stop.
-                let root_dup = (pc_count[root as usize] as i32 - 1).clamp(0, 1);
-                let lt_dup = (pc_count[self.leading_tone_pc as usize] as i32 - 1).max(0);
-                soft += self.config.root_doubling_weight * (root_dup - lt_dup) as f64;
+                // the leading tone or the chordal 7th forces a broken
+                // resolution or parallel octaves — see doubling_balance.
+                soft += self.config.root_doubling_weight
+                    * doubling_balance(&pc_count, root, self.leading_tone_pc) as f64;
             }
         }
 
@@ -1168,25 +1237,20 @@ impl ChordScorer<'_> {
             soft -= self.config.interval_exists_in_harmony * dups as f64;
         }
 
-        // Parallel 5ths/octaves among the new voices (sustaining notes have zero
-        // motion at this instant).
+        // Parallel 5ths/octaves and antiparallel octaves among the new voices
+        // (sustaining notes have zero motion at this instant) — see
+        // parallel_motion_violation.
         if self.config.consecutive_octav_fift != 0.0 {
             for i in 0..n {
                 let Some(qi) = voices[i].prev else { continue };
                 let pi = voices[i].cands[chosen[i]].pitch;
-                let mi = (pi - qi).signum();
-                if mi == 0 {
+                if pi == qi {
                     continue;
                 }
                 for j in (i + 1)..n {
                     let Some(qj) = voices[j].prev else { continue };
                     let pj = voices[j].cands[chosen[j]].pitch;
-                    if (pj - qj).signum() != mi {
-                        continue;
-                    }
-                    let prev_int = (qi - qj).abs() % 12;
-                    let cur_int = (pi - pj).abs() % 12;
-                    if prev_int == cur_int && (cur_int == 0 || cur_int == 7) {
+                    if parallel_motion_violation(qi, pi, qj, pj) {
                         soft -= self.config.consecutive_octav_fift;
                     }
                 }
@@ -1405,13 +1469,19 @@ fn score_group_options(
         }
         q
     });
-    // Without a root the fourth aggregation slot has nothing to score, so the
-    // other three are renormalized rather than silently losing 20% of the
-    // harmony weight.
+    // The active weights are renormalized to sum to 1 in BOTH branches:
+    // without a root the fourth slot has nothing to score, and with one a
+    // chord_quality_weight away from 1 must rebalance the mix, not rescale
+    // the whole harmony term (cqw = 0 used to shrink the rooted path to 0.8×
+    // while the rootless path renormalized — quality off made harmony
+    // WEAKER than having no root at all). Negative cqw is clamped: "prefer
+    // bad quality" has no meaning here and would let the sum reach zero.
     let agg = if root_quality.is_some() {
-        (AGG_MEAN, AGG_WORST, AGG_BASS, AGG_ROOT * config.chord_quality_weight)
+        let wr = AGG_ROOT * config.chord_quality_weight.max(0.0);
+        let k = 1.0 / (AGG_MEAN + AGG_WORST + AGG_BASS + wr);
+        (AGG_MEAN * k, AGG_WORST * k, AGG_BASS * k, wr * k)
     } else {
-        let k = 1.0 / (1.0 - AGG_ROOT);
+        let k = 1.0 / (AGG_MEAN + AGG_WORST + AGG_BASS);
         (AGG_MEAN * k, AGG_WORST * k, AGG_BASS * k, 0.0)
     };
 
@@ -1699,6 +1769,97 @@ mod tests {
         assert!(approx(get_distance_score(60, 67), get_distance_score(67, 60)));
         assert!(get_distance_score(60, 61) > get_distance_score(60, 63));
         assert!(get_distance_score(60, 63) > get_distance_score(60, 67));
+    }
+
+    // ----- melodic_distance_score (bass leap tolerance) -----
+
+    #[test]
+    fn bass_idiomatic_leaps_are_floored() {
+        // P4, P5, octave in the bass: floored at BASS_LEAP_SCORE...
+        for d in [5, 7, 12] {
+            assert!(approx(melodic_distance_score(48, 48 - d, 4), BASS_LEAP_SCORE), "down {d}");
+            assert!(approx(melodic_distance_score(48, 48 + d, 4), BASS_LEAP_SCORE), "up {d}");
+        }
+        // ...but still below a hold or a step, so steps stay preferred.
+        assert!(BASS_LEAP_SCORE < melodic_distance_score(48, 50, 4));
+    }
+
+    #[test]
+    fn bass_non_idiomatic_leaps_keep_the_ramp() {
+        // A tritone or a 7th in the bass is not an idiomatic root move.
+        assert!(approx(melodic_distance_score(48, 54, 4), get_distance_score(48, 54)));
+        assert!(approx(melodic_distance_score(48, 58, 4), get_distance_score(48, 58)));
+    }
+
+    #[test]
+    fn upper_voices_get_no_leap_tolerance() {
+        for ch in [0, 1, 2, 3] {
+            assert!(approx(melodic_distance_score(60, 67, ch), get_distance_score(60, 67)));
+        }
+    }
+
+    // ----- parallel_motion_violation -----
+
+    #[test]
+    fn parallel_fifths_and_octaves_in_similar_motion_are_violations() {
+        // C+G → D+A: parallel 5ths.
+        assert!(parallel_motion_violation(67, 69, 60, 62));
+        // C3+C4 → D3+D4: parallel octaves.
+        assert!(parallel_motion_violation(60, 62, 48, 50));
+        // Compound: 12th stays a 5th by interval class.
+        assert!(parallel_motion_violation(79, 81, 60, 62));
+    }
+
+    #[test]
+    fn antiparallel_octaves_are_violations() {
+        // Octave collapsing to a unison in contrary motion (top falls, bottom rises).
+        assert!(parallel_motion_violation(60, 55, 48, 55));
+        // Octave opening to a double octave.
+        assert!(parallel_motion_violation(60, 62, 48, 38));
+    }
+
+    #[test]
+    fn contrary_fifths_and_oblique_motion_are_tolerated() {
+        // 5th reached in contrary motion (no antiparallel-5th rule).
+        assert!(!parallel_motion_violation(67, 69, 62, 62 - 10));
+        // Oblique motion: one voice holds into an octave.
+        assert!(!parallel_motion_violation(60, 60, 50, 48));
+        // Similar motion onto a 5th from a NON-5th (hidden 5th) is the
+        // same_direction term's business, not this rule's.
+        assert!(!parallel_motion_violation(64, 67, 58, 60));
+    }
+
+    // ----- doubling_balance -----
+
+    #[test]
+    fn doubling_balance_rewards_only_the_first_root_doubling() {
+        // C major triad, root doubled once: +1.
+        let mut pc = [0u8; 12];
+        pc[0] = 2; pc[4] = 1; pc[7] = 1;
+        assert_eq!(doubling_balance(&pc, 0, 11), 1);
+        // Tripled root still +1 — the pile-up is the interval-variety term's job.
+        pc[0] = 3;
+        assert_eq!(doubling_balance(&pc, 0, 11), 1);
+    }
+
+    #[test]
+    fn doubling_balance_penalizes_doubled_leading_tone() {
+        // G7 in C with the leading tone (B, pc 11) doubled: +1 root, −1 LT.
+        let mut pc = [0u8; 12];
+        pc[7] = 2; pc[11] = 2; pc[2] = 1; pc[5] = 1;
+        assert_eq!(doubling_balance(&pc, 7, 11), 0);
+    }
+
+    #[test]
+    fn doubling_balance_penalizes_doubled_chordal_seventh() {
+        // G7 in C with the 7th (F, pc 5) doubled: both copies must fall by
+        // step, so one breaks its resolution or they fall in octaves.
+        let mut pc = [0u8; 12];
+        pc[7] = 2; pc[11] = 1; pc[2] = 1; pc[5] = 2;
+        assert_eq!(doubling_balance(&pc, 7, 11), 0);
+        // Single 7th is free.
+        pc[5] = 1;
+        assert_eq!(doubling_balance(&pc, 7, 11), 1);
     }
 
     // ----- melody_force_term -----
@@ -2362,14 +2523,46 @@ mod tests {
     }
 
     #[test]
-    fn no_root_known_renormalizes_the_aggregation_weights() {
-        // On the non-Schillinger path there is no root, so the three remaining
-        // aggregation weights must still sum to 1 — otherwise the harmony term
-        // silently loses a fifth of its influence there.
+    fn aggregation_weights_renormalize_on_both_paths() {
+        // The harmony aggregate must have total weight EXACTLY 1 no matter
+        // which slots are active — otherwise turning chord quality off (or
+        // losing the root) silently rescales the whole harmony term instead
+        // of rebalancing the mix.
         let (m, w, b, r) = (AGG_MEAN, AGG_WORST, AGG_BASS, AGG_ROOT);
         assert!(approx(m + w + b + r, 1.0));
-        let k = 1.0 / (1.0 - r);
+        // No root: the fourth slot is dropped, the rest renormalize.
+        let k = 1.0 / (m + w + b);
         assert!(approx(m * k + w * k + b * k, 1.0));
+        // Rooted: any chord_quality_weight (negatives clamped) renormalizes.
+        for cqw in [0.0f64, 0.5, 1.0, 2.0, -3.0] {
+            let wr = r * cqw.max(0.0);
+            let k = 1.0 / (m + w + b + wr);
+            assert!(
+                approx(m * k + w * k + b * k + wr * k, 1.0),
+                "weights do not sum to 1 at chord_quality_weight {cqw}",
+            );
+        }
+    }
+
+    #[test]
+    fn group_weights_balance_is_clamped_to_a_valid_mix() {
+        // A contour value beyond ±0.5 must saturate, not flip a weight's
+        // sign — w_smooth < 0 would reward leaps.
+        let cfg = test_config();
+        let mut state = test_state();
+        state.harmony_contour = Some(vec![0.9]);
+        let (wh, ws, _) = group_weights(0.0, &cfg, &state);
+        assert!(approx(wh, 1.0));
+        assert!(approx(ws, 0.0));
+        state.harmony_contour = Some(vec![-2.0]);
+        let (wh, ws, _) = group_weights(0.0, &cfg, &state);
+        assert!(approx(wh, 0.0));
+        assert!(approx(ws, 1.0));
+        // In-range values pass through untouched.
+        state.harmony_contour = Some(vec![0.2]);
+        let (wh, ws, _) = group_weights(0.0, &cfg, &state);
+        assert!(approx(wh, 0.7));
+        assert!(approx(ws, 0.3));
     }
 
     #[test]

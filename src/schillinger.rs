@@ -5,15 +5,27 @@ use crate::model::Config;
 // PL was 8 in JS, now passed via Config
 const EXP: i32 = 2;
 
-/// A random walk of `length` scale-degree chord roots through the transition
-/// table of `mode`, starting on the tonic and — where the walk allows —
-/// finishing on the dominant (degree 4) so the caller can append the tonic for
-/// an authentic cadence. If no walk of that length lands on V within the
-/// attempt budget, the last chord is forced to V instead.
-pub fn generate_progression(length: usize, mode: i32) -> Vec<i32> {
-    if length == 0 {
-        return vec![];
-    }
+/// Penultimate degree of each mode's characteristic cadence (the caller
+/// appends the tonic). Indexed by mode 0=Ionian … 6=Locrian.
+///
+/// One hardcoded V → I used to be forced on every mode, which was
+/// Ionian-centric twice over: in Phrygian and Locrian degree 4 is never a
+/// TARGET in the transition table, so the random walk could not reach it —
+/// every phrase burned the full attempt budget and then had a diminished v°
+/// forced on it as a "dominant". Each mode now closes with its own idiom:
+/// * Ionian / Lydian: V → I (authentic; both have a major V).
+/// * Dorian: IV → i (the modal plagal close its table is built around).
+/// * Phrygian / Locrian: ♭II → i (the table's own "characteristic chord").
+/// * Mixolydian: ♭VII → I.
+/// * Aeolian: V → i — gen_schillinger_progression applies the harmonic-minor
+///   inflection on dominant-rooted bars (the chord's subtonic is raised to a
+///   leading tone), so the close is a true authentic cadence rather than the
+///   modal v → i of natural minor.
+const CADENCE_DEGREE: [i32; 7] = [4, 3, 1, 4, 6, 4, 1];
+
+/// The scale-degree transition table for `mode` (0 = Ionian … 6 = Locrian):
+/// row d lists the degrees a chord on degree d may move to.
+fn mode_transitions(mode: i32) -> [&'static [i32]; 7] {
     let ionian_transitions: [&[i32]; 7] = [&[3, 4, 5, 1, 2], &[4, 6], &[5, 3], &[0, 1, 4], &[0, 5], &[3, 1, 4], &[0]];
 
     // 2. DORIAN - Focus on i (0) and IV (3)
@@ -61,18 +73,31 @@ pub fn generate_progression(length: usize, mode: i32) -> Vec<i32> {
         &[0, 5],          // vii -> Pushes to i° or VI
     ];
 
-    let transitions = match mode {
+    match mode {
         0 => ionian_transitions,
-        1=> dorian_transitions,
-        2=> phrygian_transitions,
+        1 => dorian_transitions,
+        2 => phrygian_transitions,
         3 => lydian_transitions,
         4 => mixolydian_transitions,
         5 => aeolian_transitions,
         6 => locrian_transitions,
         _ => panic!("Invalid mode"),
-    };
+    }
+}
+
+/// A random walk of `length` scale-degree chord roots through the transition
+/// table of `mode`, starting on the tonic and — where the walk allows —
+/// finishing on that mode's cadence degree (see CADENCE_DEGREE) so the caller
+/// can append the tonic to complete the cadence. If no walk of that length
+/// lands there within the attempt budget, the last chord is forced instead.
+pub fn generate_progression(length: usize, mode: i32) -> Vec<i32> {
+    if length == 0 {
+        return vec![];
+    }
+    let transitions = mode_transitions(mode);
+    let cadence = CADENCE_DEGREE[mod_shim(mode, 7) as usize];
     let max_attempts = 1000;
-    
+
     for _ in 0..max_attempts {
         let mut progression = Vec::with_capacity(length);
         let mut current_chord = 0;
@@ -85,21 +110,21 @@ pub fn generate_progression(length: usize, mode: i32) -> Vec<i32> {
             progression.push(current_chord);
         }
 
-        if *progression.last().unwrap() == 4 {
+        if *progression.last().unwrap() == cadence {
             return progression;
         }
     }
 
-    // Fallback if the walk never lands on the dominant by itself (e.g. very
-    // short phrases, or a mode whose table cannot reach degree 4 in `length`
-    // steps): force the final chord rather than returning an uncadenced walk.
+    // Fallback if the walk never lands on the cadence degree by itself (e.g.
+    // very short phrases): force the final chord rather than returning an
+    // uncadenced walk.
     let mut progression = Vec::with_capacity(length);
     let mut current_chord = 0;
     progression.push(current_chord);
 
     for i in 1..length {
         if i == length - 1 {
-            progression.push(4);
+            progression.push(cadence);
             continue;
         }
         let possible_next_chords = transitions[current_chord as usize];
@@ -183,8 +208,9 @@ fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32) ->
 pub const NUM_VOICES: usize = 16;
 
 /// Phrase-structured chord-root sequence: `render_length` phrases of `pl` bars,
-/// each a mode-aware random walk that closes V → I, so every phrase ends on an
-/// authentic cadence instead of wherever the loop happened to stop.
+/// each a mode-aware random walk that closes with the mode's own cadence
+/// (CADENCE_DEGREE → tonic), so every phrase ends on a cadence instead of
+/// wherever the loop happened to stop.
 ///
 /// Uses the scalar `config.mode` — the per-bar `mode_contour` still colours the
 /// scale each bar is realised in, but the transition table is chosen once.
@@ -271,9 +297,25 @@ pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<Vec<i32>>> {
                 Some(ec) if !ec.is_empty() => ec.get_wrapped(contour_idx).round() as i32,
                 _ => 2,
             };
+            // Harmonic-minor inflection: in Aeolian, a chord rooted on the
+            // dominant raises any subtonic (degree 7) it contains by a
+            // semitone, turning minor v into major V with a true leading
+            // tone. This is what makes the phrase-final v → i an actual
+            // authentic cadence — and it lets the harmonizer's tendency-tone
+            // reward and leading-tone doubling penalty fire in minor, since
+            // both key on "a semitone below the tonic", a pitch class natural
+            // minor otherwise never produces. Non-dominant bars keep the
+            // natural subtonic (♭VII stays modal mid-phrase).
+            let degree = seq[i as usize % seq.len()];
+            let raise_leading_tone = current_mode == 5 && mod_shim(degree, 7) == 4;
             let notes: Vec<i32> = n_struct.iter().map(|&itm| {
-                 let idx = (itm * ex) + seq[i as usize % seq.len()];
-                 scale[mod_shim(idx, scale.len() as i32) as usize]
+                 let idx = mod_shim((itm * ex) + degree, scale.len() as i32) as usize;
+                 let pc = scale[idx];
+                 if raise_leading_tone && idx == 6 {
+                     (pc + 1).rem_euclid(12)
+                 } else {
+                     pc
+                 }
             }).collect();
 
             chord_notes.push(notes);
@@ -303,19 +345,42 @@ mod tests {
     }
 
     #[test]
-    fn every_phrase_starts_on_the_tonic_and_ends_with_an_authentic_cadence() {
+    fn every_phrase_starts_on_the_tonic_and_ends_with_its_modes_cadence() {
         SeededRng::set_seed(7.0);
         for mode in 0..7 {
             let pl = 4;
+            let cadence = CADENCE_DEGREE[mode as usize];
             let p = gen_cadenced_progression(&cfg(pl, 3, mode));
             for (i, phrase) in p.chunks(pl as usize).enumerate() {
                 assert_eq!(phrase[0], 0, "mode {mode} phrase {i} does not open on I");
                 assert_eq!(
                     &phrase[phrase.len() - 2..],
-                    &[4, 0],
-                    "mode {mode} phrase {i} does not close V → I: {phrase:?}",
+                    &[cadence, 0],
+                    "mode {mode} phrase {i} does not close {cadence} → 0: {phrase:?}",
                 );
             }
+        }
+    }
+
+    #[test]
+    fn cadence_degree_is_reachable_in_every_modes_transition_table() {
+        // Guards the defect this mechanism replaced: the old hardcoded V → I
+        // target was never a transition TARGET in Phrygian or Locrian, so the
+        // walk burned its whole attempt budget on every phrase and then
+        // force-appended a chord the mode's own grammar could not reach. The
+        // cadence degree must appear as a target somewhere in the table, so
+        // the walk can land on it organically and the fallback stays what it
+        // is meant to be — a rarity for very short phrases, not the routine
+        // outcome. (The end-to-end cadence shape itself is asserted above.)
+        for mode in 0..7 {
+            let cadence = CADENCE_DEGREE[mode as usize];
+            let reachable = mode_transitions(mode)
+                .iter()
+                .any(|targets| targets.contains(&cadence));
+            assert!(
+                reachable,
+                "mode {mode}: cadence degree {cadence} is not a target anywhere in its transition table",
+            );
         }
     }
 
@@ -345,6 +410,48 @@ mod tests {
         c.use_generated_progression = false;
         c.schillinger_sequence = Vec::new();
         assert_eq!(gen_schillinger_progression(&c)[0].len(), 1);
+    }
+
+    #[test]
+    fn aeolian_dominant_bars_raise_the_leading_tone() {
+        // C Aeolian (root 0, mode 5): scale pcs [0,2,3,5,7,8,10]. The default
+        // triad on degree 4 stacks degrees {4,6,1} → pcs {7,10,2}; the
+        // harmonic-minor inflection must lift the subtonic 10 to the leading
+        // tone 11 on that bar ONLY, leaving mid-phrase bars in natural minor.
+        let mut c = cfg(4, 1, 5);
+        c.use_generated_progression = false;
+        c.schillinger_sequence = vec![0, 3, 4, 0];
+        c.root = 0;
+        let bars = &gen_schillinger_progression(&c)[0];
+
+        assert!(bars[2].contains(&11), "dominant bar lacks the leading tone: {:?}", bars[2]);
+        assert!(!bars[2].contains(&10), "dominant bar kept the subtonic: {:?}", bars[2]);
+        // The chord root is untouched — bar_root_pc's invariant that notes[0]
+        // IS the root must survive the inflection.
+        assert_eq!(bars[2][0], 7, "dominant bar root moved: {:?}", bars[2]);
+        // Every other bar stays natural minor: no leading tone anywhere else.
+        for (i, bar) in bars.iter().enumerate() {
+            if i != 2 {
+                assert!(!bar.contains(&11), "bar {i} has a raised 7th: {bar:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn other_modes_never_raise_the_seventh() {
+        // The inflection is an Aeolian-only convention: a degree-4 bar in any
+        // other mode keeps its diatonic pitch classes exactly.
+        for mode in [0, 1, 2, 3, 4, 6] {
+            let mut c = cfg(4, 1, mode);
+            c.use_generated_progression = false;
+            c.schillinger_sequence = vec![4];
+            c.root = 0;
+            let scale = generate_mode_from_steps(0, &mode);
+            let bar = &gen_schillinger_progression(&c)[0][0];
+            for pc in bar {
+                assert!(scale.contains(pc), "mode {mode}: pc {pc} is off-scale in {bar:?}");
+            }
+        }
     }
 
     #[test]
