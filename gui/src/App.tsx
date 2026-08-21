@@ -209,6 +209,37 @@ function NumberField({ value, onChange, integer, className, title, disabled }: {
   );
 }
 
+// Text input for a comma-separated integer list (e.g. a scale "0,2,4,5,7,9,11").
+// Keeps the raw string while editing so intermediate states like "0,2," are
+// allowed, and only commits fully-parsed lists. Empty commits [].
+function IntListField({ value, onChange, className, title, placeholder }: {
+  value: number[];
+  onChange: (v: number[]) => void;
+  className?: string;
+  title?: string;
+  placeholder?: string;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const display = draft !== null ? draft : (value ?? []).join(',');
+  return (
+    <input
+      type="text"
+      value={display}
+      title={title}
+      placeholder={placeholder}
+      className={className}
+      onChange={(e) => {
+        const s = e.target.value;
+        setDraft(s);
+        const tokens = s.split(/[\s,]+/).filter(t => t !== '');
+        const parsed = tokens.map(t => parseInt(t, 10));
+        if (parsed.every(Number.isFinite)) onChange(parsed);
+      }}
+      onBlur={() => setDraft(null)}
+    />
+  );
+}
+
 // A labelled cluster of related header parameters.
 function ParamGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -1777,10 +1808,21 @@ function App() {
                   </div>
                 </>
               ) : (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs uppercase tracking-wider text-slate-500" title="Pitch search window: each voice considers its previous pitch ± this many semitones. Wider = more freedom to escape a register, slower search.">Cand Range:</span>
-                  <NumberField integer value={config.candidate_range ?? 3} onChange={v => updateConfig('candidate_range', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-                </div>
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Pitch search window: each voice considers its previous pitch ± this many semitones. Wider = more freedom to escape a register, slower search.">Cand Range:</span>
+                    <NumberField integer value={config.candidate_range ?? 3} onChange={v => updateConfig('candidate_range', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Scale constraint: comma-separated pitch-class offsets from Root that candidates must belong to — 0,2,4,5,7,9,11 with Root 0 is C major, the same list with Root 2 is D major. Empty = truly chromatic. Change Root to transpose without retyping.">Scale:</span>
+                    <IntListField
+                      value={config.chromatic_scale ?? []}
+                      onChange={v => updateConfig('chromatic_scale', v)}
+                      placeholder="chromatic"
+                      className="w-44 bg-transparent text-sm focus:text-cyan-400 outline-none placeholder:text-slate-700"
+                    />
+                  </div>
+                </>
               )}
             </ParamGroup>
 

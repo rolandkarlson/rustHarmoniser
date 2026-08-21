@@ -940,6 +940,16 @@ fn build_joint_voices(
         None
     };
 
+    // Chromatic-mode scale constraint as a pitch-class bitmask: entries are
+    // offsets from `root`, so [0,2,4,5,7,9,11] is the major scale on whatever
+    // the root is. 0 = no constraint (the window stays truly chromatic).
+    let chromatic_mask: u16 = if config.schillinger_progression {
+        0
+    } else {
+        config.chromatic_scale.iter()
+            .fold(0u16, |m, &pc| m | 1 << (pc + config.root).rem_euclid(12))
+    };
+
     group.iter().map(|note| {
         let channel_idx = note.channel as usize;
         let prev = precomputed.last_notes_by_channel
@@ -983,6 +993,10 @@ fn build_joint_voices(
             let sch_scale = get_schillinger_scale(note, state, config, bounds_lead);
             let center_octave = (last_note as f64 / 12.0).floor() as i32;
             gen_scale(&sch_scale, center_octave)
+        } else if chromatic_mask != 0 {
+            ((last_note - range).max(PITCH_MIN)..=(last_note + range).min(PITCH_MAX))
+                .filter(|p| chromatic_mask & 1 << p.rem_euclid(12) != 0)
+                .collect()
         } else {
             ((last_note - range).max(PITCH_MIN)..=(last_note + range).min(PITCH_MAX)).collect()
         };
@@ -2632,6 +2646,54 @@ mod tests {
     /// Distinct pitch classes of a harmonised group, as a 12-bit mask.
     fn pc_mask_of(notes: &[Note]) -> u16 {
         notes.iter().fold(0u16, |m, n| m | 1 << n.pitch.rem_euclid(12))
+    }
+
+    /// Two chords of five voices whose seed pitches all sit in the given
+    /// pitch-class set, so holds can never smuggle an off-scale pc through.
+    fn in_scale_input(pitches: [i32; 5]) -> Vec<Note> {
+        let mut input = Vec::new();
+        for start in [0.0, 4.0] {
+            for (ch, &p) in pitches.iter().enumerate() {
+                input.push(Note::new(p, start, 4.0, 100, 0, ch as i32));
+            }
+        }
+        input
+    }
+
+    #[test]
+    fn chromatic_scale_confines_the_chromatic_search() {
+        // C major on root 0: every harmonised pitch stays on the white keys.
+        let mut cfg = test_config();
+        cfg.chromatic_scale = vec![0, 2, 4, 5, 7, 9, 11];
+        cfg.root = 0;
+        let out = harmonise2(in_scale_input([69, 64, 60, 50, 36]), &cfg, &test_state(), None);
+        assert!(!out.is_empty());
+        for n in &out {
+            assert!(
+                [0, 2, 4, 5, 7, 9, 11].contains(&n.pitch.rem_euclid(12)),
+                "pitch {} (pc {}) escaped the scale", n.pitch, n.pitch.rem_euclid(12),
+            );
+        }
+
+        // The entries are offsets from root: the same list on root 2 is D major.
+        cfg.root = 2;
+        let out = harmonise2(in_scale_input([69, 66, 62, 54, 38]), &cfg, &test_state(), None);
+        for n in &out {
+            assert!(
+                [2, 4, 6, 7, 9, 11, 1].contains(&n.pitch.rem_euclid(12)),
+                "pitch {} (pc {}) escaped D major", n.pitch, n.pitch.rem_euclid(12),
+            );
+        }
+    }
+
+    #[test]
+    fn empty_chromatic_scale_means_unconstrained() {
+        // No scale: the window is truly chromatic, so with harmony scoring
+        // neutralised a semitone neighbour is reachable.
+        let mut cfg = test_config();
+        cfg.chromatic_scale = Vec::new();
+        let out = harmonise2(in_scale_input([69, 64, 60, 50, 36]), &cfg, &test_state(), None);
+        assert!(!out.is_empty());
     }
 
     #[test]

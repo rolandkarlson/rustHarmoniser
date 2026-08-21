@@ -114,6 +114,12 @@ pub struct Config {
     /// semitones (non-Schillinger candidate generation). Was a hardcoded 3.
     #[serde(default = "default_candidate_range")]
     pub candidate_range: i32,
+    /// Chromatic-mode scale constraint: pitch-class offsets from `root` that
+    /// candidates must belong to — `[0,2,4,5,7,9,11]` with root 0 is C major.
+    /// Empty (the default) leaves the search truly chromatic. Ignored in
+    /// Schillinger mode, whose scales come from the progression layer.
+    #[serde(default)]
+    pub chromatic_scale: Vec<i32>,
     /// Melodic pressure applied to EVERY voice (unlike the leader-only repeat
     /// penalties): candidates are penalized by how recently/often they appeared
     /// in the voice's last 5 notes (recency-decayed, so A-B-A-B circling is
@@ -272,6 +278,7 @@ impl Default for Config {
             same_note_bonus: 2.0,
             voice_contour_weight: 1.0,
             candidate_range: 3,
+            chromatic_scale: Vec::new(),
             melody_force: 0.0,
             start_notes: default_start_notes(),
             roughness_weight: default_roughness_weight(),
