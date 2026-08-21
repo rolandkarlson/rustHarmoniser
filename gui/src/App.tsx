@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react'
 import { ContourEditor } from './ContourEditor'
 import { saveSnapshot, listSnapshots, loadSnapshot, deleteSnapshot, renameSnapshot, toggleFavorite, type Snapshot } from './snapshots'
 import CodeMirror, { keymap, Prec, EditorView, type Extension } from '@uiw/react-codemirror'
@@ -100,6 +100,71 @@ const DEFAULT_HARMONY_MATRIX: number[][] = [
 ];
 
 // Seed pitches for the 5 generated voices (high → low; voice 0 = leading).
+// Semitone offsets from the chord root, for the chord-structure builder.
+const CHORD_DEGREE_LABELS = ['R', '\u266d2', '2', '\u266d3', '3', '4', '\u266d5', '5', '\u266d6', '6', '\u266d7', '7'];
+
+// Named chord structures offered as one-click presets. Each is a set of
+// pitch-class offsets from an arbitrary root — the backend expands every entry
+// over all 12 roots, so these are chord TYPES, not specific chords.
+const CHORD_PRESETS: { name: string; pcs: number[] }[] = [
+  { name: 'Major', pcs: [0, 4, 7] },
+  { name: 'Minor', pcs: [0, 3, 7] },
+  { name: 'Diminished', pcs: [0, 3, 6] },
+  { name: 'Augmented', pcs: [0, 4, 8] },
+  { name: 'Sus2', pcs: [0, 2, 7] },
+  { name: 'Sus4', pcs: [0, 5, 7] },
+  { name: 'Major 7th', pcs: [0, 4, 7, 11] },
+  { name: 'Dominant 7th', pcs: [0, 4, 7, 10] },
+  { name: 'Minor 7th', pcs: [0, 3, 7, 10] },
+  { name: 'Half-dim 7th', pcs: [0, 3, 6, 10] },
+  { name: 'Dim 7th', pcs: [0, 3, 6, 9] },
+  { name: 'Major 6th', pcs: [0, 4, 7, 9] },
+  { name: 'Minor 6th', pcs: [0, 3, 7, 9] },
+];
+
+// Distinct pitch classes, in ascending order.
+const normalizePcs = (pcs: number[]): number[] =>
+  [...new Set(pcs.map((p) => ((Math.round(p) % 12) + 12) % 12))].sort((a, b) => a - b);
+
+// Identity of a chord structure UP TO TRANSPOSITION, matching the backend, which
+// expands each template over all 12 roots. So [0,4,7] and [0,3,8] are one and the
+// same rule and must not both end up in the list.
+const rotationKey = (pcs: number[]): string => {
+  const set = normalizePcs(pcs);
+  if (set.length === 0) return '';
+  let best = '';
+  for (let k = 0; k < 12; k++) {
+    const rot = set.map((p) => (p + k) % 12).sort((a, b) => a - b).join(',');
+    if (k === 0 || rot < best) best = rot;
+  }
+  return best;
+};
+
+const chordPresetFor = (pcs: number[]) => {
+  const key = rotationKey(pcs);
+  return key ? CHORD_PRESETS.find((p) => rotationKey(p.pcs) === key) : undefined;
+};
+
+// Store a rotation of a known chord in that chord's standard spelling, so the list
+// reads musically: a set entered as [0,3,8] lands as the major triad it is.
+const canonicalPcs = (pcs: number[]): number[] => {
+  const preset = chordPresetFor(pcs);
+  return preset ? [...preset.pcs] : normalizePcs(pcs);
+};
+
+const chordName = (pcs: number[]): string => chordPresetFor(pcs)?.name ?? 'Custom';
+
+// A chord_templates entry, matching model::ChordTemplate: a bare offset list means
+// "no stated preference", the object form carries a usage weight.
+type ChordTemplate = number[] | { pcs: number[]; weight: number };
+
+const tplPcs = (t: ChordTemplate): number[] => (Array.isArray(t) ? t : t.pcs);
+const tplWeight = (t: ChordTemplate): number => (Array.isArray(t) ? 1 : t.weight);
+// Weights only take effect once at least one entry states one — matching the
+// backend, where a list of bare entries leaves every group free to pick any
+// listed structure instead of being locked to an apportioned one.
+const weightsActive = (list: ChordTemplate[]): boolean => list.some((t) => !Array.isArray(t));
+
 // Mirrors DEFAULT_START_NOTES in src/model.rs.
 const DEFAULT_START_NOTES = [70, 65, 60, 50, 34];
 
@@ -144,6 +209,243 @@ function NumberField({ value, onChange, integer, className, title, disabled }: {
   );
 }
 
+// A labelled cluster of related header parameters.
+function ParamGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
+      <span className="text-[10px] uppercase tracking-widest text-slate-600 select-none">{label}</span>
+      <div className="flex gap-3 items-center flex-wrap">{children}</div>
+    </div>
+  );
+}
+
+// Contour tabs that only feed the Schillinger candidate generator — hidden in
+// Chromatic mode, where the progression layer is bypassed entirely.
+const SCHILLINGER_TAB_IDS = ['schillinger', 'schillinger_ex', 'mode', 'chord'];
+
+// ----- "Why this chord" inspector -----
+// Mirrors core/src/trace.rs: the named score contributions the backend returns
+// per chosen chord (in the /api/generate response and the render archive).
+type ScoreTerm = { name: string; value: number };
+type VoiceBd = {
+  channel: number;
+  pitch: number;
+  previous_pitch: number | null;
+  is_leader: boolean;
+  terms: ScoreTerm[];
+};
+type GroupBd = {
+  start: number;
+  bar: number;
+  root_pc: number | null;
+  score: number;
+  soft_score: number;
+  hard_violation_count: number;
+  hard_violations: { name: string; count: number }[];
+  chord_terms: ScoreTerm[];
+  voices: VoiceBd[];
+  scored: boolean;
+};
+
+// Labels + tooltips per term name (names come from harmonizer's ScoreSink calls).
+const TERM_INFO: Record<string, { label: string; tip: string }> = {
+  // chord-level
+  harmony_mean: { label: 'Harmony · mean', tip: 'Average pairwise consonance over the sonority (H-Matrix style blended with roughness), × the group harmony weight.' },
+  harmony_worst: { label: 'Harmony · worst pair', tip: 'The single most disliked voice pair — one bad clash drags the whole chord.' },
+  harmony_bass: { label: 'Harmony · vs bass', tip: 'Consonance of the pairs involving the bass note (inversion colour).' },
+  harmony_quality: { label: 'Harmony · quality', tip: 'Pitch classes measured from the CHORD ROOT — the only harmony part that can tell major from minor (chord_quality_weight).' },
+  root_position: { label: 'Root position', tip: 'Bass-on-root preference: full bonus in root position, 0.4 with the third in the bass, 0 for six-four, −0.3 for a non-chord tone (root_position_weight).' },
+  root_doubling: { label: 'Doubling', tip: '+ for doubling the root, − per extra copy of the leading tone or chordal 7th (root_doubling_weight).' },
+  interval_variety: { label: 'Interval variety', tip: 'Penalty per repeated interval class within the sonority; octave doublings count at any chord size (interval_exists_in_harmony).' },
+  parallel_motion: { label: 'Parallel 5th/8ve', tip: 'Parallel fifths/octaves or antiparallel octaves against another moving voice (consecutive_octav_fift).' },
+  same_direction: { label: 'Same direction', tip: 'An outer voice moving with the chord majority instead of against it (same_direction).' },
+  common_tone_penalty: { label: 'Common tones', tip: 'Group-level penalty per voice holding its previous pitch (common_tone_penalty).' },
+  // per-voice
+  smoothness: { label: 'Smoothness', tip: 'Melodic distance from the previous pitch — hold is smoothest, leaps decay — × the group smoothness weight. Bass gets P4/P5/octave leaps floored.' },
+  melody_force: { label: 'Melody force', tip: 'Recency-decayed penalty for pitches from the voice\'s last 5 notes, small reward for stepwise motion (melody_force).' },
+  tendency: { label: 'Tendency tone', tip: 'Leading tone resolving up to the tonic / chordal 7th resolving down by step (tendency_weight).' },
+  off_scale_hold: { label: 'Off-scale hold', tip: 'Fixed penalty for holding a pitch that has left the current scale — only survives when the voice-change budget forces it.' },
+  contour_spring: { label: 'Contour spring', tip: 'Quadratic pull toward the voice contour\'s target pitch (voice_contour_weight).' },
+  crossing_penalty: { label: 'Crossing', tip: 'Candidate too close to a neighbouring voice\'s register (no_crossing, applied per violated side).' },
+  leader_history: { label: 'Leader history', tip: 'This chord\'s LEADER takes the repeat penalties (last_note_same, last_note_exist_in_voice) so it keeps moving.' },
+  hold_stickiness: { label: 'Hold stickiness', tip: 'Non-leader bonus for keeping a common tone (same_note_bonus). Stagnant voices lose it.' },
+  // hard violations
+  unison_collision: { label: 'Unison collision', tip: 'Two voices on exactly the same pitch.' },
+  forbidden_interval: { label: 'Forbidden interval', tip: 'An interval class the active H-Matrix row hard-forbids (cell ≤ −5).' },
+  chord_template: { label: 'Chord whitelist', tip: 'The sonority\'s pitch-class set matches none of the allowed chord structures.' },
+  voice_budget: { label: 'Voice budget', tip: 'Outside the min/max voices-changed budget.' },
+};
+
+const termLabel = (name: string) => TERM_INFO[name]?.label ?? name;
+const termTip = (name: string) => TERM_INFO[name]?.tip ?? name;
+
+function TermRow({ term, maxAbs }: { term: ScoreTerm; maxAbs: number }) {
+  const pct = maxAbs > 0 ? Math.min(100, (Math.abs(term.value) / maxAbs) * 100) : 0;
+  const pos = term.value >= 0;
+  return (
+    <div className="flex items-center gap-2 py-0.5" title={termTip(term.name)}>
+      <span className="w-36 shrink-0 text-xs text-slate-400 truncate">{termLabel(term.name)}</span>
+      <div className="flex-1 h-2 rounded bg-slate-950 overflow-hidden flex">
+        <div className="w-1/2 flex justify-end">
+          {!pos && <div className="h-full bg-rose-500/70 rounded-l" style={{ width: `${pct}%` }} />}
+        </div>
+        <div className="w-1/2 border-l border-slate-700">
+          {pos && <div className="h-full bg-emerald-500/70 rounded-r" style={{ width: `${pct}%` }} />}
+        </div>
+      </div>
+      <span className={`w-16 shrink-0 text-right text-xs font-mono ${pos ? 'text-emerald-300' : 'text-rose-300'}`}>
+        {term.value >= 0 ? '+' : ''}{term.value.toFixed(2)}
+      </span>
+    </div>
+  );
+}
+
+function ChordInspector({ breakdown, onClose }: { breakdown: GroupBd[]; onClose: () => void }) {
+  const [sel, setSel] = useState(0);
+  const g = breakdown[Math.min(sel, breakdown.length - 1)];
+
+  // ←/→ step through chords; Escape closes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { onClose(); return; }
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); setSel(s => Math.min(breakdown.length - 1, s + 1)); }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); setSel(s => Math.max(0, s - 1)); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [breakdown.length, onClose]);
+
+  if (!g) return null;
+
+  const fmtPos = (grp: GroupBd) => {
+    const beat = grp.start - grp.bar * 4;
+    const beatStr = Number.isInteger(beat) ? String(beat + 1) : (beat + 1).toFixed(2);
+    return `${grp.bar + 1}·${beatStr}`;
+  };
+  const chordNotes = (grp: GroupBd) =>
+    grp.voices.slice().sort((a, b) => b.pitch - a.pitch).map(v => midiName(v.pitch)).join(' ');
+
+  // One scale for every bar in this chord's detail view, so terms compare
+  // visually across the chord and its voices.
+  const maxAbs = Math.max(
+    0.01,
+    ...g.chord_terms.map(t => Math.abs(t.value)),
+    ...g.voices.flatMap(v => v.terms.map(t => Math.abs(t.value))),
+  );
+  const byMagnitude = (a: ScoreTerm, b: ScoreTerm) => Math.abs(b.value) - Math.abs(a.value);
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-6"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-[95vw] h-[90vh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between gap-4 px-5 py-3 border-b border-slate-800 shrink-0">
+          <div>
+            <h2 className="text-lg font-bold text-emerald-300">Why This Chord</h2>
+            <p className="text-xs text-slate-500">
+              Named score contributions per chosen chord, from the last render. These are the exact numbers the beam search accumulated — not an approximation. Navigate with ←/→.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-slate-100 text-sm font-bold rounded-lg transition-all active:scale-95"
+          >
+            Done
+          </button>
+        </div>
+
+        <div className="flex flex-1 min-h-0">
+          {/* Chord timeline */}
+          <div className="w-72 shrink-0 border-r border-slate-800 overflow-y-auto">
+            {breakdown.map((grp, i) => (
+              <button
+                key={i}
+                onClick={() => setSel(i)}
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-left border-b border-slate-800/60 transition-colors ${i === sel ? 'bg-slate-800 text-cyan-300' : 'text-slate-400 hover:bg-slate-800/50'}`}
+              >
+                <span className="w-10 shrink-0 text-xs font-mono text-slate-500">{fmtPos(grp)}</span>
+                <span className="flex-1 text-xs font-mono truncate">{chordNotes(grp)}</span>
+                {grp.hard_violation_count > 0 && (
+                  <span className="shrink-0 px-1 rounded bg-rose-900 text-rose-200 text-[10px] font-mono" title={`${grp.hard_violation_count} hard violation(s)`}>
+                    !{grp.hard_violation_count}
+                  </span>
+                )}
+                <span className={`w-12 shrink-0 text-right text-xs font-mono ${grp.score >= 0 ? 'text-emerald-400/80' : 'text-rose-400/80'}`}>
+                  {grp.score.toFixed(1)}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {/* Detail */}
+          <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-4">
+            <div className="flex items-baseline gap-4 flex-wrap">
+              <span className="text-xl font-bold text-slate-100 font-mono">{chordNotes(g)}</span>
+              <span className="text-sm text-slate-400">bar {g.bar + 1}, beat {fmtPos(g).split('·')[1]}</span>
+              {g.root_pc !== null && (
+                <span className="text-sm text-slate-400">root <span className="text-cyan-300 font-mono">{NOTE_NAMES[((g.root_pc % 12) + 12) % 12]}</span></span>
+              )}
+              <span className="text-sm text-slate-400">
+                score <span className={`font-mono ${g.score >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{g.score.toFixed(3)}</span>
+              </span>
+              {g.hard_violation_count > 0 && (
+                <span className="text-sm text-rose-300">soft {g.soft_score.toFixed(3)} − {g.hard_violation_count} × 1000</span>
+              )}
+            </div>
+
+            {!g.scored && (
+              <div className="text-sm text-amber-300 bg-amber-950/40 border border-amber-800 rounded-lg px-3 py-2">
+                This group passed through unscored — no candidates were generated for it, so there is no breakdown.
+              </div>
+            )}
+
+            {g.hard_violations.length > 0 && (
+              <div className="flex gap-2 flex-wrap">
+                {g.hard_violations.map(h => (
+                  <span key={h.name} className="px-2 py-1 rounded bg-rose-950 border border-rose-800 text-rose-200 text-xs font-mono" title={termTip(h.name)}>
+                    {termLabel(h.name)} ×{h.count}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {g.chord_terms.length > 0 && (
+              <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
+                <div className="text-xs uppercase tracking-wider text-slate-500 mb-2">Chord terms</div>
+                {g.chord_terms.slice().sort(byMagnitude).map(t => (
+                  <TermRow key={t.name} term={t} maxAbs={maxAbs} />
+                ))}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+              {g.voices.map((v, i) => (
+                <div key={i} className={`bg-slate-950/60 border rounded-lg p-3 ${v.is_leader ? 'border-amber-600/60' : 'border-slate-800'}`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">V{v.channel}</span>
+                    <span className="text-sm font-mono text-slate-200">
+                      {v.previous_pitch !== null && v.previous_pitch !== undefined ? `${midiName(v.previous_pitch)} → ` : ''}{midiName(v.pitch)}
+                    </span>
+                    {v.is_leader && (
+                      <span className="ml-auto px-1.5 py-0.5 rounded bg-amber-900/70 text-amber-200 text-[10px] uppercase tracking-wider" title="The leader carries the melodic motion this chord: it takes the repeat penalties instead of the hold bonus, so it stays free to move.">
+                        Leader
+                      </span>
+                    )}
+                  </div>
+                  {v.terms.length > 0
+                    ? v.terms.slice().sort(byMagnitude).map(t => <TermRow key={t.name} term={t} maxAbs={maxAbs} />)
+                    : <div className="text-xs text-slate-600">no terms (fixed lead)</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [config, setConfig] = useState<any>(null);
   const [activeTab, setActiveTab] = useState('harmony');
@@ -154,6 +456,9 @@ function App() {
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [showMatrix, setShowMatrix] = useState(false);
   const [showStartNotes, setShowStartNotes] = useState(false);
+  const [showChords, setShowChords] = useState(false);
+  // Pitch classes currently ticked in the modal's custom-chord builder.
+  const [chordDraft, setChordDraft] = useState<number[]>([0, 4, 7]);
   const [snTrack, setSnTrack] = useState(0);
   const [snClip, setSnClip] = useState(0);
   const [fetchingChord, setFetchingChord] = useState(false);
@@ -166,6 +471,18 @@ function App() {
   const [consoleFullscreen, setConsoleFullscreen] = useState(false);
   const [script, setScript] = useState<string>(() => localStorage.getItem('contourScript') || '');
   const [scriptMsg, setScriptMsg] = useState<{ text: string; error: boolean } | null>(null);
+  // Score breakdown of the LAST render (from the generate response); powers the
+  // "Why?" inspector. Cleared implicitly by never persisting across reloads.
+  const [breakdown, setBreakdown] = useState<GroupBd[]>([]);
+  const [showInspector, setShowInspector] = useState(false);
+  // Collapsible row holding the preset/randomise buttons; folded by default.
+  const [showGenerators, setShowGenerators] = useState<boolean>(
+    () => localStorage.getItem('showGenerators') === '1',
+  );
+  const toggleGenerators = () => setShowGenerators(s => {
+    localStorage.setItem('showGenerators', s ? '0' : '1');
+    return !s;
+  });
   const snapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -191,6 +508,13 @@ function App() {
     w.setConfig = setConfig;
     w.patchConfig = (patch: any) => setConfig((c: any) => ({ ...c, ...patch }));
   }, [config]);
+
+  // Chromatic mode hides the Schillinger-only tabs; bounce off one if active.
+  useEffect(() => {
+    if (config && !(config.schillinger_progression ?? true) && SCHILLINGER_TAB_IDS.includes(activeTab)) {
+      setActiveTab('harmony');
+    }
+  }, [config, activeTab]);
 
   // Close snapshot menu on outside click
   useEffect(() => {
@@ -269,7 +593,7 @@ function App() {
     if (!config) return;
     setIsGenerating(true);
     setMessage('Generating MIDI...');
-    const snap = saveSnapshot(config);
+    saveSnapshot(config);
     setSnapshots(listSnapshots());
     try {
       const res = await fetch('http://127.0.0.1:3000/api/generate', {
@@ -285,6 +609,7 @@ function App() {
       
       const data = await res.json();
       setMessage(data.message || data.status);
+      setBreakdown(Array.isArray(data.breakdown) ? data.breakdown : []);
     } catch (err: any) {
       setMessage(`Error: ${err.message || err}`);
     }
@@ -294,6 +619,53 @@ function App() {
   const updateConfig = (key: string, value: any) => {
     setConfig({ ...config, [key]: value });
   };
+
+  // ----- chord_templates: the chord-structure whitelist -----
+  // Empty list = unconstrained. Each entry is a set of pitch-class offsets from
+  // an arbitrary root; the backend admits it on all 12 roots.
+  const chordTemplates = (): ChordTemplate[] =>
+    Array.isArray(config?.chord_templates) ? config.chord_templates : [];
+
+  const addChordTemplate = (pcs: number[]) => {
+    const next = canonicalPcs(pcs);
+    if (next.length === 0) return;
+    const list = chordTemplates();
+    // Rotation-equivalent duplicates would be a no-op for the backend but make
+    // the list look like it holds two different rules.
+    if (list.some((t) => rotationKey(tplPcs(t)) === rotationKey(next))) return;
+    // Match the list's current mode, so adding a chord never silently switches
+    // weighting on or off for the entries already there.
+    const entry: ChordTemplate = weightsActive(list) ? { pcs: next, weight: 1 } : next;
+    updateConfig('chord_templates', [...list, entry]);
+  };
+
+  const removeChordTemplate = (idx: number) =>
+    updateConfig('chord_templates', chordTemplates().filter((_, i) => i !== idx));
+
+  const clearChordTemplates = () => updateConfig('chord_templates', []);
+
+  const setChordWeight = (idx: number, weight: number) =>
+    updateConfig('chord_templates', chordTemplates().map((t, i) =>
+      i === idx ? { pcs: tplPcs(t), weight: Math.max(0, weight) } : { pcs: tplPcs(t), weight: tplWeight(t) }));
+
+  // Switching weights off drops back to bare offset lists — the backend reads
+  // that as "any listed structure, optimiser's choice", not as equal weights.
+  const toggleChordWeights = () => {
+    const list = chordTemplates();
+    updateConfig('chord_templates', weightsActive(list)
+      ? list.map((t) => tplPcs(t))
+      : list.map((t) => ({ pcs: tplPcs(t), weight: 1 })));
+  };
+
+  // Share of chords each entry gets, as the backend apportions it.
+  const chordWeightShare = (idx: number): number => {
+    const list = chordTemplates();
+    const total = list.reduce((a, t) => a + Math.max(0, tplWeight(t)), 0);
+    return total > 0 ? (Math.max(0, tplWeight(list[idx])) / total) * 100 : 0;
+  };
+
+  const toggleChordDraft = (pc: number) =>
+    setChordDraft((d) => (d.includes(pc) ? d.filter((x) => x !== pc) : [...d, pc].sort((a, b) => a - b)));
 
   // Which config field (and whether it's per-voice) backs the active tab — used
   // to resolve the `$` shortcut in the script console to the on-screen contour.
@@ -880,7 +1252,6 @@ function App() {
       );
 
       // Rhythm: stately — mostly quarter and half notes, faster at climax
-      const classSnaps = [0.5, 1.0, 2.0, 4.0];
       nc.voice_rhythm_contour = Array.from({ length: 16 }, (_, v) =>
         Array.from({ length: steps }, (_, i) => {
           const phase = i / steps;
@@ -1207,14 +1578,14 @@ function App() {
       const currentMode = ((Math.round(modeContour[xi] ?? config.mode) % 7) + 7) % 7;
 
       const currentScale = generateModeFromSteps(currentMode);
-      const chordIndices = chordStruct.map(item => (item * expansion) + seqRoot);
+      const chordIndices = chordStruct.map((item: number) => (item * expansion) + seqRoot);
       const modShim = (v: number, len: number) => ((v % len) + len) % len;
-      const currentChord = chordIndices.map(idx => currentScale[modShim(idx, currentScale.length)] % 12);
+      const currentChord = chordIndices.map((idx: number) => currentScale[modShim(idx, currentScale.length)] % 12);
 
       for (let m = 0; m < 7; m++) {
         if (m === currentMode) continue;
         const otherScale = generateModeFromSteps(m);
-        const otherChord = chordIndices.map(idx => otherScale[modShim(idx, otherScale.length)] % 12);
+        const otherChord = chordIndices.map((idx: number) => otherScale[modShim(idx, otherScale.length)] % 12);
         if (sameChord(currentChord, otherChord)) {
           highlights.push({ x: xi, y: m, color: 'rgba(253, 224, 71, 0.3)' });
         }
@@ -1341,6 +1712,10 @@ function App() {
     }
   };
 
+  // Which candidate generator feeds the search — drives which controls and
+  // tabs are shown (root-aware terms need the Schillinger progression's roots).
+  const sch: boolean = config.schillinger_progression ?? true;
+
   const tabs = [
     { id: 'schillinger', label: 'Schillinger', tip: 'Chord progression sequence — scale degree indices per bar that define the harmonic framework.' },
     { id: 'schillinger_ex', label: 'Sch. EXP', tip: 'Expansion multiplier — stretches or compresses chord voicing intervals. Higher = wider voicings.' },
@@ -1364,183 +1739,177 @@ function App() {
             </span>
           )}
 
-          <div className="flex gap-4 items-center flex-wrap bg-slate-950 px-4 py-2 rounded-lg border border-slate-800">
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Phrase Length — number of bars per phrase. Controls harmonic progression length and contour grid spacing.">PL:</span>
-              <NumberField integer value={config.pl} onChange={v => updateConfig('pl', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Render Length — total number of phrases to generate. Total bars = PL × Render Len.">Render Len:</span>
-              <NumberField integer value={config.render_length} onChange={v => updateConfig('render_length', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Lookahead Depth — how many future chords each candidate progression is scored on. Only has an effect when Beam > 1.">Lookahead:</span>
-              <NumberField integer value={config.lookahead_depth ?? 0} onChange={v => updateConfig('lookahead_depth', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Beam Width — how many rival progressions are kept alive, and how many alternative voicings each chord branches into. 1 = greedy (fastest, and Lookahead does nothing). Cost grows as Beam² × (1 + Lookahead).">Beam:</span>
-              <NumberField integer value={config.beam_width ?? 3} onChange={v => updateConfig('beam_width', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Random seed — same seed produces identical output. Change for a different arrangement.">Seed:</span>
-              <NumberField integer value={config.rng_seed} onChange={v => updateConfig('rng_seed', v)} className="w-24 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Main Pitch — MIDI note offset added to all output pitches. 60 = Middle C.">Pitch:</span>
-              <NumberField integer value={config.main_pitch ?? 60} onChange={v => updateConfig('main_pitch', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Root — pitch class (0-11) used as the tonal center for the Schillinger scale. 0 = C.">Root:</span>
-              <NumberField integer value={config.root ?? 0} onChange={v => updateConfig('root', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="When enabled, candidate notes are constrained to Schillinger-derived scale degrees. When off, notes can be any pitch within range.">Schillinger:</span>
-              <input type="checkbox" checked={config.schillinger_progression ?? true} onChange={e => updateConfig('schillinger_progression', e.target.checked)} className="accent-cyan-500" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Snap each Schillinger scale note UP to the nearest chord_structure pitch class (mod 12). Mutually exclusive with Floor.">Ceil:</span>
-              <input type="checkbox" checked={config.use_ceiling ?? false} onChange={e => updateConfig('use_ceiling', e.target.checked)} className="accent-cyan-500" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Snap each Schillinger scale note DOWN to the nearest chord_structure pitch class (mod 12). Ignored if Ceil is on.">Floor:</span>
-              <input type="checkbox" checked={config.use_floor ?? false} onChange={e => updateConfig('use_floor', e.target.checked)} className="accent-cyan-500" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="At bar boundaries (first/last bar of each pl-length phrase), restrict candidate notes by channel: channel 4 → root only, channel 0 → third, others → root/third/fifth.">Resolve:</span>
-              <input type="checkbox" checked={config.use_resolve ?? false} onChange={e => updateConfig('use_resolve', e.target.checked)} className="accent-cyan-500" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Generate the chord progression from the mode's own chord-transition table instead of using the Schillinger Sequence literally: one phrase of pl bars per render_length, each closing V → I. Overrides Schillinger Sequence while on.">Cadence:</span>
-              <input type="checkbox" checked={config.use_generated_progression ?? false} onChange={e => updateConfig('use_generated_progression', e.target.checked)} className="accent-cyan-500" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Use the pitches from an Ableton clip as the leading voice (channel 0). Pitches are cycled through voice_rhythm timing.">Lead Clip:</span>
-              <input type="checkbox" checked={config.use_leading_voice ?? false} onChange={e => updateConfig('use_leading_voice', e.target.checked)} className="accent-cyan-500" />
-              <NumberField integer value={config.leading_voice_track ?? 0} onChange={v => updateConfig('leading_voice_track', v)} title="Ableton track index" className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" disabled={!config.use_leading_voice} />
-              <span className="text-xs text-slate-600">/</span>
-              <NumberField integer value={config.leading_voice_clip ?? 1} onChange={v => updateConfig('leading_voice_clip', v)} title="Ableton clip index" className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" disabled={!config.use_leading_voice} />
-            </div>
-            <div className="border-l border-slate-700 h-5"></div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Pitch search window: each voice considers its previous pitch ± this many semitones (non-Schillinger mode). Wider = more freedom to escape a register, slower search.">Cand Range:</span>
-              <NumberField integer value={config.candidate_range ?? 3} onChange={v => updateConfig('candidate_range', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes pitches already in voice history. Higher = more variety.">Note Repeat:</span>
-              <NumberField value={config.last_note_exist_in_voice ?? 100} onChange={v => updateConfig('last_note_exist_in_voice', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Melody force: applied to EVERY voice (Note Repeat / Same Note only act on the per-chord leader). Penalizes pitches the voice used in its last 5 notes, recency-decayed — so A-B-A-B circling is caught, not just immediate repeats — and slightly rewards stepwise motion (1-2 st). 0 = off. Start ~1.0, raise to 2-3 to strongly force moving lines. Pair with Hold Bias ≤ 0.">Melody Force:</span>
-              <NumberField value={config.melody_force ?? 0} onChange={v => updateConfig('melody_force', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Per-voice: penalizes a voice repeating its own immediate previous note. Higher = more melodic movement within a line. (Scale ≈ ±1 now.)">Same Note:</span>
-              <NumberField value={config.last_note_same ?? 0.5} onChange={v => updateConfig('last_note_same', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Stickiness: bonus a NON-leader voice gets for holding its previous pitch (common tone). Higher = voices keep common tones unless moving is clearly more consonant. The permutation leader is excluded so it stays free to move. (Replaces the old +30 unison boost; harmony spans ≈ ±1, so ~2 means 'hold unless serious conflict'.)">Hold Bias:</span>
-              <NumberField value={config.same_note_bonus ?? 2.0} onChange={v => updateConfig('same_note_bonus', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Voice-change budget: MINIMUM voices that must change pitch between consecutive chords (-1 = off). Forces the most-worthwhile holders to move, so chords are never fully static.">Min Δ:</span>
-              <NumberField integer value={config.min_voices_changed ?? -1} onChange={v => updateConfig('min_voices_changed', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Voice-change budget: MAXIMUM voices that may change pitch between consecutive chords (-1 = off). Holds the least-worthwhile movers on their previous pitch (common tones) for parsimonious voice leading.">Max Δ:</span>
-              <NumberField integer value={config.max_voices_changed ?? -1} onChange={v => updateConfig('max_voices_changed', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes outer voices moving in the same direction as harmony. Encourages contrary motion.">Same Dir:</span>
-              <NumberField value={config.same_direction ?? 1} onChange={v => updateConfig('same_direction', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes parallel fifths and unisons. Classical voice-leading rule. 0 = disabled.">Par 5th/Oct:</span>
-              <NumberField value={config.consecutive_octav_fift ?? 0} onChange={v => updateConfig('consecutive_octav_fift', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Prevents voice crossing — voices must stay in their register. Higher = stricter.">No Cross:</span>
-              <NumberField value={config.no_crossing ?? 100} onChange={v => updateConfig('no_crossing', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes duplicate intervals in chord. Adds harmonic variety.">Dup Interval:</span>
-              <NumberField value={config.interval_exists_in_harmony ?? 1} onChange={v => updateConfig('interval_exists_in_harmony', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="How strongly each voice's pitch contour pulls its notes toward the target pitch. 1 = original strength, 0 = contour ignored.">Contour Wt:</span>
-              <NumberField value={config.voice_contour_weight ?? 1} onChange={v => updateConfig('voice_contour_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="border-l border-slate-700 h-5"></div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Blend between the H-Matrix style preference and register-aware sensory roughness (harmonic-spectrum Plomp-Levelt). 0 = pure style/pitch-class, 1 = pure psychoacoustics. Roughness is what makes the same interval muddier in the bass and a m2 harsher than a m9.">Roughness:</span>
-              <NumberField value={config.roughness_weight ?? 0.5} onChange={v => updateConfig('roughness_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Chord quality: scores each pitch class by its interval ABOVE THE CHORD ROOT, using the same H-Matrix row. This is the only term that can tell a major triad from a minor one — pairwise intervals give {3,4,7} for both. Raise it to make the H-Matrix row steer chord colour, not just interval colour. 0 = off. Schillinger mode only.">Quality:</span>
-              <NumberField value={config.chord_quality_weight ?? 1} onChange={v => updateConfig('chord_quality_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Bass on the chord root: full bonus in root position, 0.4 with the third in the bass, 0 with the fifth (six-four), -0.3 for a non-chord tone. Raise for solid functional harmony, drop to 0 to let inversions float freely. Schillinger mode only.">Root Pos:</span>
-              <NumberField value={config.root_position_weight ?? 0.5} onChange={v => updateConfig('root_position_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Rewards doubling the chord root (the first doubling only) and penalizes each extra voice on the key's leading tone. The classical doubling policy — pair with Dup Interval, which pushes the other way. 0 = off. Schillinger mode only.">Root Dbl:</span>
-              <NumberField value={config.root_doubling_weight ?? 0.5} onChange={v => updateConfig('root_doubling_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider text-slate-500" title="Tendency tones: rewards the leading tone stepping up to the tonic and a chordal minor 7th falling by step, penalizes abandoning either. Only fires in modes that actually have a leading tone. This is what gives cadences their pull. 0 = off.">Tendency:</span>
-              <NumberField value={config.tendency_weight ?? 0.5} onChange={v => updateConfig('tendency_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-            </div>
+          <div className="flex gap-2 items-stretch flex-wrap">
+            <ParamGroup label="Algorithm">
+              <div className="flex rounded-lg overflow-hidden border border-slate-700">
+                <button
+                  onClick={() => updateConfig('schillinger_progression', true)}
+                  title="Candidates come from the Schillinger progression's per-bar scales — chords have roots, so the root-aware terms (Quality, Root Pos, Root Dbl, chordal-7th tendency) and the progression tabs apply."
+                  className={`px-3 py-1 text-xs font-bold transition-colors ${sch ? 'bg-cyan-600 text-slate-950' : 'bg-slate-900 text-slate-400 hover:bg-slate-800'}`}
+                >
+                  Schillinger
+                </button>
+                <button
+                  onClick={() => updateConfig('schillinger_progression', false)}
+                  title="Candidates are any pitch within ± Cand Range semitones of the voice's previous note — no progression layer, no chord roots; the root-aware terms and progression tabs are off."
+                  className={`px-3 py-1 text-xs font-bold transition-colors ${!sch ? 'bg-cyan-600 text-slate-950' : 'bg-slate-900 text-slate-400 hover:bg-slate-800'}`}
+                >
+                  Chromatic
+                </button>
+              </div>
+              {sch ? (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Snap each Schillinger scale note UP to the nearest chord_structure pitch class (mod 12). Mutually exclusive with Floor.">Ceil:</span>
+                    <input type="checkbox" checked={config.use_ceiling ?? false} onChange={e => updateConfig('use_ceiling', e.target.checked)} className="accent-cyan-500" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Snap each Schillinger scale note DOWN to the nearest chord_structure pitch class (mod 12). Ignored if Ceil is on.">Floor:</span>
+                    <input type="checkbox" checked={config.use_floor ?? false} onChange={e => updateConfig('use_floor', e.target.checked)} className="accent-cyan-500" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="At bar boundaries (first/last bar of each pl-length phrase), restrict candidate notes by channel: channel 4 → root only, channel 0 → third, others → root/third/fifth.">Resolve:</span>
+                    <input type="checkbox" checked={config.use_resolve ?? false} onChange={e => updateConfig('use_resolve', e.target.checked)} className="accent-cyan-500" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Generate the chord progression from the mode's own chord-transition table instead of using the Schillinger Sequence literally: one phrase of pl bars per render_length, each closing V → I. Overrides Schillinger Sequence while on.">Cadence:</span>
+                    <input type="checkbox" checked={config.use_generated_progression ?? false} onChange={e => updateConfig('use_generated_progression', e.target.checked)} className="accent-cyan-500" />
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs uppercase tracking-wider text-slate-500" title="Pitch search window: each voice considers its previous pitch ± this many semitones. Wider = more freedom to escape a register, slower search.">Cand Range:</span>
+                  <NumberField integer value={config.candidate_range ?? 3} onChange={v => updateConfig('candidate_range', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                </div>
+              )}
+            </ParamGroup>
+
+            <ParamGroup label="Structure">
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Phrase Length — number of bars per phrase. Controls harmonic progression length and contour grid spacing.">PL:</span>
+                <NumberField integer value={config.pl} onChange={v => updateConfig('pl', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Render Length — total number of phrases to generate. Total bars = PL × Render Len.">Render Len:</span>
+                <NumberField integer value={config.render_length} onChange={v => updateConfig('render_length', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Main Pitch — MIDI note offset added to all output pitches. 60 = Middle C.">Pitch:</span>
+                <NumberField integer value={config.main_pitch ?? 60} onChange={v => updateConfig('main_pitch', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Root — pitch class (0-11) used as the tonal center: the Schillinger scale root, and the tonic the tendency-tone term resolves to. 0 = C.">Root:</span>
+                <NumberField integer value={config.root ?? 0} onChange={v => updateConfig('root', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Random seed — same seed produces identical output. Change for a different arrangement.">Seed:</span>
+                <NumberField integer value={config.rng_seed} onChange={v => updateConfig('rng_seed', v)} className="w-24 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+            </ParamGroup>
+
+            <ParamGroup label="Search">
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Beam Width — how many rival progressions are kept alive, and how many alternative voicings each chord branches into. 1 = greedy (fastest, and Lookahead does nothing). Cost grows as Beam² × (1 + Lookahead).">Beam:</span>
+                <NumberField integer value={config.beam_width ?? 3} onChange={v => updateConfig('beam_width', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Lookahead Depth — how many future chords each candidate progression is scored on. Only has an effect when Beam > 1.">Lookahead:</span>
+                <NumberField integer value={config.lookahead_depth ?? 0} onChange={v => updateConfig('lookahead_depth', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+            </ParamGroup>
+
+            <ParamGroup label="Voice Leading">
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes pitches already in voice history. Higher = more variety.">Note Repeat:</span>
+                <NumberField value={config.last_note_exist_in_voice ?? 100} onChange={v => updateConfig('last_note_exist_in_voice', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Melody force: applied to EVERY voice (Note Repeat / Same Note only act on the per-chord leader). Penalizes pitches the voice used in its last 5 notes, recency-decayed — so A-B-A-B circling is caught, not just immediate repeats — and slightly rewards stepwise motion (1-2 st). 0 = off. Start ~1.0, raise to 2-3 to strongly force moving lines. Pair with Hold Bias ≤ 0.">Melody Force:</span>
+                <NumberField value={config.melody_force ?? 0} onChange={v => updateConfig('melody_force', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Per-voice: penalizes a voice repeating its own immediate previous note. Higher = more melodic movement within a line. (Scale ≈ ±1 now.)">Same Note:</span>
+                <NumberField value={config.last_note_same ?? 0.5} onChange={v => updateConfig('last_note_same', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Stickiness: bonus a NON-leader voice gets for holding its previous pitch (common tone). Higher = voices keep common tones unless moving is clearly more consonant. The per-chord leader is excluded so it stays free to move.">Hold Bias:</span>
+                <NumberField value={config.same_note_bonus ?? 2.0} onChange={v => updateConfig('same_note_bonus', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Voice-change budget: MINIMUM voices that must change pitch between consecutive chords (-1 = off). Forces the most-worthwhile holders to move, so chords are never fully static.">Min Δ:</span>
+                <NumberField integer value={config.min_voices_changed ?? -1} onChange={v => updateConfig('min_voices_changed', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Voice-change budget: MAXIMUM voices that may change pitch between consecutive chords (-1 = off). Holds the least-worthwhile movers on their previous pitch (common tones) for parsimonious voice leading.">Max Δ:</span>
+                <NumberField integer value={config.max_voices_changed ?? -1} onChange={v => updateConfig('max_voices_changed', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes outer voices moving in the same direction as harmony. Encourages contrary motion.">Same Dir:</span>
+                <NumberField value={config.same_direction ?? 1} onChange={v => updateConfig('same_direction', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes parallel fifths and unisons. Classical voice-leading rule. 0 = disabled.">Par 5th/Oct:</span>
+                <NumberField value={config.consecutive_octav_fift ?? 0} onChange={v => updateConfig('consecutive_octav_fift', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Prevents voice crossing — voices must stay in their register. Higher = stricter.">No Cross:</span>
+                <NumberField value={config.no_crossing ?? 100} onChange={v => updateConfig('no_crossing', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="How strongly each voice's pitch contour pulls its notes toward the target pitch. 1 = original strength, 0 = contour ignored.">Contour Wt:</span>
+                <NumberField value={config.voice_contour_weight ?? 1} onChange={v => updateConfig('voice_contour_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+            </ParamGroup>
+
+            <ParamGroup label="Harmony">
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes duplicate intervals in chord. Adds harmonic variety.">Dup Interval:</span>
+                <NumberField value={config.interval_exists_in_harmony ?? 1} onChange={v => updateConfig('interval_exists_in_harmony', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Blend between the H-Matrix style preference and register-aware sensory roughness (harmonic-spectrum Plomp-Levelt). 0 = pure style/pitch-class, 1 = pure psychoacoustics. Roughness is what makes the same interval muddier in the bass and a m2 harsher than a m9.">Roughness:</span>
+                <NumberField value={config.roughness_weight ?? 0.5} onChange={v => updateConfig('roughness_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Tendency tones: rewards the leading tone stepping up to the tonic and (Schillinger mode) a chordal minor 7th falling by step, penalizes abandoning either. Only fires in modes that actually have a leading tone. This is what gives cadences their pull. 0 = off.">Tendency:</span>
+                <NumberField value={config.tendency_weight ?? 0.5} onChange={v => updateConfig('tendency_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              {sch && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Chord quality: scores each pitch class by its interval ABOVE THE CHORD ROOT, using the same H-Matrix row. This is the only term that can tell a major triad from a minor one — pairwise intervals give {3,4,7} for both. Raise it to make the H-Matrix row steer chord colour, not just interval colour. 0 = off.">Quality:</span>
+                    <NumberField value={config.chord_quality_weight ?? 1} onChange={v => updateConfig('chord_quality_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Bass on the chord root: full bonus in root position, 0.4 with the third in the bass, 0 with the fifth (six-four), -0.3 for a non-chord tone. Raise for solid functional harmony, drop to 0 to let inversions float freely.">Root Pos:</span>
+                    <NumberField value={config.root_position_weight ?? 0.5} onChange={v => updateConfig('root_position_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Rewards doubling the chord root (the first doubling only) and penalizes each extra voice on the key's leading tone. The classical doubling policy — pair with Dup Interval, which pushes the other way. 0 = off.">Root Dbl:</span>
+                    <NumberField value={config.root_doubling_weight ?? 0.5} onChange={v => updateConfig('root_doubling_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                </>
+              )}
+            </ParamGroup>
+
+            <ParamGroup label="Lead Clip">
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Use the pitches from an Ableton clip as the leading voice (channel 0). Pitches are cycled through voice_rhythm timing.">On:</span>
+                <input type="checkbox" checked={config.use_leading_voice ?? false} onChange={e => updateConfig('use_leading_voice', e.target.checked)} className="accent-cyan-500" />
+                <NumberField integer value={config.leading_voice_track ?? 0} onChange={v => updateConfig('leading_voice_track', v)} title="Ableton track index" className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" disabled={!config.use_leading_voice} />
+                <span className="text-xs text-slate-600">/</span>
+                <NumberField integer value={config.leading_voice_clip ?? 1} onChange={v => updateConfig('leading_voice_clip', v)} title="Ableton clip index" className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" disabled={!config.use_leading_voice} />
+              </div>
+            </ParamGroup>
           </div>
 
           <div className="flex gap-2 items-center ml-auto">
             <button
-              onClick={() => applyPreset('jazz')}
-              title="Jazz preset — Dorian/Mixolydian, ii-V-I turnarounds, syncopated rhythms, relaxed voice-leading"
-              className="px-4 py-2 bg-yellow-700 hover:bg-yellow-600 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+              onClick={toggleGenerators}
+              title="Presets and randomisers — Jazz/Classical/Ambient/Trance, Init, Randomise, Rhythm"
+              className={`px-4 py-2 font-bold rounded-lg shadow transition-all active:scale-95 border ${showGenerators ? 'bg-slate-800 border-cyan-500/50 text-cyan-300' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
             >
-              Jazz
-            </button>
-            <button
-              onClick={() => applyPreset('classical')}
-              title="Classical preset — Ionian/Aeolian, I-IV-V-I, strict counterpoint rules, arch-form dynamics"
-              className="px-4 py-2 bg-rose-800 hover:bg-rose-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
-            >
-              Classical
-            </button>
-            <button
-              onClick={() => applyPreset('ambient')}
-              title="Ambient preset — Lydian float over the Ethereal matrix, glacial 2-chord oscillations, deep hold bias, one voice drifts at a time"
-              className="px-4 py-2 bg-teal-800 hover:bg-teal-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
-            >
-              Ambient
-            </button>
-            <button
-              onClick={() => applyPreset('trance')}
-              title="Trance preset — Aeolian anthem loops (i-VI-III-VII), pumping 8th-note bass and lead over held pads, Dark→Bright climax"
-              className="px-4 py-2 bg-violet-800 hover:bg-violet-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
-            >
-              Trance
-            </button>
-            <button
-              onClick={handleInit}
-              title="Reset to the server's default config (reasonable baseline). Does not delete snapshots."
-              className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
-            >
-              Init
-            </button>
-            <button
-              onClick={handleRandomise}
-              title="Randomise all contours"
-              className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
-            >
-              Randomise
-            </button>
-            <button
-              onClick={handleRandomiseRhythm}
-              title="Randomise only rhythm — fractal / self-similar pulse across octaves"
-              className="px-4 py-2 bg-pink-600 hover:bg-pink-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
-            >
-              Rhythm
+              {showGenerators ? '▾' : '▸'} Generators
             </button>
             <button
               onClick={handleDuplicate}
@@ -1555,6 +1924,18 @@ function App() {
               className="px-4 py-2 bg-violet-700 hover:bg-violet-600 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
             >
               H. Matrix
+            </button>
+            <button
+              onClick={() => setShowChords(true)}
+              title="Restrict which chord structures may be built — the constraint the H-Matrix cannot express, since it scores voice pairs rather than the whole sonority"
+              className="px-4 py-2 bg-fuchsia-700 hover:bg-fuchsia-600 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Chords
+              {chordTemplates().length > 0 && (
+                <span className="ml-2 px-1.5 py-0.5 rounded bg-fuchsia-900 text-fuchsia-200 text-xs font-mono">
+                  {chordTemplates().length}
+                </span>
+              )}
             </button>
             <button
               onClick={() => setShowStartNotes(true)}
@@ -1679,13 +2060,81 @@ function App() {
             >
               {isGenerating ? 'Generating...' : 'Generate'}
             </button>
+            <button
+              onClick={() => setShowInspector(true)}
+              disabled={breakdown.length === 0}
+              title={breakdown.length > 0
+                ? 'Inspect the last render: named score contributions per chosen chord'
+                : 'Generate first — the inspector shows the last render\'s score breakdown'}
+              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Why?
+            </button>
           </div>
         </div>
+
+        {/* Generators — presets & randomisers, folded away by default */}
+        {showGenerators && (
+          <div className="flex gap-2 items-center flex-wrap bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-2">
+            <span className="text-[10px] uppercase tracking-widest text-slate-600 select-none mr-1">Presets</span>
+            <button
+              onClick={() => applyPreset('jazz')}
+              title="Jazz preset — Dorian/Mixolydian, ii-V-I turnarounds, syncopated rhythms, relaxed voice-leading"
+              className="px-4 py-1.5 bg-yellow-700 hover:bg-yellow-600 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Jazz
+            </button>
+            <button
+              onClick={() => applyPreset('classical')}
+              title="Classical preset — Ionian/Aeolian, I-IV-V-I, strict counterpoint rules, arch-form dynamics"
+              className="px-4 py-1.5 bg-rose-800 hover:bg-rose-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Classical
+            </button>
+            <button
+              onClick={() => applyPreset('ambient')}
+              title="Ambient preset — Lydian float over the Ethereal matrix, glacial 2-chord oscillations, deep hold bias, one voice drifts at a time"
+              className="px-4 py-1.5 bg-teal-800 hover:bg-teal-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Ambient
+            </button>
+            <button
+              onClick={() => applyPreset('trance')}
+              title="Trance preset — Aeolian anthem loops (i-VI-III-VII), pumping 8th-note bass and lead over held pads, Dark→Bright climax"
+              className="px-4 py-1.5 bg-violet-800 hover:bg-violet-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Trance
+            </button>
+            <div className="border-l border-slate-700 h-5 mx-2"></div>
+            <span className="text-[10px] uppercase tracking-widest text-slate-600 select-none mr-1">Reset / Randomise</span>
+            <button
+              onClick={handleInit}
+              title="Reset to the server's default config (reasonable baseline). Does not delete snapshots."
+              className="px-4 py-1.5 bg-slate-600 hover:bg-slate-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Init
+            </button>
+            <button
+              onClick={handleRandomise}
+              title="Randomise all contours"
+              className="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Randomise
+            </button>
+            <button
+              onClick={handleRandomiseRhythm}
+              title="Randomise only rhythm — fractal / self-similar pulse across octaves"
+              className="px-4 py-1.5 bg-pink-600 hover:bg-pink-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Rhythm
+            </button>
+          </div>
+        )}
 
         {/* Tabs Row */}
         <div className="flex justify-between items-end">
           <div className="flex gap-2">
-            {tabs.map(t => (
+            {tabs.filter(t => sch || !SCHILLINGER_TAB_IDS.includes(t.id)).map(t => (
               <button
                 key={t.id}
                 onClick={() => setActiveTab(t.id)}
@@ -1804,6 +2253,190 @@ function App() {
           </div>
           <div className="shrink-0 px-5 py-2 border-t border-slate-800 bg-slate-900 text-xs text-slate-500 font-mono">
             <span className="text-slate-400">config</span> = live config (mutable) &nbsp;·&nbsp; <span className="text-slate-400">$</span> = current tab+voice contour &nbsp;·&nbsp; helpers: <span className="text-slate-400">range(n), clamp(x,lo,hi), lerp(a,b,t), steps, voice, res</span>
+          </div>
+        </div>
+      )}
+
+      {/* Chord Structure Whitelist Modal */}
+      {/* "Why this chord" score inspector */}
+      {showInspector && breakdown.length > 0 && (
+        <ChordInspector breakdown={breakdown} onClose={() => setShowInspector(false)} />
+      )}
+
+      {showChords && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-6"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setShowChords(false); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-[46rem] max-w-[95vw] max-h-[90vh] overflow-auto">
+            <div className="flex items-center justify-between gap-4 px-5 py-3 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+              <div>
+                <h2 className="text-lg font-bold text-fuchsia-300">Chord Structures</h2>
+                <p className="text-xs text-slate-500 max-w-[34rem]">
+                  Only these structures may be built, on any root. Doublings are free — the rule is about which
+                  distinct pitch classes appear, not how they are voiced. An empty list leaves chord structure
+                  unconstrained. Unlike the H-Matrix, which scores voice <em>pairs</em>, this sees the whole sonority,
+                  so it can tell a major triad from an augmented one. Turn on <em>Weight by usage</em> to fix how often
+                  each structure appears — 0.75 / 0.25 gives three major chords to every minor one.
+                </p>
+              </div>
+              <div className="flex gap-2 items-center shrink-0">
+                <button
+                  onClick={clearChordTemplates}
+                  title="Remove every restriction — any chord structure allowed"
+                  className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-bold rounded-lg transition-all active:scale-95"
+                >
+                  Clear all
+                </button>
+                <button
+                  onClick={() => setShowChords(false)}
+                  className="px-3 py-1.5 bg-fuchsia-700 hover:bg-fuchsia-600 text-slate-100 text-sm font-bold rounded-lg transition-all active:scale-95"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-6">
+              {/* Current list */}
+              <div>
+                <div className="flex items-baseline justify-between mb-2">
+                  <h3 className="text-xs uppercase tracking-wider text-slate-500">
+                    Allowed structures ({chordTemplates().length})
+                  </h3>
+                  {chordTemplates().length > 0 && (
+                    <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={weightsActive(chordTemplates())}
+                        onChange={toggleChordWeights}
+                        className="accent-fuchsia-500"
+                      />
+                      <span title="Off: any listed structure, whichever scores best each chord. On: each structure gets its share of the chords, spread evenly through the render.">
+                        Weight by usage
+                      </span>
+                    </label>
+                  )}
+                </div>
+                {chordTemplates().length === 0 ? (
+                  <p className="text-sm text-slate-500 italic bg-slate-950 border border-slate-800 rounded-lg px-3 py-3">
+                    No restriction — the harmonizer may build any chord the H-Matrix and voice leading permit.
+                  </p>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {chordTemplates().map((t, i) => {
+                      const pcs = normalizePcs(tplPcs(t));
+                      return (
+                        <li key={i} className="flex items-center gap-3 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
+                          <span className="text-sm font-bold text-slate-200 w-28 shrink-0">{chordName(tplPcs(t))}</span>
+                          <span className="flex gap-1">
+                            {pcs.map((pc) => (
+                              <span key={pc} className="px-1.5 py-0.5 rounded bg-fuchsia-950 text-fuchsia-300 text-xs font-mono">
+                                {CHORD_DEGREE_LABELS[pc]}
+                              </span>
+                            ))}
+                          </span>
+                          <span className="text-xs text-slate-600 font-mono">[{pcs.join(', ')}]</span>
+                          {pcs.length > 5 && (
+                            <span className="text-xs text-amber-400" title="More pitch classes than there are voices, so no voicing can satisfy this entry">
+                              needs {pcs.length} voices
+                            </span>
+                          )}
+                          {weightsActive(chordTemplates()) && (
+                            <span className="ml-auto flex items-center gap-2 shrink-0">
+                              <NumberField
+                                value={tplWeight(t)}
+                                onChange={(v) => setChordWeight(i, v)}
+                                title="Relative weight. Shares are normalised, so 3/1 and 0.75/0.25 mean the same thing. 0 = listed but never used."
+                                className="w-16 bg-slate-950 border border-slate-800 rounded px-1.5 py-1 text-sm text-right font-mono text-emerald-300 outline-none focus:border-fuchsia-500"
+                              />
+                              <span
+                                className={`text-xs font-mono w-12 text-right ${tplWeight(t) <= 0 ? 'text-slate-600' : 'text-emerald-400'}`}
+                                title="Share of chords this structure gets"
+                              >
+                                {chordWeightShare(i).toFixed(0)}%
+                              </span>
+                            </span>
+                          )}
+                          <button
+                            onClick={() => removeChordTemplate(i)}
+                            className={`${weightsActive(chordTemplates()) ? '' : 'ml-auto '}px-2 py-1 bg-slate-800 hover:bg-rose-800 text-slate-300 hover:text-rose-100 text-xs font-bold rounded transition-all active:scale-95`}
+                          >
+                            Remove
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+
+              {/* Presets */}
+              <div>
+                <h3 className="text-xs uppercase tracking-wider text-slate-500 mb-2">Add a preset</h3>
+                <div className="flex flex-wrap gap-2">
+                  {CHORD_PRESETS.map((preset) => {
+                    const already = chordTemplates().some((t) => rotationKey(tplPcs(t)) === rotationKey(preset.pcs));
+                    return (
+                      <button
+                        key={preset.name}
+                        onClick={() => addChordTemplate(preset.pcs)}
+                        disabled={already}
+                        title={already ? 'Already in the list' : `Add ${preset.name} — [${preset.pcs.join(', ')}]`}
+                        className={`px-3 py-1.5 text-sm font-bold rounded-lg transition-all active:scale-95 ${
+                          already
+                            ? 'bg-slate-800 text-slate-600 cursor-not-allowed'
+                            : 'bg-slate-700 hover:bg-fuchsia-700 text-slate-200'
+                        }`}
+                      >
+                        {preset.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Custom builder */}
+              <div>
+                <h3 className="text-xs uppercase tracking-wider text-slate-500 mb-2">Build a custom structure</h3>
+                <p className="text-xs text-slate-600 mb-2">Pick the semitone offsets from the root.</p>
+                <div className="flex flex-wrap gap-1 mb-3">
+                  {CHORD_DEGREE_LABELS.map((label, pc) => {
+                    const on = chordDraft.includes(pc);
+                    return (
+                      <button
+                        key={pc}
+                        onClick={() => toggleChordDraft(pc)}
+                        title={`${pc} semitone${pc === 1 ? '' : 's'} above the root`}
+                        className={`w-12 py-1.5 text-sm font-mono rounded transition-all active:scale-95 ${
+                          on ? 'bg-fuchsia-700 text-slate-100 font-bold' : 'bg-slate-800 hover:bg-slate-700 text-slate-400'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => { addChordTemplate(chordDraft); }}
+                    disabled={chordDraft.length === 0}
+                    className={`px-4 py-2 text-sm font-bold rounded-lg transition-all active:scale-95 ${
+                      chordDraft.length === 0
+                        ? 'bg-slate-800 text-slate-600 cursor-not-allowed'
+                        : 'bg-fuchsia-700 hover:bg-fuchsia-600 text-slate-100'
+                    }`}
+                  >
+                    Add to list
+                  </button>
+                  <span className="text-sm text-slate-500">
+                    {chordDraft.length === 0
+                      ? 'Nothing selected'
+                      : `${chordName(chordDraft)} — [${normalizePcs(chordDraft).join(', ')}]`}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

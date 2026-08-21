@@ -1,4 +1,6 @@
-use crate::model::{Note, Config};
+use crate::contour::Contours;
+use crate::trace::{GroupBreakdown, TraceCollector, VoiceBreakdown};
+use crate::model::{Note, Config, ChordTemplate};
 use crate::utils::{SeededRng, ArrayExt, mod_shim, sin};
 use crate::music_theory::{gen_scale};
 
@@ -351,30 +353,34 @@ pub struct Boundaries {
 
 pub struct HarmonizerState {
     pub schillinger_notes: Vec<Vec<Vec<i32>>>,
-    pub voice_contour: Option<Vec<Vec<i32>>>,
-    pub contour_resolution: f64,
-    pub harmony_contour: Option<Vec<f64>>,
-    pub harmony_contour_resolution: f64,
-    pub harmony_matrix_contour: Option<Vec<f64>>,
+    pub contours: Contours,
     pub harmony_matrix: Option<Vec<Vec<f64>>>,
-    pub melody_force_contour: Option<Vec<Vec<f64>>>,
+}
+
+impl HarmonizerState {
+    /// Assemble from a config plus already-resolved contours. Runs the
+    /// Schillinger progression, so call it at the same point in the seeded RNG
+    /// stream the progression was always drawn at (after voice generation).
+    pub fn new(config: &Config, contours: Contours) -> Self {
+        HarmonizerState {
+            schillinger_notes: crate::schillinger::gen_schillinger_progression(config, &contours),
+            contours,
+            harmony_matrix: config.harmony_matrix.clone(),
+        }
+    }
+
+    pub fn from_config(config: &Config) -> Self {
+        Self::new(config, Contours::from_config(config))
+    }
 }
 
 /// Effective melody-force weight for voice `channel_idx` at beat position
-/// `start`: sample that voice's row of melody_force_contour if present and
-/// non-empty (per-voice, like voice_contour), otherwise fall back to the
+/// `start`: that voice's melody-force contour when it has one, otherwise the
 /// scalar `config.melody_force`.
 fn melody_force_at(state: &HarmonizerState, config: &Config, channel_idx: usize, start: f64) -> f64 {
-    if let Some(ref contours) = state.melody_force_contour {
-        if !contours.is_empty() {
-            let contour = &contours[mod_shim(channel_idx as i32, contours.len() as i32) as usize];
-            if !contour.is_empty() {
-                let idx = (start / state.harmony_contour_resolution).floor() as usize;
-                return *contour.get_wrapped(idx);
-            }
-        }
-    }
-    config.melody_force
+    state.contours.melody_force.as_ref()
+        .and_then(|vc| vc.at(channel_idx, start))
+        .unwrap_or(config.melody_force)
 }
 
 
@@ -446,6 +452,139 @@ fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &
     };
 
     apply_bound(result, notes, config, current_lasts_lead, current_note.channel)
+}
+
+/// Rotate a 12-bit pitch-class mask up by `k` semitones.
+fn rotate_pc_mask(mask: u16, k: i32) -> u16 {
+    let k = k.rem_euclid(12) as u32;
+    ((mask << k) | (mask >> (12 - k))) & 0x0FFF
+}
+
+/// One chord structure in all 12 transpositions, as pitch-class bitmasks
+/// (`1 << pc`), sorted and deduped for binary search. `None` if the template names
+/// no pitch classes — a stray `[]` must not silently forbid every chord.
+///
+/// Transposing here is what makes the constraint root-agnostic: a single `[0,4,7]`
+/// admits a major triad on any of the 12 roots, so the caller never has to know
+/// which chord the bar is on.
+fn template_masks(pcs: &[i32]) -> Option<Vec<u16>> {
+    let base = pcs.iter().fold(0u16, |m, &pc| m | 1 << pc.rem_euclid(12));
+    if base == 0 {
+        return None;
+    }
+    let mut masks: Vec<u16> = (0..12).map(|k| rotate_pc_mask(base, k)).collect();
+    masks.sort_unstable();
+    masks.dedup();
+    Some(masks)
+}
+
+/// Union of every usable template's masks: the set of sonorities allowed when no
+/// per-group assignment is in force. `None` means nothing is constrained.
+fn chord_template_masks(templates: &[ChordTemplate]) -> Option<Vec<u16>> {
+    let mut masks: Vec<u16> = templates
+        .iter()
+        .filter_map(|t| template_masks(t.pcs()))
+        .flatten()
+        .collect();
+    if masks.is_empty() {
+        return None;
+    }
+    masks.sort_unstable();
+    masks.dedup();
+    Some(masks)
+}
+
+/// Apportion `groups` slots across `weights` by the Sainte-Laguë highest-averages
+/// method: each slot goes to whichever weight is currently most under-served.
+///
+/// Chosen over a random draw because it is exact and well spread. Over four groups
+/// a 0.75/0.25 split lands 3-and-1 rather than "probably about three", and the
+/// minority structure is distributed through the render instead of clumping. It
+/// also touches no RNG, so adding weights cannot shift any other seeded draw.
+fn apportion(weights: &[f64], groups: usize) -> Vec<usize> {
+    let mut assigned = vec![0usize; weights.len()];
+    let mut seq = Vec::with_capacity(groups);
+    for _ in 0..groups {
+        let mut best: Option<(usize, f64)> = None;
+        for (i, &w) in weights.iter().enumerate() {
+            if w <= 0.0 {
+                continue;
+            }
+            let q = w / (2 * assigned[i] + 1) as f64;
+            // Strict `>` makes ties fall to the earlier template, so the sequence
+            // is a pure function of the weights — no ordering nondeterminism.
+            if best.is_none_or(|(_, bq)| q > bq) {
+                best = Some((i, q));
+            }
+        }
+        match best {
+            Some((i, _)) => {
+                assigned[i] += 1;
+                seq.push(i);
+            }
+            // Every weight is zero: nothing to apportion.
+            None => break,
+        }
+    }
+    seq
+}
+
+/// Which chord structures each rhythmic group may build.
+///
+/// Weights are apportioned across groups rather than folded into the soft score.
+/// A constant score bonus would simply make the heaviest template win every chord,
+/// so "major 0.75 / minor 0.25" would render as 100% major; assigning per group is
+/// what makes the ratio mean what it says.
+struct ChordPlan {
+    /// Masks per usable template, in `config.chord_templates` order.
+    per_template: Vec<Vec<u16>>,
+    /// Union of `per_template` — what a group may use when unassigned.
+    any: Vec<u16>,
+    /// Template index per group. Empty when no entry states a weight, in which
+    /// case every group may use any listed structure.
+    assignment: Vec<usize>,
+}
+
+impl ChordPlan {
+    /// `None` when `templates` constrains nothing.
+    fn build(templates: &[ChordTemplate], groups: usize) -> Option<ChordPlan> {
+        let mut per_template = Vec::new();
+        let mut weights = Vec::new();
+        for t in templates {
+            // Unusable entries are dropped here so they cannot take an
+            // apportionment slot that no chord could ever satisfy.
+            if let Some(masks) = template_masks(t.pcs()) {
+                per_template.push(masks);
+                weights.push(t.weight());
+            }
+        }
+        if per_template.is_empty() {
+            return None;
+        }
+
+        let mut any: Vec<u16> = per_template.iter().flatten().copied().collect();
+        any.sort_unstable();
+        any.dedup();
+
+        // Bare entries mean "no stated preference", so a list without any weight
+        // keeps the whole whitelist legal in every group — the unweighted
+        // behaviour. Stating even one weight switches on apportionment.
+        let assignment = if templates.iter().any(|t| t.explicit_weight().is_some()) {
+            apportion(&weights, groups)
+        } else {
+            Vec::new()
+        };
+
+        Some(ChordPlan { per_template, any, assignment })
+    }
+
+    /// The masks the group at `idx` must satisfy.
+    fn masks_for(&self, idx: usize) -> &[u16] {
+        match self.assignment.get(idx) {
+            Some(&t) => &self.per_template[t],
+            None => &self.any,
+        }
+    }
 }
 
 pub struct PrecomputedHarmonyData {
@@ -568,7 +707,7 @@ pub fn gen_voice_from_notes(pattern: &[Note], source_length: f64, config: &Confi
     out
 }
 
-pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channel: i32, muted: i32, config: &Config) -> Vec<Note> {
+pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channel: i32, muted: i32, config: &Config, contours: &Contours) -> Vec<Note> {
     let mut ar = Vec::new();
     let clip_len = (config.pl * 4 * config.render_length) as f64;
     let mut pos = 0.0;
@@ -577,21 +716,12 @@ pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channe
 
     while pos < clip_len {
         let n = base + pitch_shifts[mod_shim(counter, pitch_shifts.len() as i32) as usize];
-        let mut d = if let Some(vrc) = &config.voice_rhythm_contour {
-            if channel >= 0 && channel < vrc.len() as i32 {
-                let track = &vrc[channel as usize];
-                if !track.is_empty() {
-                    let idx = (pos / config.voice_contour_resolution).floor() as usize;
-                    track[mod_shim(idx as i32, track.len() as i32) as usize]
-                } else {
-                    rhythm_data[mod_shim(counter, rhythm_data.len() as i32) as usize]
-                }
-            } else {
-                rhythm_data[mod_shim(counter, rhythm_data.len() as i32) as usize]
-            }
-        } else {
-            rhythm_data[mod_shim(counter, rhythm_data.len() as i32) as usize]
-        };
+        // Duration from this voice's rhythm contour when it has one; the flat
+        // voice_rhythm cycle otherwise.
+        let mut d = contours.voice_rhythm.as_ref()
+            .filter(|_| channel >= 0)
+            .and_then(|vc| vc.at_strict(channel as usize, pos))
+            .unwrap_or_else(|| rhythm_data[mod_shim(counter, rhythm_data.len() as i32) as usize]);
 
         // Clamp to bar boundary (bar = 4 beats) — notes must not cross bar lines
         let bar_len = 4.0;
@@ -652,6 +782,19 @@ struct BeamCandidate {
     actual_score: f64,
 }
 
+/// One partial chord in the bass-first within-chord beam.
+struct PartialChord {
+    chosen: Vec<usize>,
+    hard: u32,
+    soft: f64,
+    /// Pitch classes used so far, including sustaining notes — the input to the
+    /// chord-template feasibility prune.
+    pc_mask: u16,
+    /// `pc_mask` is already a subset of no whitelisted chord, so no completion of
+    /// this state can satisfy `config.chord_templates`.
+    dead: bool,
+}
+
 struct IntermediateCandidate {
     parent_idx: usize,
     added_notes: Vec<Note>,
@@ -679,15 +822,67 @@ const VIOLATION_PENALTY: f64 = 1000.0;
 const JOINT_ENUM_CAP: usize = 60_000;
 const JOINT_BEAM_WIDTH: usize = 64;
 
+/// The named components of a candidate's `soft_base`, kept alongside the folded
+/// sum so a traced re-score can attribute the score without recomputing.
+/// Values are as-added (weights applied, penalties negative).
+#[derive(Clone, Copy, Default)]
+struct CandTerms {
+    smoothness: f64,
+    melody_force: f64,
+    tendency: f64,
+    off_scale_hold: f64,
+    contour_spring: f64,
+    crossing_penalty: f64,
+}
+
 struct JointCand {
     pitch: i32,
     /// Melodic terms independent of the leader role and of other voices' NEW
-    /// pitches: smoothness, contour pull, crossing.
+    /// pitches: smoothness, contour pull, crossing. Always equals the sum of
+    /// `terms` (folded in the same order, so bit-identical to the legacy value).
     soft_base: f64,
     /// Repeat/history terms if this voice is the leader (hold penalties).
     lead_term: f64,
     /// Repeat/history terms if it is not (hold bonus / stickiness).
     nonlead_term: f64,
+    terms: CandTerms,
+}
+
+/// Callback surface for a traced chord evaluation. The search path uses
+/// `NoTrace`, whose methods are empty and inline away — `eval` stays exactly
+/// the hot loop it was; the explain pass passes a `TraceCollector`.
+trait ScoreSink {
+    fn term(&mut self, name: &'static str, value: f64);
+    fn voice_term(&mut self, voice: usize, name: &'static str, value: f64);
+    fn hard(&mut self, name: &'static str, count: u32);
+    fn leader(&mut self, voice: usize);
+}
+
+struct NoTrace;
+impl ScoreSink for NoTrace {
+    #[inline(always)]
+    fn term(&mut self, _: &'static str, _: f64) {}
+    #[inline(always)]
+    fn voice_term(&mut self, _: usize, _: &'static str, _: f64) {}
+    #[inline(always)]
+    fn hard(&mut self, _: &'static str, _: u32) {}
+    #[inline(always)]
+    fn leader(&mut self, _: usize) {}
+}
+
+impl ScoreSink for TraceCollector {
+    fn term(&mut self, name: &'static str, value: f64) {
+        TraceCollector::term(self, name, value)
+    }
+    fn voice_term(&mut self, voice: usize, name: &'static str, value: f64) {
+        TraceCollector::voice_term(self, voice, name, value)
+    }
+    fn hard(&mut self, name: &'static str, count: u32) {
+        TraceCollector::hard(self, name, count)
+    }
+    fn leader(&mut self, voice: usize) {
+        self.leader = Some(voice);
+    }
 }
 
 struct JointVoice {
@@ -762,6 +957,7 @@ fn build_joint_voices(
                     soft_base: 0.0,
                     lead_term: 0.0,
                     nonlead_term: 0.0,
+                    terms: CandTerms::default(),
                 }],
             };
         }
@@ -803,19 +999,15 @@ fn build_joint_voices(
             candidates.push(last_note);
         }
 
-        let mut target_offset: i32 = 0;
-        let use_contour = if let Some(ref contours) = state.voice_contour {
-            if !contours.is_empty() {
-                let contour = &contours[mod_shim(channel_idx as i32, contours.len() as i32) as usize];
-                if !contour.is_empty() {
-                    let idx = (note.start / state.contour_resolution).floor() as usize;
-                    target_offset = *contour.get_wrapped(idx);
-                }
-            }
-            true
-        } else {
-            false
-        };
+        // A voice-contour that exists switches the spring's anchor to
+        // "input pitch + sampled offset"; a missing or empty row means offset 0,
+        // NOT "no contour" (that distinction only exists when the whole family
+        // is absent).
+        let use_contour = state.contours.voice.is_some();
+        let target_offset: i32 = state.contours.voice.as_ref()
+            .and_then(|vc| vc.at(channel_idx, note.start))
+            .map(|v| v as i32)
+            .unwrap_or(0);
 
         let default_bounds = Boundaries { min: DEFAULT_BOUND_MIN, max: DEFAULT_BOUND_MAX };
         let bounds = precomputed.boundaries_by_channel
@@ -826,11 +1018,20 @@ fn build_joint_voices(
 
         let eff_melody_force = melody_force_at(state, config, channel_idx, note.start);
         let cands = candidates.into_iter().map(|c| {
-            let mut soft_base = melodic_distance_score(last_note, c, note.channel) * w_smooth;
-            soft_base += melody_force_term(c, &current_lasts, eff_melody_force);
-            soft_base += tendency_term(last_note, c, tonic, prev_root, config.tendency_weight);
+            // Each named component is computed once and folded into soft_base in
+            // the same order as always, so the sum stays bit-identical.
+            let mut terms = CandTerms {
+                smoothness: melodic_distance_score(last_note, c, note.channel) * w_smooth,
+                melody_force: melody_force_term(c, &current_lasts, eff_melody_force),
+                tendency: tendency_term(last_note, c, tonic, prev_root, config.tendency_weight),
+                ..CandTerms::default()
+            };
+            let mut soft_base = terms.smoothness;
+            soft_base += terms.melody_force;
+            soft_base += terms.tendency;
             if c == last_note && off_scale_hold {
                 soft_base -= OFF_SCALE_HOLD_PENALTY;
+                terms.off_scale_hold = -OFF_SCALE_HOLD_PENALTY;
             }
 
             if config.voice_contour_weight != 0.0 {
@@ -841,13 +1042,16 @@ fn build_joint_voices(
                 };
                 let normalized = base_dist as f64 / CONTOUR_PITCH_SPAN;
                 soft_base -= config.voice_contour_weight * normalized * normalized;
+                terms.contour_spring = -(config.voice_contour_weight * normalized * normalized);
             }
 
             if bounds.max - c < cb_max {
                 soft_base -= config.no_crossing;
+                terms.crossing_penalty -= config.no_crossing;
             }
             if c - bounds.min < cb_min {
                 soft_base -= config.no_crossing;
+                terms.crossing_penalty -= config.no_crossing;
             }
 
             let mut lead_term = 0.0;
@@ -865,7 +1069,7 @@ fn build_joint_voices(
                 0.0
             };
 
-            JointCand { pitch: c, soft_base, lead_term, nonlead_term }
+            JointCand { pitch: c, soft_base, lead_term, nonlead_term, terms }
         }).collect();
 
         JointVoice { note: *note, prev, is_fixed_lead: false, cands }
@@ -879,20 +1083,17 @@ fn build_joint_voices(
 /// group, resolved from the optional contours or the scalar config fall-backs.
 /// Returns `(w_harmony, w_smooth, harmony_ctx)`.
 fn group_weights(group_start: f64, config: &Config, state: &HarmonizerState) -> (f64, f64, f64) {
-    let idx = (group_start / state.harmony_contour_resolution).floor() as usize;
     // The balance is a MIX between harmony and smoothness, so it is clamped
     // to the range where both weights stay non-negative: a contour value
     // beyond ±0.5 used to flip a weight's sign, silently REWARDING leaps
     // (or dissonance) instead of merely ignoring the other term.
-    let r = match &state.harmony_contour {
-        Some(c) if !c.is_empty() => *c.get_wrapped(idx),
-        _ => config.harmony_distance_balance,
-    }
-    .clamp(-0.5, 0.5);
-    let harmony_ctx = match &state.harmony_matrix_contour {
-        Some(c) if !c.is_empty() => *c.get_wrapped(idx),
-        _ => 0.0,
-    };
+    let r = state.contours.harmony_distance.as_ref()
+        .map(|c| c.at(group_start))
+        .unwrap_or(config.harmony_distance_balance)
+        .clamp(-0.5, 0.5);
+    let harmony_ctx = state.contours.harmony_matrix.as_ref()
+        .map(|c| c.at(group_start))
+        .unwrap_or(0.0);
     (0.5 + r, 0.5 - r, harmony_ctx)
 }
 
@@ -1066,12 +1267,24 @@ struct ChordScorer<'a> {
     root_pc: Option<i32>,
     /// Pitch class a semitone below the key tonic — the doubling to avoid.
     leading_tone_pc: i32,
+    /// Allowed pitch-class-set bitmasks from `config.chord_templates`, already
+    /// expanded over all 12 transpositions. `None` = chord structure is free.
+    chord_masks: Option<&'a [u16]>,
     config: &'a Config,
 }
 
 impl ChordScorer<'_> {
-    /// `(hard violations, soft score)` for one complete chord.
+    /// `(hard violations, soft score)` for one complete chord — the search
+    /// hot path, evaluated untraced.
+    #[inline]
     fn eval(&self, chosen: &[usize]) -> (u32, f64) {
+        self.eval_with(chosen, &mut NoTrace)
+    }
+
+    /// `eval` with a sink receiving every named contribution. `NoTrace` inlines
+    /// to the original hot loop; `TraceCollector` records the breakdown. The
+    /// returned numbers are identical either way.
+    fn eval_with<S: ScoreSink>(&self, chosen: &[usize], sink: &mut S) -> (u32, f64) {
         let voices = self.voices;
         let n = self.n;
         let t = self.table;
@@ -1083,17 +1296,40 @@ impl ChordScorer<'_> {
         // base + Σ nonlead + max_L(lead(L) - nonlead(L)).
         let mut nonlead_sum = 0.0;
         let mut best_delta = f64::NEG_INFINITY;
-        for (v, &ci) in voices.iter().zip(chosen) {
+        let mut leader_idx = usize::MAX;
+        for (i, (v, &ci)) in voices.iter().zip(chosen).enumerate() {
             let c = &v.cands[ci];
             soft += c.soft_base;
+            sink.voice_term(i, "smoothness", c.terms.smoothness);
+            sink.voice_term(i, "melody_force", c.terms.melody_force);
+            sink.voice_term(i, "tendency", c.terms.tendency);
+            sink.voice_term(i, "off_scale_hold", c.terms.off_scale_hold);
+            sink.voice_term(i, "contour_spring", c.terms.contour_spring);
+            sink.voice_term(i, "crossing_penalty", c.terms.crossing_penalty);
             if !v.is_fixed_lead {
                 nonlead_sum += c.nonlead_term;
-                best_delta = best_delta.max(c.lead_term - c.nonlead_term);
+                let delta = c.lead_term - c.nonlead_term;
+                if delta > best_delta {
+                    best_delta = delta;
+                    leader_idx = i;
+                }
             }
         }
         soft += nonlead_sum;
         if best_delta > f64::NEG_INFINITY {
             soft += best_delta;
+            sink.leader(leader_idx);
+            for (i, (v, &ci)) in voices.iter().zip(chosen).enumerate() {
+                if v.is_fixed_lead {
+                    continue;
+                }
+                let c = &v.cands[ci];
+                if i == leader_idx {
+                    sink.voice_term(i, "leader_history", c.lead_term);
+                } else {
+                    sink.voice_term(i, "hold_stickiness", c.nonlead_term);
+                }
+            }
         }
 
         // Pairwise consonance over the full sonority: every pair touching a new
@@ -1118,11 +1354,13 @@ impl ChordScorer<'_> {
                 let pj = voices[j].cands[chosen[j]].pitch;
                 if pi == pj {
                     hard += 1; // exact unison collision between two voices
+                    sink.hard("unison_collision", 1);
                     continue;
                 }
                 let k = ii * m + t.idx_of[&pj];
                 if t.forbidden[k] {
                     hard += 1;
+                    sink.hard("forbidden_interval", 1);
                 }
                 let ps = t.soft[k];
                 sum += ps;
@@ -1139,11 +1377,13 @@ impl ChordScorer<'_> {
                 let pj = t.pitches[sj];
                 if pi == pj {
                     hard += 1;
+                    sink.hard("unison_collision", 1);
                     continue;
                 }
                 let k = ii * m + sj;
                 if t.forbidden[k] {
                     hard += 1;
+                    sink.hard("forbidden_interval", 1);
                 }
                 let ps = t.soft[k];
                 sum += ps;
@@ -1167,11 +1407,30 @@ impl ChordScorer<'_> {
             pc_count[s.rem_euclid(12) as usize] += 1;
         }
 
+        // Chord-structure whitelist. Counted as a hard violation so it composes
+        // lexicographically with the forbidden-interval and voice-budget checks
+        // instead of competing with the soft score.
+        if let Some(masks) = self.chord_masks {
+            let mut mask = 0u16;
+            for (pc, &cnt_pc) in pc_count.iter().enumerate() {
+                if cnt_pc > 0 {
+                    mask |= 1 << pc;
+                }
+            }
+            if masks.binary_search(&mask).is_err() {
+                hard += 1;
+                sink.hard("chord_template", 1);
+            }
+        }
+
         if cnt > 0 {
             let mean = sum / cnt as f64;
             let bass_term = if bass_cnt > 0 { bass_sum / bass_cnt as f64 } else { mean };
             let (wm, ww, wb, wr) = self.agg;
             let mut agg = wm * mean + ww * worst + wb * bass_term;
+            sink.term("harmony_mean", self.w_harmony * wm * mean);
+            sink.term("harmony_worst", self.w_harmony * ww * worst);
+            sink.term("harmony_bass", self.w_harmony * wb * bass_term);
             if let Some(rq) = self.root_quality {
                 // Mean over DISTINCT pitch classes: quality is about which
                 // degrees are present, not how often they are doubled (that is
@@ -1186,6 +1445,7 @@ impl ChordScorer<'_> {
                 }
                 if qn > 0 {
                     agg += wr * (q / qn as f64);
+                    sink.term("harmony_quality", self.w_harmony * wr * (q / qn as f64));
                 }
             }
             soft += self.w_harmony * agg;
@@ -1206,13 +1466,15 @@ impl ChordScorer<'_> {
                     _ => -0.3,
                 };
                 soft += self.config.root_position_weight * bass_bonus;
+                sink.term("root_position", self.config.root_position_weight * bass_bonus);
             }
             if self.config.root_doubling_weight != 0.0 {
                 // Doubling the root is the default in part-writing; doubling
                 // the leading tone or the chordal 7th forces a broken
                 // resolution or parallel octaves — see doubling_balance.
-                soft += self.config.root_doubling_weight
-                    * doubling_balance(&pc_count, root, self.leading_tone_pc) as f64;
+                let balance = doubling_balance(&pc_count, root, self.leading_tone_pc) as f64;
+                soft += self.config.root_doubling_weight * balance;
+                sink.term("root_doubling", self.config.root_doubling_weight * balance);
             }
         }
 
@@ -1235,6 +1497,7 @@ impl ChordScorer<'_> {
             sonority.extend_from_slice(self.sustaining_notes);
             let dups = duplicate_interval_classes(&sonority);
             soft -= self.config.interval_exists_in_harmony * dups as f64;
+            sink.term("interval_variety", -(self.config.interval_exists_in_harmony * dups as f64));
         }
 
         // Parallel 5ths/octaves and antiparallel octaves among the new voices
@@ -1252,6 +1515,7 @@ impl ChordScorer<'_> {
                     let pj = voices[j].cands[chosen[j]].pitch;
                     if parallel_motion_violation(qi, pi, qj, pj) {
                         soft -= self.config.consecutive_octav_fift;
+                        sink.term("parallel_motion", -self.config.consecutive_octav_fift);
                     }
                 }
             }
@@ -1285,6 +1549,7 @@ impl ChordScorer<'_> {
                 }
                 if (mv > 0 && up > down) || (mv < 0 && down > up) {
                     soft -= self.config.same_direction;
+                    sink.term("same_direction", -self.config.same_direction);
                 }
             }
         }
@@ -1305,12 +1570,15 @@ impl ChordScorer<'_> {
         }
         if self.config.max_voices_changed >= 0 && movers > self.config.max_voices_changed {
             hard += (movers - self.config.max_voices_changed) as u32;
+            sink.hard("voice_budget", (movers - self.config.max_voices_changed) as u32);
         }
         if self.config.min_voices_changed >= 0 && movers < self.config.min_voices_changed {
             hard += (self.config.min_voices_changed - movers) as u32;
+            sink.hard("voice_budget", (self.config.min_voices_changed - movers) as u32);
         }
         if self.config.common_tone_penalty != 0.0 {
             soft -= self.config.common_tone_penalty * common as f64;
+            sink.term("common_tone_penalty", -(self.config.common_tone_penalty * common as f64));
         }
 
         (hard, soft)
@@ -1354,6 +1622,21 @@ impl ChordScorer<'_> {
             })
     }
 
+    /// True if `partial` can still grow into a whitelisted chord — i.e. it is a
+    /// subset of at least one allowed mask. Vacuously true with no whitelist.
+    ///
+    /// The within-chord beam ranks partial states on pairwise score alone, which
+    /// discards the partials leading to any sonority the interval matrix happens
+    /// to dislike — augmented and diminished triads especially — long before
+    /// `eval` can judge the finished chord. Carrying feasibility into the prune
+    /// is what makes the whitelist actually bind on the beam path.
+    fn template_feasible(&self, partial: u16) -> bool {
+        match self.chord_masks {
+            None => true,
+            Some(masks) => masks.iter().any(|&m| partial & !m == 0),
+        }
+    }
+
     /// Bass-first within-chord beam for groups whose candidate product exceeds
     /// `JOINT_ENUM_CAP`. Partial states are ranked by running
     /// `(violations, partial soft)`; survivors get the exact chord score.
@@ -1365,11 +1648,22 @@ impl ChordScorer<'_> {
         let mut order: Vec<usize> = (0..n).collect();
         order.sort_by_key(|&i| std::cmp::Reverse(self.voices[i].note.channel));
 
-        let mut states: Vec<(Vec<usize>, u32, f64)> = vec![(Vec::new(), 0, 0.0)];
+        // Pitch classes already committed by sustaining notes — `eval` counts them
+        // in the census, so the feasibility prune has to start from them too.
+        let sust_mask = self.sustaining_notes.iter()
+            .fold(0u16, |m, &p| m | 1 << p.rem_euclid(12));
+        let mut states: Vec<PartialChord> = vec![PartialChord {
+            chosen: Vec::new(),
+            hard: 0,
+            soft: 0.0,
+            pc_mask: sust_mask,
+            dead: false,
+        }];
         for &vi in &order {
-            let mut next: Vec<(Vec<usize>, u32, f64)> =
+            let mut next: Vec<PartialChord> =
                 Vec::with_capacity(states.len() * self.voices[vi].cands.len());
-            for (part, hard, soft) in &states {
+            for st in &states {
+                let (part, hard, soft) = (&st.chosen, &st.hard, &st.soft);
                 for (ci, cand) in self.voices[vi].cands.iter().enumerate() {
                     let mut h = *hard;
                     let mut s = *soft + cand.soft_base + cand.nonlead_term;
@@ -1399,17 +1693,28 @@ impl ChordScorer<'_> {
                     }
                     let mut cp = part.clone();
                     cp.push(ci);
-                    next.push((cp, h, s));
+                    let pc_mask = st.pc_mask | 1 << cand.pitch.rem_euclid(12);
+                    next.push(PartialChord {
+                        chosen: cp,
+                        hard: h,
+                        soft: s,
+                        pc_mask,
+                        dead: !self.template_feasible(pc_mask),
+                    });
                 }
             }
-            next.sort_by(|a, b| a.1.cmp(&b.1)
-                .then(b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)));
+            // Template-infeasible states sort last so they are dropped first, but
+            // are still kept when nothing feasible survives — a whitelist that
+            // cannot be met degrades to "least bad", never to an empty beam.
+            next.sort_by(|a, b| a.dead.cmp(&b.dead)
+                .then(a.hard.cmp(&b.hard))
+                .then(b.soft.partial_cmp(&a.soft).unwrap_or(std::cmp::Ordering::Equal)));
             next.truncate(JOINT_BEAM_WIDTH);
             states = next;
         }
 
         let mut best: Vec<ScoredChord> = Vec::with_capacity(k);
-        for (part, _, _) in states {
+        for PartialChord { chosen: part, .. } in states {
             let mut chosen = vec![0usize; n];
             for (pos, &ci) in part.iter().enumerate() {
                 chosen[order[pos]] = ci;
@@ -1419,6 +1724,50 @@ impl ChordScorer<'_> {
         }
         best
     }
+}
+
+/// Root-aware scoring inputs for a group at `group_start`: the bar's chord-root
+/// pitch class, the root-relative quality profile, and the renormalized
+/// aggregation weights `(mean, worst, bass, root)`.
+///
+/// The bar's chord root turns the bare pitch-class set the Schillinger layer
+/// hands over back into a rooted chord, which is what the quality, inversion
+/// and doubling terms need.
+///
+/// The active weights are renormalized to sum to 1 in BOTH branches:
+/// without a root the fourth slot has nothing to score, and with one a
+/// chord_quality_weight away from 1 must rebalance the mix, not rescale
+/// the whole harmony term (cqw = 0 used to shrink the rooted path to 0.8×
+/// while the rootless path renormalized — quality off made harmony
+/// WEAKER than having no root at all). Negative cqw is clamped: "prefer
+/// bad quality" has no meaning here and would let the sum reach zero.
+fn root_and_agg(
+    group_start: f64,
+    config: &Config,
+    state: &HarmonizerState,
+    row: &HarmonyRow,
+) -> (Option<i32>, Option<[f64; 12]>, (f64, f64, f64, f64)) {
+    let root_pc = if config.schillinger_progression {
+        bar_root_pc(state, group_start)
+    } else {
+        None
+    };
+    let root_quality = root_pc.map(|r| {
+        let mut q = [0.0f64; 12];
+        for (pc, slot) in q.iter_mut().enumerate() {
+            *slot = row.soft[(pc as i32 - r).rem_euclid(12) as usize];
+        }
+        q
+    });
+    let agg = if root_quality.is_some() {
+        let wr = AGG_ROOT * config.chord_quality_weight.max(0.0);
+        let k = 1.0 / (AGG_MEAN + AGG_WORST + AGG_BASS + wr);
+        (AGG_MEAN * k, AGG_WORST * k, AGG_BASS * k, wr * k)
+    } else {
+        let k = 1.0 / (AGG_MEAN + AGG_WORST + AGG_BASS);
+        (AGG_MEAN * k, AGG_WORST * k, AGG_BASS * k, 0.0)
+    };
+    (root_pc, root_quality, agg)
 }
 
 /// Score one rhythmic group: build each voice's candidate set, then search the
@@ -1436,6 +1785,7 @@ fn score_group_options(
     state: &HarmonizerState,
     precomputed: &PrecomputedHarmonyData,
     k: usize,
+    chord_masks: Option<&[u16]>,
 ) -> Vec<(Vec<Note>, f64)> {
     if group.is_empty() {
         return vec![(Vec::new(), 0.0)];
@@ -1454,36 +1804,7 @@ fn score_group_options(
         .collect();
     let check_dir = !ending_by_channel.is_empty() && config.same_direction != 0.0;
 
-    // The bar's chord root turns the bare pitch-class set the Schillinger layer
-    // hands over back into a rooted chord, which is what the quality, inversion
-    // and doubling terms need.
-    let root_pc = if config.schillinger_progression {
-        bar_root_pc(state, group[0].start)
-    } else {
-        None
-    };
-    let root_quality = root_pc.map(|r| {
-        let mut q = [0.0f64; 12];
-        for (pc, slot) in q.iter_mut().enumerate() {
-            *slot = row.soft[(pc as i32 - r).rem_euclid(12) as usize];
-        }
-        q
-    });
-    // The active weights are renormalized to sum to 1 in BOTH branches:
-    // without a root the fourth slot has nothing to score, and with one a
-    // chord_quality_weight away from 1 must rebalance the mix, not rescale
-    // the whole harmony term (cqw = 0 used to shrink the rooted path to 0.8×
-    // while the rootless path renormalized — quality off made harmony
-    // WEAKER than having no root at all). Negative cqw is clamped: "prefer
-    // bad quality" has no meaning here and would let the sum reach zero.
-    let agg = if root_quality.is_some() {
-        let wr = AGG_ROOT * config.chord_quality_weight.max(0.0);
-        let k = 1.0 / (AGG_MEAN + AGG_WORST + AGG_BASS + wr);
-        (AGG_MEAN * k, AGG_WORST * k, AGG_BASS * k, wr * k)
-    } else {
-        let k = 1.0 / (AGG_MEAN + AGG_WORST + AGG_BASS);
-        (AGG_MEAN * k, AGG_WORST * k, AGG_BASS * k, 0.0)
-    };
+    let (root_pc, root_quality, agg) = root_and_agg(group[0].start, config, state, &row);
 
     let scorer = ChordScorer {
         voices: &voices,
@@ -1496,6 +1817,7 @@ fn score_group_options(
         agg,
         root_quality,
         root_pc,
+        chord_masks,
         leading_tone_pc: (config.root + 11).rem_euclid(12),
         config,
     };
@@ -1540,9 +1862,10 @@ fn score_group(
     config: &Config,
     state: &HarmonizerState,
     precomputed: &PrecomputedHarmonyData,
+    chord_masks: Option<&[u16]>,
 ) -> f64 {
     // `score_group_options` always yields at least one entry.
-    let (notes, score) = score_group_options(group, config, state, precomputed, 1)
+    let (notes, score) = score_group_options(group, config, state, precomputed, 1, chord_masks)
         .swap_remove(0);
     temp_group_notes.extend(notes);
     score
@@ -1568,6 +1891,7 @@ fn score_lookahead(
     config: &Config,
     state: &HarmonizerState,
     cache: &DashMap<u64, f64>,
+    plan: Option<&ChordPlan>,
 ) -> f64 {
     if depth == 0 || start_idx >= groups.len() {
         return 0.0;
@@ -1593,13 +1917,15 @@ fn score_lookahead(
     let precomputed = build_precomputed_data(context, group, start_time);
 
     let mut temp_notes = Vec::new();
-    let local_score = score_group(group, &mut temp_notes, config, state, &precomputed);
+    let local_score = score_group(
+        group, &mut temp_notes, config, state, &precomputed, plan.map(|p| p.masks_for(start_idx)),
+    );
 
     let mut next_context = context.to_vec();
     next_context.extend(temp_notes);
 
     let best_score = local_score
-        + score_lookahead(groups, start_idx + 1, depth - 1, &next_context, config, state, cache);
+        + score_lookahead(groups, start_idx + 1, depth - 1, &next_context, config, state, cache, plan);
 
     cache.insert(key, best_score);
     best_score
@@ -1610,6 +1936,12 @@ use std::sync::mpsc::Sender;
 fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState, progress_sender: Option<&Sender<(usize, usize)>>) -> Vec<Note> {
     // Each group's notes come back in channel order from group_by_start_array.
     let groups = group_by_start_array(income);
+    // Built once for the whole render: the weight apportionment has to be a
+    // property of the group index, not of whichever beam branch asks. Drawing it
+    // per call would hand different branches different structures and make the
+    // render depend on rayon's completion order.
+    let plan = ChordPlan::build(&config.chord_templates, groups.len());
+    let plan_ref = plan.as_ref();
     let lookahead = config.lookahead_depth;
     // One knob for both directions of the search: how many progressions survive
     // each group, and how many alternative voicings each one branches into. At
@@ -1647,7 +1979,8 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
 
                 // Branch: this parent's best `beam_width` voicings of the group,
                 // each scored on the horizon that follows it.
-                score_group_options(group, config, state, &precomputed, beam_width)
+                let group_masks = plan_ref.map(|p| p.masks_for(i));
+                score_group_options(group, config, state, &precomputed, beam_width, group_masks)
                     .into_iter()
                     .map(|(added_notes, group_score)| {
                         let actual_score = beam_state.actual_score + group_score;
@@ -1657,7 +1990,8 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
                             let mut next_context = trimmed_notes.to_vec();
                             next_context.extend(added_notes.iter().cloned());
                             score_lookahead(
-                                groups_ref, i + 1, lookahead, &next_context, config, state, cache_ref,
+                                groups_ref, i + 1, lookahead, &next_context, config, state,
+                                cache_ref, plan_ref,
                             )
                         } else {
                             0.0
@@ -1701,6 +2035,138 @@ pub fn harmonise2(income: Vec<Note>, config: &Config, state: &HarmonizerState, p
     score_group_beam(income, config, state, progress_sender)
 }
 
+/// A harmonized render plus the scoring story of every chosen chord.
+pub struct Harmonised {
+    pub notes: Vec<Note>,
+    pub breakdown: Vec<GroupBreakdown>,
+}
+
+/// `harmonise2` plus the named score breakdown: after the beam settles on the
+/// winning progression, each chosen chord is re-scored once with a collecting
+/// sink. The numbers are exactly the ones the search saw — same context
+/// trimming, same scorer — so the breakdown explains the render rather than
+/// approximating it.
+pub fn harmonise_explained(
+    income: Vec<Note>,
+    config: &Config,
+    state: &HarmonizerState,
+    progress_sender: Option<&Sender<(usize, usize)>>,
+) -> Harmonised {
+    let notes = score_group_beam(income.clone(), config, state, progress_sender);
+    let breakdown = explain_render(&income, &notes, config, state);
+    Harmonised { notes, breakdown }
+}
+
+/// Re-walk the winning progression group by group, re-scoring each chosen
+/// chord with a `TraceCollector`. `income` is needed alongside the final notes
+/// because candidate generation anchors on the INPUT pitches (contour springs,
+/// fall-backs), not the harmonized ones.
+fn explain_render(
+    income: &[Note],
+    final_notes: &[Note],
+    config: &Config,
+    state: &HarmonizerState,
+) -> Vec<GroupBreakdown> {
+    let groups = group_by_start_array(income.to_vec());
+    let plan = ChordPlan::build(&config.chord_templates, groups.len());
+    let mut out = Vec::with_capacity(groups.len());
+    let mut consumed = 0usize;
+
+    for (gi, group) in groups.iter().enumerate() {
+        let Some(chosen_notes) = final_notes.get(consumed..consumed + group.len()) else {
+            break; // defensive: the render did not produce one note per input note
+        };
+        let start_time = group[0].start;
+        // The exact context the beam scored this group against on the winning
+        // path: everything chosen before it, trimmed to the same 32-beat window.
+        let prior = &final_notes[..consumed];
+        consumed += group.len();
+        let begin = prior.partition_point(|n| n.start < start_time - 32.0);
+        let trimmed = &prior[begin..];
+
+        let precomputed = build_precomputed_data(trimmed, group, start_time);
+        let (w_harmony, w_smooth, harmony_ctx) = group_weights(start_time, config, state);
+        let row = get_harmony_row(harmony_ctx, state.harmony_matrix.as_ref());
+        let voices = build_joint_voices(group, w_smooth, config, state, &precomputed);
+        let table = PairTable::build(&voices, &precomputed, &row, config.roughness_weight);
+        let ending_by_channel: HashMap<i32, i32> = precomputed.notes_ending_at_start.iter()
+            .map(|nn| (nn.channel, nn.pitch))
+            .collect();
+        let check_dir = !ending_by_channel.is_empty() && config.same_direction != 0.0;
+        let (root_pc, root_quality, agg) = root_and_agg(start_time, config, state, &row);
+        let scorer = ChordScorer {
+            voices: &voices,
+            n: voices.len(),
+            table: &table,
+            sustaining_notes: &precomputed.sustaining_notes,
+            ending_by_channel: &ending_by_channel,
+            check_dir,
+            w_harmony,
+            agg,
+            root_quality,
+            root_pc,
+            chord_masks: plan.as_ref().map(|p| p.masks_for(gi)),
+            leading_tone_pc: (config.root + 11).rem_euclid(12),
+            config,
+        };
+
+        // Recover which candidate each voice's final pitch was. `None` only on
+        // the pass-through path (no candidates were generated), which is
+        // reported as an unscored group rather than guessed at.
+        let chosen: Option<Vec<usize>> = voices.iter().zip(chosen_notes).map(|(v, nn)| {
+            if v.note.channel != nn.channel {
+                return None;
+            }
+            v.cands.iter().position(|c| c.pitch == nn.pitch)
+        }).collect();
+
+        let bar = (start_time / 4.0).floor() as i32;
+        if let Some(chosen) = chosen {
+            let mut collector = TraceCollector::with_voices(voices.len());
+            let (hard, soft) = scorer.eval_with(&chosen, &mut collector);
+            let voice_breakdowns = voices.iter().enumerate().map(|(i, v)| VoiceBreakdown {
+                channel: v.note.channel,
+                pitch: v.cands[chosen[i]].pitch,
+                previous_pitch: v.prev,
+                is_leader: collector.leader == Some(i),
+                terms: std::mem::take(&mut collector.voice_terms[i]),
+            }).collect();
+            out.push(GroupBreakdown {
+                start: start_time,
+                bar,
+                root_pc,
+                score: soft - hard as f64 * VIOLATION_PENALTY,
+                soft_score: soft,
+                hard_violation_count: hard,
+                hard_violations: collector.hard,
+                chord_terms: collector.chord_terms,
+                voices: voice_breakdowns,
+                scored: true,
+            });
+        } else {
+            out.push(GroupBreakdown {
+                start: start_time,
+                bar,
+                root_pc,
+                score: 0.0,
+                soft_score: 0.0,
+                hard_violation_count: 0,
+                hard_violations: Vec::new(),
+                chord_terms: Vec::new(),
+                voices: chosen_notes.iter().map(|nn| VoiceBreakdown {
+                    channel: nn.channel,
+                    pitch: nn.pitch,
+                    previous_pitch: None,
+                    is_leader: false,
+                    terms: Vec::new(),
+                }).collect(),
+                scored: false,
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1715,14 +2181,14 @@ mod tests {
     fn test_state() -> HarmonizerState {
         HarmonizerState {
             schillinger_notes: vec![],
-            voice_contour: None,
-            contour_resolution: 4.0,
-            harmony_contour: None,
-            harmony_contour_resolution: 4.0,
-            harmony_matrix_contour: None,
+            contours: Contours::default(),
             harmony_matrix: None,
-            melody_force_contour: None,
         }
+    }
+
+    /// A one-value contour at the tests' 4-beat resolution.
+    fn flat(v: f64) -> Option<crate::contour::Contour> {
+        crate::contour::Contour::new(vec![v], 4.0)
     }
 
     /// Default config switched to the simple (non-Schillinger) candidate path so
@@ -2103,6 +2569,222 @@ mod tests {
         ]
     }
 
+    // ----- chord_templates (chord-structure whitelist) -----
+
+    #[test]
+    fn rotate_pc_mask_wraps_around_the_octave() {
+        let c_major = 1 << 0 | 1 << 4 | 1 << 7; // {C, E, G}
+        assert_eq!(rotate_pc_mask(c_major, 0), c_major);
+        // Up 5 semitones: {F, A, C}
+        assert_eq!(rotate_pc_mask(c_major, 5), 1 << 5 | 1 << 9 | 1 << 0);
+        // Up 8 wraps G past B into D#: {G#, C, D#}
+        assert_eq!(rotate_pc_mask(c_major, 8), 1 << 8 | 1 << 0 | 1 << 3);
+        assert_eq!(rotate_pc_mask(c_major, 12), c_major);
+        assert_eq!(rotate_pc_mask(c_major, -1), rotate_pc_mask(c_major, 11));
+    }
+
+    /// Unweighted template, the shape a config carries before weights are used.
+    fn bare(pcs: &[i32]) -> ChordTemplate {
+        ChordTemplate::Bare(pcs.to_vec())
+    }
+
+    fn weighted(pcs: &[i32], weight: f64) -> ChordTemplate {
+        ChordTemplate::Weighted { pcs: pcs.to_vec(), weight }
+    }
+
+    #[test]
+    fn chord_template_masks_covers_every_transposition() {
+        let masks = chord_template_masks(&[bare(&[0, 4, 7])]).unwrap();
+        assert_eq!(masks.len(), 12, "one major triad per root");
+        for r in 0..12 {
+            let m = rotate_pc_mask(1 << 0 | 1 << 4 | 1 << 7, r);
+            assert!(masks.binary_search(&m).is_ok(), "missing root {r}");
+        }
+        // Sorted and deduped, so binary_search above is valid.
+        assert!(masks.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn chord_template_masks_normalizes_degenerate_input() {
+        // No templates at all, and a template whose entries are all empty, both
+        // mean "unconstrained" rather than "forbid everything".
+        assert!(chord_template_masks(&[]).is_none());
+        assert!(chord_template_masks(&[bare(&[])]).is_none());
+        // Duplicate and out-of-range offsets collapse onto the same pitch classes.
+        let plain = chord_template_masks(&[bare(&[0, 4, 7])]).unwrap();
+        assert_eq!(chord_template_masks(&[bare(&[0, 4, 7, 4])]).unwrap(), plain);
+        assert_eq!(chord_template_masks(&[bare(&[12, 16, -5])]).unwrap(), plain);
+    }
+
+    /// A five-voice input wide enough that the joint search takes the within-chord
+    /// beam path (`candidate_range = 12` gives 25^5 candidates, well over
+    /// `JOINT_ENUM_CAP`) — the path where the whitelist has to survive pruning.
+    fn five_voice_input() -> Vec<Note> {
+        vec![
+            Note::new(69, 0.0, 4.0, 100, 0, 0),
+            Note::new(64, 0.0, 4.0, 100, 0, 1),
+            Note::new(60, 0.0, 4.0, 100, 0, 2),
+            Note::new(50, 0.0, 4.0, 100, 0, 3),
+            Note::new(34, 0.0, 4.0, 100, 0, 4),
+        ]
+    }
+
+    /// Distinct pitch classes of a harmonised group, as a 12-bit mask.
+    fn pc_mask_of(notes: &[Note]) -> u16 {
+        notes.iter().fold(0u16, |m, n| m | 1 << n.pitch.rem_euclid(12))
+    }
+
+    #[test]
+    fn apportion_honours_the_requested_ratio() {
+        // 0.75 / 0.25 over four groups is 3-and-1, not "roughly three".
+        let seq = apportion(&[0.75, 0.25], 4);
+        assert_eq!(seq.iter().filter(|&&i| i == 0).count(), 3);
+        assert_eq!(seq.iter().filter(|&&i| i == 1).count(), 1);
+
+        // And it stays proportional as the render gets longer.
+        let seq = apportion(&[0.75, 0.25], 100);
+        assert_eq!(seq.iter().filter(|&&i| i == 0).count(), 75);
+
+        // Equal weights alternate rather than clumping.
+        assert_eq!(apportion(&[1.0, 1.0], 4), vec![0, 1, 0, 1]);
+    }
+
+    #[test]
+    fn apportion_spreads_the_minority_structure() {
+        // The one minor chord in four lands in the middle, not at an edge — a
+        // random draw would clump it as often as not.
+        let seq = apportion(&[0.75, 0.25], 4);
+        assert!(seq[1] == 1 || seq[2] == 1, "minority bunched at an edge: {seq:?}");
+    }
+
+    #[test]
+    fn apportion_handles_degenerate_weights() {
+        // A zero weight is never selected; it means "listed but never used".
+        let seq = apportion(&[1.0, 0.0], 5);
+        assert!(seq.iter().all(|&i| i == 0));
+        // All-zero has nothing to apportion, and must not spin or panic.
+        assert!(apportion(&[0.0, 0.0], 5).is_empty());
+        assert!(apportion(&[], 5).is_empty());
+        assert!(apportion(&[1.0], 0).is_empty());
+    }
+
+    #[test]
+    fn chord_plan_assigns_per_group_only_when_a_weight_is_stated() {
+        // Bare entries state no preference, so every group keeps the full
+        // whitelist — the behaviour from before weights existed.
+        let plan = ChordPlan::build(&[bare(&[0, 4, 7]), bare(&[0, 3, 7])], 4).unwrap();
+        assert!(plan.assignment.is_empty());
+        let maj = template_masks(&[0, 4, 7]).unwrap();
+        assert!(plan.masks_for(0).len() > maj.len(), "unassigned groups see the union");
+
+        // One stated weight switches apportionment on for the whole list.
+        let plan = ChordPlan::build(
+            &[weighted(&[0, 4, 7], 0.75), weighted(&[0, 3, 7], 0.25)], 4,
+        ).unwrap();
+        assert_eq!(plan.assignment.len(), 4);
+        assert_eq!(plan.assignment.iter().filter(|&&i| i == 1).count(), 1);
+        // An assigned group is locked to its own template, not the union.
+        assert_eq!(plan.masks_for(0), maj.as_slice());
+    }
+
+    #[test]
+    fn chord_plan_drops_unusable_entries_before_apportioning() {
+        // An empty entry must not consume apportionment slots no chord can meet.
+        let plan = ChordPlan::build(&[weighted(&[], 0.5), weighted(&[0, 4, 7], 0.5)], 4).unwrap();
+        assert_eq!(plan.per_template.len(), 1);
+        assert!(plan.assignment.iter().all(|&i| i == 0));
+        // Nothing usable at all is the same as no constraint.
+        assert!(ChordPlan::build(&[bare(&[])], 4).is_none());
+        assert!(ChordPlan::build(&[], 4).is_none());
+    }
+
+    /// Groups past the apportioned range fall back to the union rather than
+    /// panicking — `masks_for` is indexed by group and must be total.
+    #[test]
+    fn chord_plan_masks_for_is_total() {
+        let plan = ChordPlan::build(&[weighted(&[0, 4, 7], 1.0)], 2).unwrap();
+        assert_eq!(plan.masks_for(0), plan.per_template[0].as_slice());
+        assert_eq!(plan.masks_for(99), plan.any.as_slice());
+    }
+
+    #[test]
+    fn weighted_templates_render_in_the_requested_ratio() {
+        // Eight bars, 0.75 major / 0.25 minor: six major chords and two minor.
+        let mut cfg = test_config();
+        cfg.candidate_range = 12;
+        cfg.chord_templates = vec![weighted(&[0, 4, 7], 0.75), weighted(&[0, 3, 7], 0.25)];
+        let input: Vec<Note> = (0..8)
+            .flat_map(|bar| {
+                let t = bar as f64 * 4.0;
+                [69, 64, 60, 50, 34].iter().enumerate()
+                    .map(move |(ch, &p)| Note::new(p, t, 4.0, 100, 0, ch as i32))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let out = harmonise2(input, &cfg, &test_state(), None);
+
+        let maj = template_masks(&[0, 4, 7]).unwrap();
+        let min = template_masks(&[0, 3, 7]).unwrap();
+        let mut majors = 0;
+        let mut minors = 0;
+        for bar in 0..8 {
+            let t = bar as f64 * 4.0;
+            let chord: Vec<Note> = out.iter().filter(|n| (n.start - t).abs() < 0.001).cloned().collect();
+            assert_eq!(chord.len(), 5, "bar {bar} lost voices");
+            let mask = pc_mask_of(&chord);
+            if maj.binary_search(&mask).is_ok() {
+                majors += 1;
+            } else if min.binary_search(&mask).is_ok() {
+                minors += 1;
+            } else {
+                panic!("bar {bar} is neither major nor minor: {mask:012b}");
+            }
+        }
+        assert_eq!((majors, minors), (6, 2), "ratio not honoured");
+    }
+
+    #[test]
+    fn chord_templates_confine_the_sonority_to_the_whitelist() {
+        let mut cfg = test_config();
+        cfg.candidate_range = 12;
+        cfg.chord_templates = vec![bare(&[0, 4, 7]), bare(&[0, 3, 7])];
+        let out = harmonise2(five_voice_input(), &cfg, &test_state(), None);
+
+        let allowed = chord_template_masks(&cfg.chord_templates).unwrap();
+        let mask = pc_mask_of(&out);
+        assert!(
+            allowed.binary_search(&mask).is_ok(),
+            "sonority {mask:012b} is neither a major nor a minor triad"
+        );
+        assert_eq!(mask.count_ones(), 3, "a triad has exactly three pitch classes");
+    }
+
+    #[test]
+    fn chord_templates_bind_against_the_matrix_preference() {
+        // The augmented triad is the case the interval matrix cannot express and
+        // actively disprefers, so the beam prunes toward it only if the template
+        // feasibility check reaches the partial states.
+        let mut cfg = test_config();
+        cfg.candidate_range = 12;
+        cfg.chord_templates = vec![bare(&[0, 4, 8])];
+        let out = harmonise2(five_voice_input(), &cfg, &test_state(), None);
+
+        let mask = pc_mask_of(&out);
+        let allowed = chord_template_masks(&cfg.chord_templates).unwrap();
+        assert!(allowed.binary_search(&mask).is_ok(), "not an augmented triad");
+    }
+
+    #[test]
+    fn chord_templates_empty_leaves_chord_structure_free() {
+        let mut cfg = test_config();
+        cfg.candidate_range = 12;
+        assert!(cfg.chord_templates.is_empty(), "default is unconstrained");
+        let out = harmonise2(five_voice_input(), &cfg, &test_state(), None);
+        // Nothing asserted about *which* chord — only that the unconstrained path
+        // still returns one note per input voice.
+        assert_eq!(out.len(), 5);
+    }
+
     #[test]
     fn harmonise_empty_input_yields_empty_output() {
         assert!(harmonise2(vec![], &test_config(), &test_state(), None).is_empty());
@@ -2262,8 +2944,8 @@ mod tests {
         // Neutral consonance row + smoothness-heavy balance (the config that
         // exposed the bug): with no consonance signal, the octave-dup penalty
         // alone was enough to make off-scale holds win.
-        state.harmony_matrix_contour = Some(vec![8.0]);
-        state.harmony_contour = Some(vec![-0.2]);
+        state.contours.harmony_matrix = flat(8.0);
+        state.contours.harmony_distance = flat(-0.2);
         // Non-lead voices seeded mostly off-scale (muted=1 engages the bound
         // path, like generated voices), two chords.
         let mut input = Vec::new();
@@ -2324,7 +3006,7 @@ mod tests {
         ];
         let pc = build_precomputed_data(&[], &group, 0.0);
 
-        let opts = score_group_options(&group, &cfg, &state, &pc, 4);
+        let opts = score_group_options(&group, &cfg, &state, &pc, 4, None);
         assert_eq!(opts.len(), 4, "the beam has nothing to branch on");
 
         // Every option is a complete voicing, and no two are the same chord.
@@ -2337,7 +3019,7 @@ mod tests {
 
         // Option 0 is exactly what the single-best path returns.
         let mut greedy = Vec::new();
-        let greedy_score = score_group(&group, &mut greedy, &cfg, &state, &pc);
+        let greedy_score = score_group(&group, &mut greedy, &cfg, &state, &pc, None);
         let best: Vec<i32> = opts[0].0.iter().map(|n| n.pitch).collect();
         assert_eq!(best, greedy.iter().map(|n| n.pitch).collect::<Vec<_>>());
         assert!(approx(opts[0].1, greedy_score));
@@ -2418,7 +3100,7 @@ mod tests {
     fn quality_state(matrix_row: f64) -> HarmonizerState {
         let mut state = test_state();
         state.schillinger_notes = vec![vec![vec![0, 3, 4, 7]]];
-        state.harmony_matrix_contour = Some(vec![matrix_row]);
+        state.contours.harmony_matrix = flat(matrix_row);
         state
     }
 
@@ -2550,16 +3232,16 @@ mod tests {
         // sign — w_smooth < 0 would reward leaps.
         let cfg = test_config();
         let mut state = test_state();
-        state.harmony_contour = Some(vec![0.9]);
+        state.contours.harmony_distance = flat(0.9);
         let (wh, ws, _) = group_weights(0.0, &cfg, &state);
         assert!(approx(wh, 1.0));
         assert!(approx(ws, 0.0));
-        state.harmony_contour = Some(vec![-2.0]);
+        state.contours.harmony_distance = flat(-2.0);
         let (wh, ws, _) = group_weights(0.0, &cfg, &state);
         assert!(approx(wh, 0.0));
         assert!(approx(ws, 1.0));
         // In-range values pass through untouched.
-        state.harmony_contour = Some(vec![0.2]);
+        state.contours.harmony_distance = flat(0.2);
         let (wh, ws, _) = group_weights(0.0, &cfg, &state);
         assert!(approx(wh, 0.7));
         assert!(approx(ws, 0.3));

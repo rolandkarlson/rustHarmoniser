@@ -1,4 +1,5 @@
-use crate::utils::{mod_shim, SeededRng, ArrayExt};
+use crate::contour::Contours;
+use crate::utils::{mod_shim, SeededRng};
 use crate::music_theory::{generate_mode_from_steps};
 use crate::model::Config;
 
@@ -228,7 +229,7 @@ pub fn gen_cadenced_progression(config: &Config) -> Vec<i32> {
     out
 }
 
-pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<Vec<i32>>> {
+pub fn gen_schillinger_progression(config: &Config, contours: &Contours) -> Vec<Vec<Vec<i32>>> {
 
     let generated;
     let seq: &Vec<i32> = if config.use_generated_progression {
@@ -256,35 +257,17 @@ pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<Vec<i32>>> {
     for voice in 0..NUM_VOICES {
         let mut chord_notes = Vec::with_capacity(bars);
 
-        let voice_ex_contour: Option<&Vec<f64>> = config
-            .schillinger_ex_contour
-            .as_ref()
-            .and_then(|outer| outer.get(voice));
-
-        let voice_chord_contour: Option<&Vec<f64>> = config
-            .chord_structure_contour
-            .as_ref()
-            .and_then(|outer| outer.get(voice));
-
         for i in 0..bars {
             let start_time = i as f64 * 4.0;
-            let contour_idx = (start_time / config.voice_contour_resolution).floor() as usize;
 
-            let current_mode = if let Some(mc) = &config.mode_contour {
-                if !mc.is_empty() {
-                    let contour_val = mc.get_wrapped(contour_idx).round() as i32;
-                    mod_shim(contour_val, 7)
-                } else {
-                    config.mode
-                }
-            } else {
-                config.mode
-            };
+            let current_mode = contours.mode.as_ref()
+                .map(|c| mod_shim(c.at(start_time).round() as i32, 7))
+                .unwrap_or(config.mode);
 
-            let chord_idx = match voice_chord_contour {
-                Some(cc) if !cc.is_empty() => cc.get_wrapped(contour_idx).round() as usize,
-                _ => 0,
-            };
+            let chord_idx = contours.chord_structure.as_ref()
+                .and_then(|vc| vc.at_strict(voice, start_time))
+                .map(|v| v.round() as usize)
+                .unwrap_or(0);
 
             let n_struct = if chord_idx < chord_list.len() {
                 &chord_list[chord_idx]
@@ -293,10 +276,10 @@ pub fn gen_schillinger_progression(config: &Config) -> Vec<Vec<Vec<i32>>> {
             };
 
             let scale = generate_mode_from_steps(config.root, &current_mode);
-            let ex = match voice_ex_contour {
-                Some(ec) if !ec.is_empty() => ec.get_wrapped(contour_idx).round() as i32,
-                _ => 2,
-            };
+            let ex = contours.schillinger_ex.as_ref()
+                .and_then(|vc| vc.at_strict(voice, start_time))
+                .map(|v| v.round() as i32)
+                .unwrap_or(2);
             // Harmonic-minor inflection: in Aeolian, a chord rooted on the
             // dominant raises any subtonic (degree 7) it contains by a
             // semitone, turning minor v into major V with a true leading
@@ -333,6 +316,10 @@ mod tests {
 
     fn cfg(pl: i32, render_length: i32, mode: i32) -> Config {
         Config { pl, render_length, mode, use_generated_progression: true, ..Config::default() }
+    }
+
+    fn prog(c: &Config) -> Vec<Vec<Vec<i32>>> {
+        gen_schillinger_progression(c, &Contours::from_config(c))
     }
 
     #[test]
@@ -398,10 +385,10 @@ mod tests {
         SeededRng::set_seed(3.0);
         let mut c = cfg(4, 2, 0);
         c.schillinger_sequence = vec![0, 0]; // would otherwise give 2 bars
-        assert_eq!(gen_schillinger_progression(&c)[0].len(), 8);
+        assert_eq!(prog(&c)[0].len(), 8);
 
         c.use_generated_progression = false;
-        assert_eq!(gen_schillinger_progression(&c)[0].len(), 2);
+        assert_eq!(prog(&c)[0].len(), 2);
     }
 
     #[test]
@@ -409,7 +396,7 @@ mod tests {
         let mut c = cfg(4, 1, 0);
         c.use_generated_progression = false;
         c.schillinger_sequence = Vec::new();
-        assert_eq!(gen_schillinger_progression(&c)[0].len(), 1);
+        assert_eq!(prog(&c)[0].len(), 1);
     }
 
     #[test]
@@ -422,7 +409,7 @@ mod tests {
         c.use_generated_progression = false;
         c.schillinger_sequence = vec![0, 3, 4, 0];
         c.root = 0;
-        let bars = &gen_schillinger_progression(&c)[0];
+        let bars = &prog(&c)[0];
 
         assert!(bars[2].contains(&11), "dominant bar lacks the leading tone: {:?}", bars[2]);
         assert!(!bars[2].contains(&10), "dominant bar kept the subtonic: {:?}", bars[2]);
@@ -447,7 +434,7 @@ mod tests {
             c.schillinger_sequence = vec![4];
             c.root = 0;
             let scale = generate_mode_from_steps(0, &mode);
-            let bar = &gen_schillinger_progression(&c)[0][0];
+            let bar = &prog(&c)[0][0];
             for pc in bar {
                 assert!(scale.contains(pc), "mode {mode}: pc {pc} is off-scale in {bar:?}");
             }
@@ -464,7 +451,7 @@ mod tests {
         c.schillinger_sequence = vec![0, 3, 4, 0];
         c.root = 2; // D ionian
         let scale = generate_mode_from_steps(2, &0);
-        let bars = &gen_schillinger_progression(&c)[0];
+        let bars = &prog(&c)[0];
         for (i, deg) in c.schillinger_sequence.iter().enumerate() {
             assert_eq!(bars[i][0], scale[*deg as usize], "bar {i}");
         }

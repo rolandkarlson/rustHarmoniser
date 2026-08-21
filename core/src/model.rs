@@ -157,6 +157,57 @@ pub struct Config {
     /// `render_length`, each closing V → I. See schillinger::gen_cadenced_progression.
     #[serde(default)]
     pub use_generated_progression: bool,
+    /// Whitelist of allowed chord structures, each written as pitch-class
+    /// offsets from an arbitrary root: `[[0,4,7],[0,3,7]]` permits major and
+    /// minor triads on every root and nothing else. A chord passes if its set of
+    /// DISTINCT pitch classes equals some template transposed — doublings are
+    /// free, so this constrains chord structure, not voicing.
+    ///
+    /// This is the constraint the H-Matrix cannot express: the matrix scores
+    /// every PAIR of voices, so it sees {0,4,7} and {0,4,8} as the same thing.
+    /// Empty (the default) leaves chord structure unconstrained.
+    #[serde(default)]
+    pub chord_templates: Vec<ChordTemplate>,
+}
+
+/// One entry in `Config::chord_templates`: a chord's pitch classes relative to an
+/// arbitrary root, optionally with how often it should be used.
+///
+/// Both spellings load — a bare `[0,4,7]`, and `{"pcs":[0,4,7],"weight":0.75}` —
+/// so configs and snapshots written before weights existed still deserialize.
+/// The bare form means "no stated preference"; see `Config::chord_weights_active`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChordTemplate {
+    Bare(Vec<i32>),
+    Weighted {
+        pcs: Vec<i32>,
+        #[serde(default = "default_one_f64")]
+        weight: f64,
+    },
+}
+
+impl ChordTemplate {
+    pub fn pcs(&self) -> &[i32] {
+        match self {
+            Self::Bare(pcs) => pcs,
+            Self::Weighted { pcs, .. } => pcs,
+        }
+    }
+
+    /// The stated weight, or `None` for the bare form.
+    pub fn explicit_weight(&self) -> Option<f64> {
+        match self {
+            Self::Bare(_) => None,
+            Self::Weighted { weight, .. } => Some(*weight),
+        }
+    }
+
+    /// Weight used for apportionment. A negative weight has no meaning here and
+    /// would corrupt the highest-averages loop, so it clamps to 0 — "never use".
+    pub fn weight(&self) -> f64 {
+        self.explicit_weight().unwrap_or(1.0).max(0.0)
+    }
 }
 
 pub const DEFAULT_START_NOTES: [i32; 5] = [70, 65, 60, 50, 34];
@@ -231,6 +282,7 @@ impl Default for Config {
             root_doubling_weight: default_root_doubling(),
             tendency_weight: default_tendency_weight(),
             use_generated_progression: false,
+            chord_templates: Vec::new(),
         }
     }
 }

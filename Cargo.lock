@@ -719,15 +719,23 @@ name = "rustnote"
 version = "0.1.0"
 dependencies = [
  "axum",
- "dashmap",
- "fxhash",
- "log",
- "rayon",
+ "rustnote-core",
  "serde",
  "serde_json",
  "tokio",
  "tower-http",
  "webbrowser",
+]
+
+[[package]]
+name = "rustnote-core"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "fxhash",
+ "rayon",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

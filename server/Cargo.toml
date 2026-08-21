@@ -1,0 +1,16 @@
+[package]
+name = "rustnote"
+version = "0.1.0"
+edition = "2021"
+
+# The I/O shell around rustnote-core: the HTTP API, the Ableton TCP bridge, and
+# every output sink (output.json, the Max harmonize.js, the render archive).
+
+[dependencies]
+rustnote-core = { path = "../core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+axum = "0.7"
+tokio = { version = "1.37", features = ["full"] }
+tower-http = { version = "0.5", features = ["cors", "fs"] }
+webbrowser = "0.8"

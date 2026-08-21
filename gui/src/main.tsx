@@ -38,7 +38,7 @@ console.log("var a = (i, n, s, v) => {\n" +
   "use strict";
   return Math.floor((this as number / n)) ;
 };
-(Number.prototype as any).a = function (n: ()=>{}) {
+(Number.prototype as any).a = function (n: (x: unknown) => unknown) {
   "use strict";
   return n(this) ;
 };

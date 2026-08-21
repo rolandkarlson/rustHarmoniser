@@ -1,19 +1,6 @@
-[package]
-name = "rustnote"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-fxhash = "0.2"
-rayon = "1.8"
-dashmap = "5.5"
-axum = "0.7"
-tokio = { version = "1.37", features = ["full"] }
-tower-http = { version = "0.5", features = ["cors", "fs"] }
-webbrowser = "0.8"
-log = "0.4.29"
+[workspace]
+resolver = "2"
+members = ["core", "server"]
 
 [profile.release]
 lto = "fat"
