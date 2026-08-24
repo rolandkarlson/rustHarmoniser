@@ -345,6 +345,19 @@ fn bar_root_pc(state: &HarmonizerState, start: f64) -> Option<i32> {
         .map(|&p| p.rem_euclid(12))
 }
 
+/// The key root (tonic pitch class) in effect at `beats`: the root contour —
+/// the modulation contour — sampled when present, else the scalar
+/// `config.root`. Every root-keyed scoring term (tendency-tone tonic,
+/// leading-tone doubling, the chromatic-scale mask) must go through this so a
+/// modulation moves the whole key, not just the Schillinger scales — otherwise
+/// the scoring keeps pulling candidates toward the old key on modulated bars.
+fn key_root_at(config: &Config, state: &HarmonizerState, beats: f64) -> i32 {
+    state.contours.root.as_ref()
+        .map(|c| c.at(beats).round() as i32)
+        .unwrap_or(config.root)
+        .rem_euclid(12)
+}
+
 #[derive(Clone, Debug)]
 pub struct Boundaries {
     pub min: i32,
@@ -928,26 +941,27 @@ fn build_joint_voices(
         .map(|p| vec![p])
         .unwrap_or_default();
 
-    // Tendency tones are keyed to the tonic (`config.root` is scale degree 1 —
-    // see generate_mode_from_steps) and to the root of the chord the voice's
+    // Tendency tones are keyed to the tonic (the key root in effect at this
+    // group — see key_root_at) and to the root of the chord the voice's
     // PREVIOUS pitch belonged to: at a bar line that is the previous bar, so
     // step back a hair from this group's start before looking the root up.
-    let tonic = config.root.rem_euclid(12);
+    let group_start = group.first().map(|n| n.start).unwrap_or(0.0);
+    let tonic = key_root_at(config, state, group_start);
     let prev_root = if config.schillinger_progression && config.tendency_weight != 0.0 {
-        let group_start = group.first().map(|n| n.start).unwrap_or(0.0);
         bar_root_pc(state, (group_start - 0.001).max(0.0))
     } else {
         None
     };
 
     // Chromatic-mode scale constraint as a pitch-class bitmask: entries are
-    // offsets from `root`, so [0,2,4,5,7,9,11] is the major scale on whatever
-    // the root is. 0 = no constraint (the window stays truly chromatic).
+    // offsets from the key root, so [0,2,4,5,7,9,11] is the major scale on
+    // whatever the root is (the root contour modulates it per bar). 0 = no
+    // constraint (the window stays truly chromatic).
     let chromatic_mask: u16 = if config.schillinger_progression {
         0
     } else {
         config.chromatic_scale.iter()
-            .fold(0u16, |m, &pc| m | 1 << (pc + config.root).rem_euclid(12))
+            .fold(0u16, |m, &pc| m | 1 << (pc + tonic).rem_euclid(12))
     };
 
     group.iter().map(|note| {
@@ -1832,7 +1846,7 @@ fn score_group_options(
         root_quality,
         root_pc,
         chord_masks,
-        leading_tone_pc: (config.root + 11).rem_euclid(12),
+        leading_tone_pc: (key_root_at(config, state, group[0].start) + 11).rem_euclid(12),
         config,
     };
 
@@ -2120,7 +2134,7 @@ fn explain_render(
             root_quality,
             root_pc,
             chord_masks: plan.as_ref().map(|p| p.masks_for(gi)),
-            leading_tone_pc: (config.root + 11).rem_euclid(12),
+            leading_tone_pc: (key_root_at(config, state, start_time) + 11).rem_euclid(12),
             config,
         };
 
@@ -2213,6 +2227,21 @@ mod tests {
             use_leading_voice: false,
             ..Config::default()
         }
+    }
+
+    // ----- key_root_at (modulation: root contour vs scalar root) -----
+
+    #[test]
+    fn key_root_follows_the_contour_and_falls_back_to_the_scalar() {
+        let mut cfg = test_config();
+        cfg.root = 14; // scalar fall-back must still reduce to a pitch class
+        let mut state = test_state();
+        assert_eq!(key_root_at(&cfg, &state, 0.0), 2);
+
+        state.contours.root = crate::contour::Contour::new(vec![0.0, 7.0], 4.0);
+        assert_eq!(key_root_at(&cfg, &state, 0.0), 0);
+        assert_eq!(key_root_at(&cfg, &state, 4.0), 7); // second bar modulates
+        assert_eq!(key_root_at(&cfg, &state, 8.0), 0); // wraps like every contour
     }
 
     // ----- get_modular_bound (tintinnabuli bound, pc-space semantics) -----

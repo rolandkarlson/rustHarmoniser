@@ -57,6 +57,14 @@ pub struct Config {
     pub chord_structure: Vec<i32>,
     pub harmony_distance_contour: Option<Vec<f64>>,
     pub mode_contour: Option<Vec<f64>>,
+    /// Key root (tonic pitch class, 0=C … 11=B) over time — the modulation
+    /// contour. When present it overrides the scalar `root` per bar, moving the
+    /// Schillinger scale realisation AND every root-keyed scoring term
+    /// (tendency tones, leading-tone doubling, the chromatic-scale mask) with
+    /// it, so the harmonizer follows the new key instead of pulling back to the
+    /// old one. Absent/empty = no modulation, scalar `root` everywhere.
+    #[serde(default)]
+    pub root_contour: Option<Vec<f64>>,
     pub chord_structure_contour: Option<Vec<Vec<f64>>>,
     pub schillinger_ex_contour: Option<Vec<Vec<f64>>>,
     pub harmony_matrix_contour: Option<Vec<f64>>,
@@ -255,6 +263,7 @@ impl Default for Config {
             chord_structure: vec![0, 1, 2, 4, 5],
             harmony_distance_contour: None,
             mode_contour: None,
+            root_contour: None,
             chord_structure_contour: None,
             schillinger_ex_contour: None,
             harmony_matrix_contour: None,
@@ -424,6 +433,9 @@ impl Config {
 
         self.harmony_distance_contour = Some(harmony);
         self.mode_contour = Some(mode);
+        // Flat at the scalar root: default behaviour unchanged, but the contour
+        // editor has data to draw modulations into (like melody_force below).
+        self.root_contour = Some(vec![self.root as f64; steps]);
         self.chord_structure_contour = Some(vec![chord; 16]);
         self.voice_rhythm_contour = Some(rhythm);
         self.harmony_matrix_contour = Some(harmony_matrix);

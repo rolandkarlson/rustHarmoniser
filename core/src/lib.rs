@@ -5,7 +5,6 @@
 pub mod contour;
 pub mod model;
 pub mod music_theory;
-pub mod rhythm;
 pub mod harmonizer;
 pub mod schillinger;
 pub mod utils;

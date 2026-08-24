@@ -264,6 +264,10 @@ pub fn gen_schillinger_progression(config: &Config, contours: &Contours) -> Vec<
                 .map(|c| mod_shim(c.at(start_time).round() as i32, 7))
                 .unwrap_or(config.mode);
 
+            let current_root = contours.root.as_ref()
+                .map(|c| mod_shim(c.at(start_time).round() as i32, 12))
+                .unwrap_or(config.root);
+
             let chord_idx = contours.chord_structure.as_ref()
                 .and_then(|vc| vc.at_strict(voice, start_time))
                 .map(|v| v.round() as usize)
@@ -275,7 +279,7 @@ pub fn gen_schillinger_progression(config: &Config, contours: &Contours) -> Vec<
                 &config.chord_structure
             };
 
-            let scale = generate_mode_from_steps(config.root, &current_mode);
+            let scale = generate_mode_from_steps(current_root, &current_mode);
             let ex = contours.schillinger_ex.as_ref()
                 .and_then(|vc| vc.at_strict(voice, start_time))
                 .map(|v| v.round() as i32)
@@ -439,6 +443,20 @@ mod tests {
                 assert!(scale.contains(pc), "mode {mode}: pc {pc} is off-scale in {bar:?}");
             }
         }
+    }
+
+    #[test]
+    fn root_contour_transposes_the_scale_per_bar() {
+        // Two bars of the tonic triad, root contour C → G at the default 4-beat
+        // resolution: bar 0 realises in C Ionian, bar 1 in G Ionian.
+        let mut c = cfg(4, 1, 0);
+        c.use_generated_progression = false;
+        c.schillinger_sequence = vec![0, 0];
+        c.root = 0;
+        c.root_contour = Some(vec![0.0, 7.0]);
+        let bars = &prog(&c)[0];
+        assert_eq!(bars[0], vec![0, 4, 7], "bar 0 should stay in C");
+        assert_eq!(bars[1], vec![7, 11, 2], "bar 1 should modulate to G");
     }
 
     #[test]

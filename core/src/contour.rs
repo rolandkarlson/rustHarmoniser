@@ -100,6 +100,10 @@ pub struct Contours {
     pub voice_rhythm: Option<VoiceContours>,
     /// Mode (0..6) per bar for the Schillinger scale realisation.
     pub mode: Option<Contour>,
+    /// Key root (tonic pc 0..11) per bar — the modulation contour. Overrides
+    /// the scalar `config.root` for the scale realisation and every root-keyed
+    /// scoring term (see harmonizer::key_root_at).
+    pub root: Option<Contour>,
     /// Per-voice chord-structure index into the built-in chord list.
     pub chord_structure: Option<VoiceContours>,
     /// Per-voice Schillinger expansion factor.
@@ -126,6 +130,7 @@ impl Contours {
             melody_force: VoiceContours::from_field(config.melody_force_contour.as_ref(), res),
             voice_rhythm: VoiceContours::from_field(config.voice_rhythm_contour.as_ref(), res),
             mode: Contour::from_field(config.mode_contour.as_ref(), res),
+            root: Contour::from_field(config.root_contour.as_ref(), res),
             chord_structure: VoiceContours::from_field(config.chord_structure_contour.as_ref(), res),
             schillinger_ex: VoiceContours::from_field(config.schillinger_ex_contour.as_ref(), res),
         }

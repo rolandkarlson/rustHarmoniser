@@ -703,6 +703,7 @@ function App() {
   const CONTOUR_FIELDS: Record<string, { field: string; perVoice: boolean }> = {
     harmony: { field: 'harmony_distance_contour', perVoice: false },
     mode: { field: 'mode_contour', perVoice: false },
+    root: { field: 'root_contour', perVoice: false },
     chord: { field: 'chord_structure_contour', perVoice: true },
     voice: { field: 'voice_contour', perVoice: true },
     rhythm: { field: 'voice_rhythm_contour', perVoice: true },
@@ -861,6 +862,7 @@ function App() {
     if (newConfig.schillinger_sequence) newConfig.schillinger_sequence = duplicateArray(newConfig.schillinger_sequence, schillingerSteps, 0);
     if (newConfig.harmony_distance_contour) newConfig.harmony_distance_contour = duplicateArray(newConfig.harmony_distance_contour, stdSteps, 0.2);
     if (newConfig.mode_contour) newConfig.mode_contour = duplicateArray(newConfig.mode_contour, stdSteps, 0);
+    if (newConfig.root_contour) newConfig.root_contour = duplicateArray(newConfig.root_contour, stdSteps, newConfig.root ?? 0);
     if (newConfig.chord_structure_contour) {
       newConfig.chord_structure_contour = newConfig.chord_structure_contour.map((track: any[]) => duplicateArray(track, stdSteps, 0));
     }
@@ -900,6 +902,7 @@ function App() {
     const nc = { ...config, voice_contour_resolution: newRes };
     if (nc.harmony_distance_contour) nc.harmony_distance_contour = resampleContour(nc.harmony_distance_contour, oldRes, newRes);
     if (nc.mode_contour) nc.mode_contour = resampleContour(nc.mode_contour, oldRes, newRes);
+    if (nc.root_contour) nc.root_contour = resampleContour(nc.root_contour, oldRes, newRes);
     if (nc.chord_structure_contour) nc.chord_structure_contour = nc.chord_structure_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
     if (nc.schillinger_ex_contour) nc.schillinger_ex_contour = nc.schillinger_ex_contour.map((t: number[]) => resampleContour(t, oldRes, newRes));
     if (nc.harmony_matrix_contour) nc.harmony_matrix_contour = resampleContour(nc.harmony_matrix_contour, oldRes, newRes);
@@ -1655,6 +1658,18 @@ function App() {
           cellHighlights={modeHighlights}
           color="#fde047"
         />;
+      case 'root':
+        return <ContourEditor
+          label="Root Contour (Modulation)"
+          data={config.root_contour || []}
+          yMin={0} yMax={11} xMax={xMax}
+          resolution={config.voice_contour_resolution}
+          pl={config.pl}
+          onChange={(d) => updateConfig('root_contour', d)}
+          onResolutionChange={handleResolutionChange}
+          yLabelFormatter={(v) => NOTE_NAMES[((Math.round(v) % 12) + 12) % 12] ?? String(v)}
+          color="#f9a8d4"
+        />;
       case 'chord':
         const chordData = config.chord_structure_contour ? config.chord_structure_contour[selectedVoice] : [];
         return <ContourEditor
@@ -1752,6 +1767,7 @@ function App() {
     { id: 'schillinger_ex', label: 'Sch. EXP', tip: 'Expansion multiplier — stretches or compresses chord voicing intervals. Higher = wider voicings.' },
     { id: 'harmony', label: 'Harmony', tip: 'Harmony/Smoothness balance over time. High = favor consonance, Low = favor smooth stepwise voice leading.' },
     { id: 'mode', label: 'Mode', tip: 'Scale mode over time (0=Ionian → 6=Lydian). Adjacent values differ by 1 note (circle of fifths order).' },
+    { id: 'root', label: 'Root', tip: 'Key root (tonic) over time — the modulation contour. Overrides the scalar Root per bar; scales, tendency tones and leading-tone terms all follow. Change it at phrase boundaries for classic phrase modulation; move by ±7 semitones (a fifth) for the smoothest key change.' },
     { id: 'chord', label: 'Chord', tip: 'Chord voicing structure over time. Selects from preset voicings (triads to full 7-note chords).' },
     { id: 'voice', label: 'Voice Pitch', tip: 'Per-voice pitch offset in semitones over time. Shifts the target pitch the harmonizer aims for.' },
     { id: 'rhythm', label: 'Voice Rhythm', tip: 'Per-voice note duration over time. Values in beats (0.25=16th, 0.5=8th, 1=quarter, 4=whole). Clamped at bar boundaries.' },
