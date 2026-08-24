@@ -299,7 +299,8 @@ const TERM_INFO: Record<string, { label: string; tip: string }> = {
   contour_spring: { label: 'Contour spring', tip: 'Quadratic pull toward the voice contour\'s target pitch (voice_contour_weight).' },
   crossing_penalty: { label: 'Crossing', tip: 'Candidate too close to a neighbouring voice\'s register (no_crossing, applied per violated side).' },
   leader_history: { label: 'Leader history', tip: 'This chord\'s LEADER takes the repeat penalties (last_note_same, last_note_exist_in_voice) so it keeps moving.' },
-  hold_stickiness: { label: 'Hold stickiness', tip: 'Non-leader bonus for keeping a common tone (same_note_bonus). Stagnant voices lose it.' },
+  hold_stickiness: { label: 'Hold stickiness', tip: 'Non-leader bonus for keeping a common tone (same_note_bonus), shaped by metric position, hold momentum, and onset density (metric_hold_strength / momentum_weight / density_weight). Stagnant voices lose it.' },
+  suspension: { label: 'Suspension', tip: 'Tolerance for holding a non-chord tone that can resolve down by step (suspension_tolerance), or the reward for that step-down resolution onto a chord tone (suspension_resolve_bonus).' },
   // hard violations
   unison_collision: { label: 'Unison collision', tip: 'Two voices on exactly the same pitch.' },
   forbidden_interval: { label: 'Forbidden interval', tip: 'An interval class the active H-Matrix row hard-forbids (cell ≤ −5).' },
@@ -1055,7 +1056,7 @@ function App() {
     return progression;
   };
 
-  const applyPreset = (preset: 'jazz' | 'classical' | 'ambient' | 'trance') => {
+  const applyPreset = (preset: 'jazz' | 'classical' | 'bach' | 'ambient' | 'trance') => {
     if (!config) return;
     const nc = { ...config };
 
@@ -1090,6 +1091,17 @@ function App() {
       nc.chord_quality_weight = 1.0;
       nc.tendency_weight = 0.8;
       nc.roughness_weight = 0.4;
+
+      // Rhythm shaping: the metric profile is INVERTED a touch so pitch
+      // changes lean toward offbeats (syncopated comping, anticipations),
+      // momentum keeps lines running and held comps sustained, and
+      // suspensions are welcome — extensions that resolve are the idiom.
+      nc.metric_hold_strength = -0.4;
+      nc.momentum_weight = 0.7;
+      nc.density_weight = 0.5;
+      nc.lattice_beats = 0;
+      nc.suspension_tolerance = 0.8;
+      nc.suspension_resolve_bonus = 0.8;
 
       // The preset writes its own progression — the generated progression
       // would silently override it, and a custom matrix would override the
@@ -1223,6 +1235,17 @@ function App() {
       // high weight it drains the thirds out of the texture entirely.
       nc.roughness_weight = 0.4;
 
+      // Rhythm shaping: chorale meter — pitch changes land on strong beats,
+      // and the full preparation → suspension → resolution gesture (4-3, 7-6)
+      // is rewarded hard; the resolution outweighs the dissonant hold so
+      // suspensions never strand.
+      nc.metric_hold_strength = 0.8;
+      nc.momentum_weight = 0.4;
+      nc.density_weight = 0.5;
+      nc.lattice_beats = 0;
+      nc.suspension_tolerance = 0.6;
+      nc.suspension_resolve_bonus = 1.0;
+
       // The preset writes its own progression and points at built-in matrix rows.
       nc.schillinger_progression = true;
       nc.use_generated_progression = false;
@@ -1322,6 +1345,129 @@ function App() {
         const tension = Math.sin((i / Math.max(steps - 1, 1)) * Math.PI);
         return parseFloat((0.3 + tension * 0.2).toFixed(2));
       }));
+    } else if (preset === 'bach') {
+      // Bach: motor rhythm and line discipline. Constant 8th-note motion in
+      // the soprano over a chorale core, a walking bass in the development,
+      // circle-of-fifths sequences, suspensions at full strength, and strict
+      // counterpoint. Differs from Classical by MOTION: low hold bias + high
+      // momentum keep every line running instead of parking on common tones.
+      nc.pl = 4;
+      nc.main_pitch = Math.floor(Math.random() * 12);
+      // Major chorale or minor chorale — Aeolian gets the harmonic-minor V
+      // (raised leading tone on dominant bars) automatically.
+      nc.mode = Math.random() < 0.6 ? 0 : 5;
+      nc.lookahead_depth = 3;
+      nc.harmony_distance_balance = 0.2;
+      nc.rng_seed = Math.floor(Math.random() * 999999);
+
+      // Strict counterpoint: parallels banned, contrary motion strongly
+      // favoured, registers separated, and constant stepwise pressure on
+      // every line (melody_force is the Bach line discipline).
+      nc.last_note_exist_in_voice = 1.2;
+      nc.same_direction = 1.2;
+      nc.consecutive_octav_fift = 5.0;
+      nc.no_crossing = 10.0;
+      nc.last_note_same = 0.6;
+      nc.same_note_bonus = 0.4; // low: motion is the default, holds must earn it
+      nc.common_tone_penalty = 0.0;
+      nc.max_voices_changed = -1;
+      nc.min_voices_changed = 1;
+      nc.interval_exists_in_harmony = 1.0;
+      nc.melody_force = 0.8;
+      nc.chord_structure = [0, 1, 2, 4]; // triads & 7ths (V7, ii7)
+
+      // Functional bass, but freer than Classical: Bach walks through first
+      // inversions constantly, so the bass must be allowed off the root.
+      nc.root_position_weight = 0.8;
+      nc.root_doubling_weight = 1.0;
+      nc.chord_quality_weight = 1.5;
+      nc.tendency_weight = 1.5; // leading tones rise, 7ths fall — non-negotiable
+      nc.roughness_weight = 0.4;
+
+      // Rhythm shaping: the motor. Momentum high so a moving line keeps
+      // moving; metric moderate so marginal changes still favour beats; the
+      // suspension gesture at full strength — dissonant holds tolerated,
+      // step-down resolutions rewarded above everything else.
+      nc.metric_hold_strength = 0.5;
+      nc.momentum_weight = 0.8;
+      nc.density_weight = 0.5;
+      nc.lattice_beats = 0;
+      nc.suspension_tolerance = 0.8;
+      nc.suspension_resolve_bonus = 1.2;
+
+      nc.schillinger_progression = true;
+      nc.use_generated_progression = false;
+      nc.harmony_matrix = DEFAULT_HARMONY_MATRIX.map(r => [...r]);
+
+      // Progressions: chorale phrases and the signature circle-of-fifths
+      // sequence (I-IV-vii°-iii-vi-ii-V-I), every phrase closing onto a
+      // cadence. Final bar = V so the loop seam is an authentic cadence.
+      const bachBars = nc.pl * nc.render_length;
+      const bachPhrases = [
+        [0, 3, 4, 0],               // I-IV-V-I (chorale phrase)
+        [0, 1, 4, 0],               // I-ii-V-I
+        [5, 1, 4, 0],               // vi-ii-V-I
+        [0, 5, 3, 4],               // I-vi-IV-V (half cadence)
+        [0, 3, 6, 2, 5, 1, 4, 0],   // full circle of fifths (8 bars)
+      ];
+      nc.schillinger_sequence = [];
+      while (nc.schillinger_sequence.length < bachBars) {
+        const section = nc.schillinger_sequence.length / bachBars;
+        // Sequences belong in the development; plain phrases frame it.
+        const pool = section > 0.3 && section < 0.75 ? [3, 4] : [0, 1, 2];
+        const pat = bachPhrases[pool[Math.floor(Math.random() * pool.length)]];
+        nc.schillinger_sequence.push(...pat.slice(0, bachBars - nc.schillinger_sequence.length));
+      }
+      nc.schillinger_sequence[nc.schillinger_sequence.length - 1] = 4;
+
+      const bachSteps = Math.ceil((nc.pl * 4 * nc.render_length) / nc.voice_contour_resolution);
+
+      // Steady harmonic temperature — Bach's drama is linear, not textural.
+      nc.harmony_distance_contour = Array.from({ length: bachSteps }, (_, i) => {
+        const phase = i / bachSteps;
+        return parseFloat((0.15 + 0.1 * Math.sin(phase * Math.PI)).toFixed(2));
+      });
+      // One mode throughout — the progression supplies the colour.
+      nc.mode_contour = Array.from({ length: bachSteps }, () => nc.mode);
+      // Strict Classical matrix row, flat.
+      nc.harmony_matrix_contour = Array.from({ length: bachSteps }, () => 0);
+      // Triads, 7ths through the sequence-heavy middle.
+      nc.chord_structure_contour = Array.from({ length: 16 }, () =>
+        Array.from({ length: bachSteps }, (_, i) => {
+          const phase = i / bachSteps;
+          return phase > 0.3 && phase < 0.75 ? 1 : 0;
+        }));
+      nc.schillinger_ex_contour = Array.from({ length: 16 }, () =>
+        Array.from({ length: bachSteps }, () => 2));
+
+      // The texture (steps are bars at the default 4-beat resolution):
+      // soprano runs 8ths (the motor) and broadens to quarters on the
+      // cadence bar of each phrase; alto/tenor hold the chorale in quarters;
+      // the bass walks 8ths through the development, quarters elsewhere.
+      nc.voice_rhythm_contour = Array.from({ length: 16 }, (_, v) =>
+        Array.from({ length: bachSteps }, (_, i) => {
+          const cadenceBar = i % nc.pl === nc.pl - 1;
+          const phase = i / bachSteps;
+          if (v === 0) return cadenceBar ? 1.0 : 0.5;
+          if (v === 4) return (phase > 0.3 && phase < 0.75 && !cadenceBar) ? 0.5 : 1.0;
+          return 1.0;
+        }));
+
+      // Registers stay put; a gentle arch, bass in contrary motion.
+      nc.voice_contour = Array.from({ length: 16 }, (_, v) =>
+        Array.from({ length: bachSteps }, (_, i) => {
+          const phase = i / bachSteps;
+          const arch = 3 * Math.sin(phase * Math.PI);
+          return Math.round(v === 4 ? -arch * 0.7 : v === 0 ? arch : 0);
+        }));
+
+      // Constant line pressure — every voice, all the time. This is the
+      // stepwise discipline; it eases only slightly at the edges.
+      nc.melody_force_contour = Array.from({ length: 16 }, () =>
+        Array.from({ length: bachSteps }, (_, i) => {
+          const tension = Math.sin((i / Math.max(bachSteps - 1, 1)) * Math.PI);
+          return parseFloat((0.7 + 0.2 * tension).toFixed(2));
+        }));
     } else if (preset === 'ambient') {
       // Ambient: Lydian float over the Ethereal matrix row, glacial harmonic
       // rhythm, deep hold bias with a 1-voice change budget — the texture
@@ -1350,6 +1496,16 @@ function App() {
       nc.chord_quality_weight = 0.5;
       nc.tendency_weight = 0.0; // no functional pull — stasis is the point
       nc.roughness_weight = 0.6;
+
+      // Rhythm shaping: meterless float — no metric profile, no momentum
+      // push (overheld voices are the sound, not a problem), and dissonant
+      // holds welcome as colour with no hurry to resolve.
+      nc.metric_hold_strength = 0.0;
+      nc.momentum_weight = 0.0;
+      nc.density_weight = 0.0;
+      nc.lattice_beats = 0;
+      nc.suspension_tolerance = 0.8;
+      nc.suspension_resolve_bonus = 0.2;
 
       nc.schillinger_progression = true;
       nc.use_generated_progression = false;
@@ -1419,6 +1575,15 @@ function App() {
       nc.chord_quality_weight = 1.0;
       nc.tendency_weight = 0.3;
       nc.roughness_weight = 0.5;
+
+      // Rhythm shaping: hard grid — pitch changes lock to strong beats,
+      // blocky anthem harmony with no suspension gestures.
+      nc.metric_hold_strength = 0.9;
+      nc.momentum_weight = 0.3;
+      nc.density_weight = 0.5;
+      nc.lattice_beats = 0;
+      nc.suspension_tolerance = 0.0;
+      nc.suspension_resolve_bonus = 0.0;
 
       nc.schillinger_progression = true;
       nc.use_generated_progression = false;
@@ -1919,6 +2084,37 @@ function App() {
               </div>
             </ParamGroup>
 
+            <ParamGroup label="Rhythm">
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Metric shaping of Hold Bias: on the downbeat holding earns nothing (changing pitch is free), on weak 16ths it earns the full bonus — so pitch changes (= onsets after the same-pitch merge) gravitate toward strong beats. 0 = flat everywhere (legacy), 1 = full profile. Negative inverts it for syncopation.">Metric:</span>
+                <NumberField value={config.metric_hold_strength ?? 0.6} onChange={v => updateConfig('metric_hold_strength', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Hold momentum: scales Hold Bias by how long the voice has sat on its pitch (relative to its target note length). Just moved → keeps moving (runs); settled → stays (sustains); overstayed → invited back in. 0 = off.">Momentum:</span>
+                <NumberField value={config.momentum_weight ?? 0.5} onChange={v => updateConfig('momentum_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Onset-density pressure toward the rhythm contour's target: a voice that changed less this bar than its target note length implies finds holding cheaper to refuse, and vice versa. Only active with Lattice > 0 — on the legacy grid the grid itself is the target. 0 = off.">Density:</span>
+                <NumberField value={config.density_weight ?? 0.5} onChange={v => updateConfig('density_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Uniform onset lattice in beats (e.g. 0.5 = 8ths): every voice emits at this duration and the rhythm contour becomes a density TARGET priced by Density instead of a hard grid — harmony may move at any point and pays in score, not in impossibility. 0 = legacy contour-driven grid. Finer lattice = more groups = slower render.">Lattice:</span>
+                <NumberField value={config.lattice_beats ?? 0} onChange={v => updateConfig('lattice_beats', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              {sch && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Suspension tolerance: partial refund for HOLDING a pitch foreign to the current chord when a step-down resolution exists — prices the dissonant hold as a suspension instead of a wrong note (the harmony penalty still applies). 0 = off.">Susp Hold:</span>
+                    <NumberField value={config.suspension_tolerance ?? 0.5} onChange={v => updateConfig('suspension_tolerance', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Suspension resolution: reward for stepping DOWN (1-2 st) onto a chord tone after a dissonant hold — completes preparation → suspension → resolution (4-3, 7-6, 9-8). 0 = off.">Susp Res:</span>
+                    <NumberField value={config.suspension_resolve_bonus ?? 0.6} onChange={v => updateConfig('suspension_resolve_bonus', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                </>
+              )}
+            </ParamGroup>
+
             <ParamGroup label="Harmony">
               <div className="flex items-center gap-2">
                 <span className="text-xs uppercase tracking-wider text-slate-500" title="Penalizes duplicate intervals in chord. Adds harmonic variety.">Dup Interval:</span>
@@ -2148,6 +2344,13 @@ function App() {
               className="px-4 py-1.5 bg-rose-800 hover:bg-rose-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
             >
               Classical
+            </button>
+            <button
+              onClick={() => applyPreset('bach')}
+              title="Bach preset — motor rhythm (soprano 8ths, walking bass), circle-of-fifths sequences, suspensions at full strength, strict counterpoint, cadential broadening"
+              className="px-4 py-1.5 bg-amber-800 hover:bg-amber-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Bach
             </button>
             <button
               onClick={() => applyPreset('ambient')}

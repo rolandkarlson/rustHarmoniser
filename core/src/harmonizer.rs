@@ -345,6 +345,56 @@ fn bar_root_pc(state: &HarmonizerState, start: f64) -> Option<i32> {
         .map(|&p| p.rem_euclid(12))
 }
 
+/// Pitch classes of the bar's chord (voice 0's Schillinger stack) at `start`,
+/// for the suspension terms' in-chord test. Same bar lookup as bar_root_pc.
+fn bar_chord_pcs(state: &HarmonizerState, start: f64) -> Option<Vec<i32>> {
+    let bars = state.schillinger_notes.first()?;
+    if bars.is_empty() {
+        return None;
+    }
+    let bar = (start / 4.0).floor() as i32;
+    Some(
+        bars[mod_shim(bar, bars.len() as i32) as usize]
+            .iter()
+            .map(|&p| p.rem_euclid(12))
+            .collect(),
+    )
+}
+
+/// Metric weight of a position in the 4-beat bar for hold shaping: 0 on the
+/// downbeat (holding earns nothing — moving is free), rising through beat 3,
+/// the backbeats, and 8th offbeats to 1 on 16th offbeats (full stickiness —
+/// moving there is maximally taxed). Positions snap to the nearest 16th.
+fn metric_hold_weight(pos_in_bar: f64) -> f64 {
+    let q = ((pos_in_bar * 4.0).round() / 4.0).rem_euclid(4.0);
+    if q == 0.0 {
+        0.0
+    } else if q == 2.0 {
+        0.35
+    } else if q.fract() == 0.0 {
+        0.7 // beats 2 and 4
+    } else if (q * 2.0).fract() == 0.0 {
+        0.85 // 8th offbeats
+    } else {
+        1.0 // 16ths
+    }
+}
+
+/// Hold-momentum profile: multiplier adjustment on the hold bonus from how
+/// long the voice has sat on its pitch, in units of its target note length.
+/// Just moved → keep moving (runs); settled → stay (sustains); overstayed →
+/// come back in. Returned value is scaled by momentum_weight and added to 1.
+fn momentum_profile(held_beats: f64, target_dur: f64) -> f64 {
+    let t = target_dur.max(0.25);
+    if held_beats < 0.75 * t {
+        -0.4
+    } else if held_beats < 2.5 * t {
+        0.3
+    } else {
+        -0.5
+    }
+}
+
 /// The key root (tonic pitch class) in effect at `beats`: the root contour —
 /// the modulation contour — sampled when present, else the scalar
 /// `config.root`. Every root-keyed scoring term (tendency-tone tonic,
@@ -606,6 +656,13 @@ pub struct PrecomputedHarmonyData {
     pub last_notes_by_channel: Vec<Vec<i32>>,
     pub notes_ending_at_start: Vec<Note>,
     pub lead_pitch: Option<i32>,
+    /// Beats since each channel last changed pitch (start of the current
+    /// same-pitch run to the group start). -1 = no history in the window.
+    /// Feeds the hold-momentum shaping of same_note_bonus.
+    pub hold_beats_by_channel: Vec<f64>,
+    /// Pitch changes each channel has made among notes STARTING in the current
+    /// bar, before this group. Feeds the onset-density term.
+    pub bar_changes_by_channel: Vec<u32>,
 }
 
 fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: f64) -> PrecomputedHarmonyData {
@@ -615,8 +672,25 @@ fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: 
     let mut last_notes_by_channel: Vec<Vec<i32>> = vec![Vec::new(); 16];
     let mut sustaining_lead_pitch: Option<i32> = None;
     let mut latest_past_lead: Option<(f64, i32)> = None;
+    // Per channel: (pitch, start of the current same-pitch run) — context is
+    // start-sorted, so a linear pass tracks the run each channel is in.
+    let mut run_by_channel: Vec<Option<(i32, f64)>> = vec![None; 16];
+    let mut bar_changes_by_channel: Vec<u32> = vec![0; 16];
+    let bar_start = (start_time / 4.0).floor() * 4.0;
 
     for n in context {
+        if n.start < start_time && n.muted == 0 {
+            let ch = n.channel as usize;
+            if ch < 16 {
+                let changed = run_by_channel[ch].map_or(true, |(p, _)| p != n.pitch);
+                if changed {
+                    run_by_channel[ch] = Some((n.pitch, n.start));
+                    if n.start >= bar_start {
+                        bar_changes_by_channel[ch] += 1;
+                    }
+                }
+            }
+        }
         // sustaining_notes: start <= start && end > start
         if n.start <= start_time && n.start + n.duration > start_time && n.muted == 0 {
             sustaining_notes.push(n.pitch);
@@ -682,12 +756,19 @@ fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: 
         .or(sustaining_lead_pitch)
         .or(latest_past_lead.map(|(_, p)| p));
 
+    let hold_beats_by_channel = run_by_channel
+        .iter()
+        .map(|run| run.map_or(-1.0, |(_, s)| (start_time - s).max(0.0)))
+        .collect();
+
     PrecomputedHarmonyData {
         sustaining_notes,
         boundaries_by_channel,
         last_notes_by_channel,
         notes_ending_at_start,
         lead_pitch,
+        hold_beats_by_channel,
+        bar_changes_by_channel,
     }
 }
 
@@ -729,12 +810,19 @@ pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channe
 
     while pos < clip_len {
         let n = base + pitch_shifts[mod_shim(counter, pitch_shifts.len() as i32) as usize];
-        // Duration from this voice's rhythm contour when it has one; the flat
-        // voice_rhythm cycle otherwise.
-        let mut d = contours.voice_rhythm.as_ref()
-            .filter(|_| channel >= 0)
-            .and_then(|vc| vc.at_strict(channel as usize, pos))
-            .unwrap_or_else(|| rhythm_data[mod_shim(counter, rhythm_data.len() as i32) as usize]);
+        // Uniform lattice when configured: every voice emits at lattice_beats
+        // and the rhythm contour becomes the density TARGET the scorer prices
+        // against (see density_weight). Otherwise duration comes from this
+        // voice's rhythm contour when it has one; the flat voice_rhythm cycle
+        // is the last fallback.
+        let mut d = if config.lattice_beats > 0.0 {
+            config.lattice_beats
+        } else {
+            contours.voice_rhythm.as_ref()
+                .filter(|_| channel >= 0)
+                .and_then(|vc| vc.at_strict(channel as usize, pos))
+                .unwrap_or_else(|| rhythm_data[mod_shim(counter, rhythm_data.len() as i32) as usize])
+        };
 
         // Clamp to bar boundary (bar = 4 beats) — notes must not cross bar lines
         let bar_len = 4.0;
@@ -846,6 +934,9 @@ struct CandTerms {
     off_scale_hold: f64,
     contour_spring: f64,
     crossing_penalty: f64,
+    /// Suspension gesture: positive tolerance on a dissonant hold that can
+    /// resolve down by step, positive reward on the step-down resolution.
+    suspension: f64,
 }
 
 struct JointCand {
@@ -953,6 +1044,20 @@ fn build_joint_voices(
         None
     };
 
+    // Rhythm-shaping context, shared by every voice in the group: where in the
+    // bar this group falls, and the chord pcs the suspension terms test against.
+    let pos_in_bar = group_start.rem_euclid(4.0);
+    let metric_mult =
+        1.0 - config.metric_hold_strength * (1.0 - metric_hold_weight(pos_in_bar));
+    let susp_active = config.schillinger_progression
+        && (config.suspension_tolerance != 0.0 || config.suspension_resolve_bonus != 0.0);
+    let cur_chord_pcs = if susp_active { bar_chord_pcs(state, group_start) } else { None };
+    let prev_chord_pcs = if susp_active {
+        bar_chord_pcs(state, (group_start - 0.001).max(0.0))
+    } else {
+        None
+    };
+
     // Chromatic-mode scale constraint as a pitch-class bitmask: entries are
     // offsets from the key root, so [0,2,4,5,7,9,11] is the major scale on
     // whatever the root is (the root contour modulates it per bar). 0 = no
@@ -1027,6 +1132,53 @@ fn build_joint_voices(
             candidates.push(last_note);
         }
 
+        // ---- Rhythm-shaped hold bonus (metric position, momentum, density) ----
+        // The voice's target note length: its rhythm-contour row, else the flat
+        // voice_rhythm cycle's first value. Scales the momentum thresholds and
+        // sets the density target so slow voices aren't judged on a fast clock.
+        let target_dur = state.contours.voice_rhythm.as_ref()
+            .and_then(|vc| vc.at_strict(channel_idx, note.start))
+            .or_else(|| config.voice_rhythm.first().copied())
+            .unwrap_or(1.0);
+        let held = precomputed.hold_beats_by_channel
+            .get(channel_idx)
+            .copied()
+            .unwrap_or(-1.0);
+        let momentum_mult = if held < 0.0 {
+            1.0 // no history — neutral
+        } else {
+            1.0 + config.momentum_weight * momentum_profile(held, target_dur)
+        };
+        // Density pressure only makes sense on a uniform lattice: on the legacy
+        // contour lattice the grid IS the target, and the term would tax every
+        // deliberate hold.
+        let density_term = if config.lattice_beats > 0.0 && config.density_weight != 0.0 {
+            let expected = pos_in_bar / target_dur.max(0.25);
+            let realized = precomputed.bar_changes_by_channel
+                .get(channel_idx)
+                .copied()
+                .unwrap_or(0) as f64;
+            -config.density_weight * (expected - realized).clamp(-1.5, 1.5)
+        } else {
+            0.0
+        };
+        let effective_hold_bonus =
+            config.same_note_bonus * metric_mult * momentum_mult + density_term;
+
+        // ---- Suspension state ----
+        // A step-down resolution must exist for the dissonant hold to read as a
+        // suspension rather than a stranded wrong note.
+        let has_step_down = candidates.contains(&(last_note - 1))
+            || candidates.contains(&(last_note - 2));
+        // The previous note was a HOLD into a pitch foreign to its bar's chord:
+        // the preparation-suspension half of the gesture. The repeat requirement
+        // stands in for "prepared" (the pitch was struck earlier, when it fit).
+        let suspended = susp_active
+            && current_lasts.len() >= 2
+            && current_lasts[0] == current_lasts[1]
+            && prev_chord_pcs.as_ref()
+                .map_or(false, |pcs| !pcs.contains(&last_note.rem_euclid(12)));
+
         // A voice-contour that exists switches the spring's anchor to
         // "input pitch + sampled offset"; a missing or empty row means offset 0,
         // NOT "no contour" (that distinction only exists when the whole family
@@ -1062,6 +1214,23 @@ fn build_joint_voices(
                 terms.off_scale_hold = -OFF_SCALE_HOLD_PENALTY;
             }
 
+            if let Some(pcs) = &cur_chord_pcs {
+                let c_in_chord = pcs.contains(&c.rem_euclid(12));
+                if c == last_note && !c_in_chord && has_step_down {
+                    // Dissonant hold with an available step-down: price it as a
+                    // suspension, not a wrong note (partial offset of the
+                    // harmony-matrix penalty it still takes).
+                    terms.suspension = config.suspension_tolerance;
+                } else if suspended
+                    && c_in_chord
+                    && (last_note - c == 1 || last_note - c == 2)
+                {
+                    // The resolution: step down onto a chord tone.
+                    terms.suspension = config.suspension_resolve_bonus;
+                }
+                soft_base += terms.suspension;
+            }
+
             if config.voice_contour_weight != 0.0 {
                 let base_dist = if use_contour {
                     (c - (note.pitch + target_offset)).abs()
@@ -1092,7 +1261,7 @@ fn build_joint_voices(
             let nonlead_term = if stagnant {
                 lead_term
             } else if c == last_note && !off_scale_hold {
-                config.same_note_bonus
+                effective_hold_bonus
             } else {
                 0.0
             };
@@ -1334,6 +1503,7 @@ impl ChordScorer<'_> {
             sink.voice_term(i, "off_scale_hold", c.terms.off_scale_hold);
             sink.voice_term(i, "contour_spring", c.terms.contour_spring);
             sink.voice_term(i, "crossing_penalty", c.terms.crossing_penalty);
+            sink.voice_term(i, "suspension", c.terms.suspension);
             if !v.is_fixed_lead {
                 nonlead_sum += c.nonlead_term;
                 let delta = c.lead_term - c.nonlead_term;
@@ -2948,6 +3118,161 @@ mod tests {
             .filter(|n| (n.start - start).abs() < 1e-6)
             .map(|n| (n.channel, n.pitch))
             .collect()
+    }
+
+    /// The nonlead hold term a channel-1 voice gets for repeating `pitch` at
+    /// `start`, given `context` as its history — the probe for the rhythm-shaped
+    /// hold bonus (metric / momentum / density).
+    fn hold_term_at(start: f64, pitch: i32, cfg: &Config, context: &[Note]) -> f64 {
+        let group = vec![Note::new(pitch, start, 1.0, 100, 0, 1)];
+        let pre = build_precomputed_data(context, &group, start);
+        let voices = build_joint_voices(&group, 1.0, cfg, &test_state(), &pre);
+        voices[0]
+            .cands
+            .iter()
+            .find(|c| c.pitch == pitch)
+            .expect("hold candidate missing")
+            .nonlead_term
+    }
+
+    #[test]
+    fn metric_hold_weight_profile() {
+        assert_eq!(metric_hold_weight(0.0), 0.0); // downbeat: moving is free
+        assert_eq!(metric_hold_weight(2.0), 0.35); // beat 3
+        assert_eq!(metric_hold_weight(1.0), 0.7); // beat 2
+        assert_eq!(metric_hold_weight(3.0), 0.7); // beat 4
+        assert_eq!(metric_hold_weight(0.5), 0.85); // 8th offbeat
+        assert_eq!(metric_hold_weight(1.25), 1.0); // 16th
+        assert_eq!(metric_hold_weight(4.0), 0.0); // wraps to the downbeat
+    }
+
+    #[test]
+    fn metric_strength_frees_the_downbeat_and_taxes_offbeats() {
+        let mut cfg = test_config();
+        cfg.same_note_bonus = 2.0;
+        cfg.metric_hold_strength = 1.0;
+        cfg.momentum_weight = 0.0;
+        cfg.density_weight = 0.0;
+        // One prior note ending exactly at each probed start.
+        let ctx = |s: f64| vec![Note::new(60, s - 1.0, 1.0, 100, 0, 1)];
+        assert!(approx(hold_term_at(4.0, 60, &cfg, &ctx(4.0)), 0.0)); // downbeat
+        assert!(approx(hold_term_at(4.5, 60, &cfg, &ctx(4.5)), 1.7)); // 8th offbeat
+        assert!(approx(hold_term_at(4.25, 60, &cfg, &ctx(4.25)), 2.0)); // 16th
+
+        cfg.metric_hold_strength = 0.0; // legacy: flat everywhere
+        assert!(approx(hold_term_at(4.0, 60, &cfg, &ctx(4.0)), 2.0));
+    }
+
+    #[test]
+    fn momentum_shapes_hold_by_run_length() {
+        let mut cfg = test_config();
+        cfg.same_note_bonus = 2.0;
+        cfg.metric_hold_strength = 0.0;
+        cfg.momentum_weight = 1.0;
+        cfg.voice_rhythm = vec![1.0]; // momentum thresholds: 0.75 / 2.5 beats
+        // Probe at a fixed start; vary how long the voice has sat on pitch 60.
+        let run = |held: f64| vec![Note::new(60, 8.0 - held, held, 100, 0, 1)];
+        let just_moved = hold_term_at(8.0, 60, &cfg, &run(0.5));
+        let settled = hold_term_at(8.0, 60, &cfg, &run(1.0));
+        let overheld = hold_term_at(8.0, 60, &cfg, &run(3.0));
+        assert!(approx(just_moved, 1.2), "just moved: {just_moved}");
+        assert!(approx(settled, 2.6), "settled: {settled}");
+        assert!(approx(overheld, 1.0), "overheld: {overheld}");
+        // No history at all: neutral (full bonus), not "just moved".
+        let fresh = hold_term_at(8.0, 60, &cfg, &[]);
+        assert!(approx(fresh, 2.0), "no history should be neutral: {fresh}");
+    }
+
+    #[test]
+    fn density_deficit_taxes_holds_when_behind_target() {
+        let mut cfg = test_config();
+        cfg.same_note_bonus = 2.0;
+        cfg.metric_hold_strength = 0.0;
+        cfg.momentum_weight = 0.0;
+        cfg.density_weight = 1.0;
+        cfg.lattice_beats = 0.5;
+        cfg.voice_rhythm = vec![2.0]; // target: one change per 2 beats
+        // Probe at beat 2 of the bar (expected = 1 change by now).
+        // Behind: the voice has held one pitch since before the bar.
+        let behind = vec![
+            Note::new(60, 3.0, 1.0, 100, 0, 1),
+            Note::new(60, 4.0, 1.0, 100, 0, 1),
+            Note::new(60, 5.0, 1.0, 100, 0, 1),
+        ];
+        // Ahead: two pitch changes already inside this bar.
+        let ahead = vec![
+            Note::new(60, 3.0, 1.0, 100, 0, 1),
+            Note::new(62, 4.0, 1.0, 100, 0, 1),
+            Note::new(64, 5.0, 1.0, 100, 0, 1),
+        ];
+        let t_behind = hold_term_at(6.0, 60, &cfg, &behind);
+        let t_ahead = hold_term_at(6.0, 64, &cfg, &ahead);
+        assert!(
+            t_behind < t_ahead,
+            "behind-target hold ({t_behind}) should be cheaper to refuse than ahead-of-target ({t_ahead})"
+        );
+        // Inactive on the legacy lattice: the grid is the target there.
+        cfg.lattice_beats = 0.0;
+        assert!(approx(hold_term_at(6.0, 60, &cfg, &behind), 2.0));
+    }
+
+    #[test]
+    fn suspension_tolerates_dissonant_hold_and_rewards_step_down_resolution() {
+        let mut cfg = test_config();
+        cfg.schillinger_progression = true;
+        cfg.suspension_tolerance = 0.5;
+        cfg.suspension_resolve_bonus = 0.6;
+        let mut state = test_state();
+        // Bar 0: C major, bar 1: D minor. Holding E (pc 4) into bar 1 is the
+        // suspension; stepping down to D (pc 2) is the resolution.
+        state.schillinger_notes = vec![vec![vec![0, 4, 7], vec![2, 5, 9]]];
+
+        // At the bar line: E was struck twice in bar 0, held into D minor.
+        let ctx = vec![
+            Note::new(64, 3.0, 0.5, 100, 0, 1),
+            Note::new(64, 3.5, 0.5, 100, 0, 1),
+        ];
+        let group = vec![Note::new(64, 4.0, 0.5, 100, 0, 1)];
+        let pre = build_precomputed_data(&ctx, &group, 4.0);
+        let voices = build_joint_voices(&group, 1.0, &cfg, &state, &pre);
+        let hold = voices[0].cands.iter().find(|c| c.pitch == 64).unwrap();
+        assert!(
+            approx(hold.terms.suspension, 0.5),
+            "dissonant hold should earn the tolerance, got {}",
+            hold.terms.suspension
+        );
+
+        // One group later, still in bar 1: the held E is now a suspension state;
+        // D (down a whole step, chord tone) earns the resolution bonus.
+        let ctx2 = vec![
+            Note::new(64, 3.5, 0.5, 100, 0, 1),
+            Note::new(64, 4.0, 0.5, 100, 0, 1),
+        ];
+        let group2 = vec![Note::new(64, 4.5, 0.5, 100, 0, 1)];
+        let pre2 = build_precomputed_data(&ctx2, &group2, 4.5);
+        let voices2 = build_joint_voices(&group2, 1.0, &cfg, &state, &pre2);
+        let resolve = voices2[0].cands.iter().find(|c| c.pitch == 62).expect("D candidate");
+        assert!(
+            approx(resolve.terms.suspension, 0.6),
+            "step-down resolution should earn the bonus, got {}",
+            resolve.terms.suspension
+        );
+        // A leap away from the suspension earns nothing.
+        if let Some(leap) = voices2[0].cands.iter().find(|c| c.pitch == 57) {
+            assert!(approx(leap.terms.suspension, 0.0));
+        }
+    }
+
+    #[test]
+    fn uniform_lattice_overrides_the_rhythm_contour() {
+        let mut cfg = test_config();
+        cfg.lattice_beats = 0.5;
+        cfg.pl = 1;
+        cfg.render_length = 1;
+        SeededRng::set_seed(1.0);
+        let notes = gen_voice(60, &vec![4.0], &[0], 1, 1, &cfg, &crate::contour::Contours::default());
+        assert_eq!(notes.len(), 8, "one 4-beat bar at 0.5 = 8 notes");
+        assert!(notes.iter().all(|n| approx(n.duration, 0.5)));
     }
 
     #[test]

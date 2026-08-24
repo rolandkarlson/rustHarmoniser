@@ -182,6 +182,49 @@ pub struct Config {
     /// Empty (the default) leaves chord structure unconstrained.
     #[serde(default)]
     pub chord_templates: Vec<ChordTemplate>,
+    /// Metric shaping of the hold bonus: how strongly a voice's stickiness
+    /// (same_note_bonus) depends on WHERE in the bar the group falls. On the
+    /// downbeat holding earns nothing (moving is free), on weak 16ths it earns
+    /// the full bonus — so pitch changes, which become onsets after the
+    /// downstream same-pitch merge, gravitate toward strong beats. 0 = flat
+    /// bonus everywhere (legacy), 1 = full metric profile. Negative values
+    /// invert the profile (changes prefer weak positions = syncopation).
+    #[serde(default = "default_metric_hold_strength")]
+    pub metric_hold_strength: f64,
+    /// Hold-momentum shaping: scales the hold bonus by how long the voice has
+    /// already sat on its pitch (relative to its target note length). A voice
+    /// that just moved is nudged to keep moving (runs), one that settled is
+    /// nudged to stay (sustains), one that overstayed is invited back in.
+    /// 0 = off.
+    #[serde(default = "default_momentum_weight")]
+    pub momentum_weight: f64,
+    /// Onset-density pressure toward the rhythm contour's target: when a voice
+    /// has changed pitch less often this bar than its target note length
+    /// implies, holding gets cheaper to refuse (and vice versa). Only active
+    /// with a uniform lattice (lattice_beats > 0) — on the legacy lattice the
+    /// grid itself is the target and the term would just tax every hold. 0 = off.
+    #[serde(default = "default_density_weight")]
+    pub density_weight: f64,
+    /// Uniform onset lattice: when > 0, gen_voice emits every note at this
+    /// duration (e.g. 0.5 = 8ths) for all voices, and the tension-driven
+    /// voice_rhythm_contour becomes a density TARGET scored by density_weight
+    /// instead of a hard grid — harmony may move at any lattice point and pays
+    /// in score, not in impossibility. 0 (default) keeps the contour-driven
+    /// lattice.
+    #[serde(default)]
+    pub lattice_beats: f64,
+    /// Suspension tolerance: partial score refund for HOLDING a pitch that is
+    /// foreign to the current bar's chord, provided a step-down resolution
+    /// exists in the candidate scale — the harmony-matrix penalty still applies,
+    /// this just prices the dissonant hold as "suspension" instead of "wrong
+    /// note". 0 = off. Schillinger mode only.
+    #[serde(default = "default_suspension_tolerance")]
+    pub suspension_tolerance: f64,
+    /// Suspension resolution reward: bonus for stepping DOWN (1-2 semitones)
+    /// onto a chord tone after a dissonant hold — completes the
+    /// preparation–suspension–resolution gesture. 0 = off. Schillinger mode only.
+    #[serde(default = "default_suspension_resolve_bonus")]
+    pub suspension_resolve_bonus: f64,
 }
 
 /// One entry in `Config::chord_templates`: a chord's pitch classes relative to an
@@ -236,6 +279,11 @@ fn default_roughness_weight() -> f64 { 0.5 }
 fn default_root_position() -> f64 { 0.5 }
 fn default_root_doubling() -> f64 { 0.5 }
 fn default_tendency_weight() -> f64 { 0.5 }
+fn default_metric_hold_strength() -> f64 { 0.6 }
+fn default_momentum_weight() -> f64 { 0.5 }
+fn default_density_weight() -> f64 { 0.5 }
+fn default_suspension_tolerance() -> f64 { 0.5 }
+fn default_suspension_resolve_bonus() -> f64 { 0.6 }
 
 impl Default for Config {
     fn default() -> Self {
@@ -299,6 +347,12 @@ impl Default for Config {
             tendency_weight: default_tendency_weight(),
             use_generated_progression: false,
             chord_templates: Vec::new(),
+            metric_hold_strength: default_metric_hold_strength(),
+            momentum_weight: default_momentum_weight(),
+            density_weight: default_density_weight(),
+            lattice_beats: 0.0,
+            suspension_tolerance: default_suspension_tolerance(),
+            suspension_resolve_bonus: default_suspension_resolve_bonus(),
         }
     }
 }

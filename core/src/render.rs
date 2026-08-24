@@ -137,9 +137,9 @@ mod tests {
     #[test]
     fn golden_fingerprint() {
         let expected: [(f64, u64); 3] = [
-            (1.0, 0xcfa315a58bb95e1f),
-            (7.0, 0x95dd01a1b9895ad2),
-            (42.0, 0x25a29a53b4fed655),
+            (1.0, 0xa740a51cc69928c5),
+            (7.0, 0xa7737e6007df8364),
+            (42.0, 0xab00ed192c3172d1),
         ];
         for (seed, want) in expected {
             let mut cfg = default_config();
