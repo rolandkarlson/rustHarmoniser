@@ -119,7 +119,10 @@ pub struct Config {
     #[serde(default = "default_one_f64")]
     pub voice_contour_weight: f64,
     /// Pitch search window: each voice considers previous pitch ± this many
-    /// semitones (non-Schillinger candidate generation). Was a hardcoded 3.
+    /// semitones. In chromatic mode that is the whole candidate set; in
+    /// Schillinger mode it restricts the bar's scale tones, with the nearest
+    /// tone on each side always kept so a tight range can never strand a voice
+    /// (see harmonizer::restrict_to_range). Was a hardcoded 3.
     #[serde(default = "default_candidate_range")]
     pub candidate_range: i32,
     /// Chromatic-mode scale constraint: pitch-class offsets from `root` that
@@ -225,6 +228,50 @@ pub struct Config {
     /// preparation–suspension–resolution gesture. 0 = off. Schillinger mode only.
     #[serde(default = "default_suspension_resolve_bonus")]
     pub suspension_resolve_bonus: f64,
+    /// Schillinger rhythm generators: when non-empty, every generated voice's
+    /// durations come from the resultant r(a÷b[÷c…]) — the interference
+    /// pattern of these periodicities (see schillinger::resultant) — scaled by
+    /// `rhythm_unit`. Overrides the lattice and the rhythm contours while set.
+    /// `[3,2]` gives 2+1+1+2, `[4,3]` gives 3+1+2+2+1+3. Empty (default) = off.
+    #[serde(default)]
+    pub rhythm_generators: Vec<i32>,
+    /// Beats per resultant unit (0.5 = the pattern counts in 8th notes).
+    /// Values <= 0 fall back to 0.5.
+    #[serde(default = "default_rhythm_unit")]
+    pub rhythm_unit: f64,
+    /// Polyrhythmic strata: each voice starts `channel × this` elements further
+    /// into the resultant cycle, so the voices interlock instead of attacking
+    /// together. 0 (default) = every voice plays the same pattern in phase.
+    #[serde(default)]
+    pub rhythm_voice_rotation: i32,
+    /// Phrase-shaped dynamics: velocities are computed from the phrase/render
+    /// tension arch, metric position (downbeats accented, offbeats light), and
+    /// melodic direction, instead of the legacy random jitter. Scales how far
+    /// velocities swing around the base level. 0 = legacy random velocities.
+    #[serde(default = "default_dynamics_weight")]
+    pub dynamics_weight: f64,
+    /// Cadence awareness: extra scoring pressure on the DOWNBEAT of each
+    /// phrase-final tonic bar (bar pl-1, chord root == key tonic) — bass on the
+    /// root, a complete triad (third present), soprano on the tonic or third,
+    /// and a homorhythmic arrival (voices moving onto the downbeat together).
+    /// 0 = cadence bars score like any other bar. Schillinger mode only.
+    #[serde(default = "default_cadence_weight")]
+    pub cadence_weight: f64,
+    /// Loop-seam scoring: when non-zero, the render's FINAL chord is voiced to
+    /// lead back into its own FIRST chord — per voice, the wrap transition
+    /// (final pitch → opening pitch) is scored with seam smoothness and
+    /// tendency-tone resolution, weighted by this. The beginning stays fixed;
+    /// the end adapts (no fixed-point iteration). For clips played as loops.
+    /// 0 (default) = off.
+    #[serde(default)]
+    pub loop_wrap_weight: f64,
+    /// Phrase echo (motif memory): candidates are rewarded for reproducing the
+    /// melodic interval the same voice made one phrase (pl bars) earlier at the
+    /// same position — exact interval match earns the full weight, off-by-one
+    /// a partial one. Transposition-tolerant, so echoes survive the harmony
+    /// changing under them (sequences fall out for free). 0 = off.
+    #[serde(default = "default_phrase_echo_weight")]
+    pub phrase_echo_weight: f64,
 }
 
 /// One entry in `Config::chord_templates`: a chord's pitch classes relative to an
@@ -284,6 +331,10 @@ fn default_momentum_weight() -> f64 { 0.5 }
 fn default_density_weight() -> f64 { 0.5 }
 fn default_suspension_tolerance() -> f64 { 0.5 }
 fn default_suspension_resolve_bonus() -> f64 { 0.6 }
+fn default_rhythm_unit() -> f64 { 0.5 }
+fn default_dynamics_weight() -> f64 { 1.0 }
+fn default_cadence_weight() -> f64 { 0.5 }
+fn default_phrase_echo_weight() -> f64 { 0.4 }
 
 impl Default for Config {
     fn default() -> Self {
@@ -353,6 +404,13 @@ impl Default for Config {
             lattice_beats: 0.0,
             suspension_tolerance: default_suspension_tolerance(),
             suspension_resolve_bonus: default_suspension_resolve_bonus(),
+            rhythm_generators: Vec::new(),
+            rhythm_unit: default_rhythm_unit(),
+            rhythm_voice_rotation: 0,
+            dynamics_weight: default_dynamics_weight(),
+            loop_wrap_weight: 0.0,
+            cadence_weight: default_cadence_weight(),
+            phrase_echo_weight: default_phrase_echo_weight(),
         }
     }
 }

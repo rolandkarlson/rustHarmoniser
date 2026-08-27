@@ -240,12 +240,47 @@ function IntListField({ value, onChange, className, title, placeholder }: {
   );
 }
 
-// A labelled cluster of related header parameters.
-function ParamGroup({ label, children }: { label: string; children: ReactNode }) {
+// Schillinger rhythm resultant r(a÷b[÷c…]) — mirror of core's
+// schillinger::resultant, for the live pattern readout next to the generators.
+function resultantPattern(gens: number[]): number[] {
+  const gs = gens.filter(g => g > 0);
+  if (gs.length === 0) return [];
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+  const span = gs.reduce((acc, g) => (acc / gcd(acc, g)) * g, 1);
+  const points = new Set<number>([0]);
+  for (const g of gs) for (let t = g; t <= span; t += g) points.add(t);
+  const sorted = [...points].sort((a, b) => a - b);
+  return sorted.slice(1).map((p, i) => p - sorted[i]);
+}
+
+// Every ParamGroup label, for the expand/collapse-all controls.
+const PG_LABELS = ['Algorithm', 'Structure', 'Search', 'Voice Leading', 'Rhythm', 'Harmony', 'Lead Clip'];
+const pgKey = (label: string) => `pgOpen:${label}`;
+
+// A labelled cluster of related header parameters — collapsible, so the config
+// bar can fold down to a row of pills. Open state persists per group; a
+// collapsed group is just its label (click to reopen).
+function ParamGroup({ label, children, defaultOpen = false }: { label: string; children: ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState<boolean>(() => {
+    const saved = localStorage.getItem(pgKey(label));
+    return saved === null ? defaultOpen : saved === '1';
+  });
+  const toggle = () => setOpen(o => {
+    localStorage.setItem(pgKey(label), o ? '0' : '1');
+    return !o;
+  });
   return (
-    <div className="flex flex-col gap-1 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
-      <span className="text-[10px] uppercase tracking-widest text-slate-600 select-none">{label}</span>
-      <div className="flex gap-3 items-center flex-wrap">{children}</div>
+    <div className={`flex flex-col self-start bg-slate-950 rounded-lg border transition-colors ${open ? 'gap-1 px-3 py-1.5 border-slate-800' : 'px-2.5 py-1.5 border-slate-800/70 hover:border-cyan-700/60'}`}>
+      <button
+        type="button"
+        onClick={toggle}
+        title={open ? `Collapse ${label}` : `Expand ${label}`}
+        className={`flex items-center gap-1.5 text-[10px] uppercase tracking-widest select-none transition-colors ${open ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-cyan-300'}`}
+      >
+        <span className={`inline-block transition-transform duration-150 ${open ? 'rotate-90' : ''}`}>▸</span>
+        {label}
+      </button>
+      {open && <div className="flex gap-3 items-center flex-wrap">{children}</div>}
     </div>
   );
 }
@@ -291,6 +326,10 @@ const TERM_INFO: Record<string, { label: string; tip: string }> = {
   parallel_motion: { label: 'Parallel 5th/8ve', tip: 'Parallel fifths/octaves or antiparallel octaves against another moving voice (consecutive_octav_fift).' },
   same_direction: { label: 'Same direction', tip: 'An outer voice moving with the chord majority instead of against it (same_direction).' },
   common_tone_penalty: { label: 'Common tones', tip: 'Group-level penalty per voice holding its previous pitch (common_tone_penalty).' },
+  cadence_bass: { label: 'Cadence · bass', tip: 'Phrase-final tonic downbeat only: bass on the root (+1) vs anything else (−0.5), × cadence_weight.' },
+  cadence_complete: { label: 'Cadence · complete', tip: 'Phrase-final tonic downbeat only: the chord contains a third (±0.5 × cadence_weight) — a third-less close sounds hollow, not resolved.' },
+  cadence_soprano: { label: 'Cadence · soprano', tip: 'Phrase-final tonic downbeat only: top voice on the tonic (+1) or third (+0.6) vs anything else (−0.3), × cadence_weight.' },
+  cadence_arrival: { label: 'Cadence · arrival', tip: 'Phrase-final tonic downbeat only: fraction of voices MOVING onto the chord — a homorhythmic landing makes the close an event (× cadence_weight).' },
   // per-voice
   smoothness: { label: 'Smoothness', tip: 'Melodic distance from the previous pitch — hold is smoothest, leaps decay — × the group smoothness weight. Bass gets P4/P5/octave leaps floored.' },
   melody_force: { label: 'Melody force', tip: 'Recency-decayed penalty for pitches from the voice\'s last 5 notes, small reward for stepwise motion (melody_force).' },
@@ -301,6 +340,8 @@ const TERM_INFO: Record<string, { label: string; tip: string }> = {
   leader_history: { label: 'Leader history', tip: 'This chord\'s LEADER takes the repeat penalties (last_note_same, last_note_exist_in_voice) so it keeps moving.' },
   hold_stickiness: { label: 'Hold stickiness', tip: 'Non-leader bonus for keeping a common tone (same_note_bonus), shaped by metric position, hold momentum, and onset density (metric_hold_strength / momentum_weight / density_weight). Stagnant voices lose it.' },
   suspension: { label: 'Suspension', tip: 'Tolerance for holding a non-chord tone that can resolve down by step (suspension_tolerance), or the reward for that step-down resolution onto a chord tone (suspension_resolve_bonus).' },
+  phrase_echo: { label: 'Phrase echo', tip: 'Motif memory: reward for repeating the melodic interval this voice made one phrase (pl bars) earlier at the same position — exact match full weight, off-by-a-semitone partial (phrase_echo_weight). Transposition-tolerant, so sequences count.' },
+  loop_wrap: { label: 'Loop wrap', tip: 'Final chord only: how well this voice\'s last pitch leads back into its own opening pitch when the clip loops — seam smoothness plus tendency resolution across the wrap (loop_wrap_weight).' },
   // hard violations
   unison_collision: { label: 'Unison collision', tip: 'Two voices on exactly the same pitch.' },
   forbidden_interval: { label: 'Forbidden interval', tip: 'An interval class the active H-Matrix row hard-forbids (cell ≤ −5).' },
@@ -515,6 +556,13 @@ function App() {
     localStorage.setItem('showGenerators', s ? '0' : '1');
     return !s;
   });
+  // Expand/collapse-all for the ParamGroups: writing every group's persisted
+  // state and bumping this version remounts them so they re-read it.
+  const [pgVersion, setPgVersion] = useState(0);
+  const setAllGroups = (open: boolean) => {
+    PG_LABELS.forEach(l => localStorage.setItem(pgKey(l), open ? '1' : '0'));
+    setPgVersion(v => v + 1);
+  };
   const snapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1720,7 +1768,54 @@ function App() {
     nc.voice_rhythm_contour = Array.from({ length: 16 }, () => smoothRandom(0.25, 4).map(snapNearest));
     // Use the first mode from the contour for Markov progression coherence
     nc.schillinger_sequence = generateMarkovProgression(nc.pl * nc.render_length, sectionModes[0], nc.pl);
+
+    // Scoring scalars too — see randomiseScoringSettings.
+    randomiseScoringSettings(nc);
+
     setConfig(nc);
+    setMessage('Randomised contours + harmony/rhythm/voice-leading settings');
+  };
+
+  // Roll the harmony / rhythm / voice-leading scoring scalars in place, within
+  // the ranges the style presets actually use. Structure (PL, length, root),
+  // search (beam, lookahead), no_crossing, the voice-change budget and the mode
+  // toggles stay put: those change what the piece IS, not how it sounds.
+  // melody_force is skipped — its contour overrides the scalar.
+  const randomiseScoringSettings = (nc: any) => {
+    const r = (min: number, max: number, dp = 2) => parseFloat((min + Math.random() * (max - min)).toFixed(dp));
+    // voice leading
+    nc.same_note_bonus = r(0.3, 3);
+    nc.last_note_same = r(0, 1.2);
+    nc.last_note_exist_in_voice = r(0.3, 1.5);
+    nc.same_direction = r(0, 1.5);
+    nc.consecutive_octav_fift = r(0, 1.5);
+    nc.voice_contour_weight = r(0.4, 1.5);
+    nc.phrase_echo_weight = r(0, 1);
+    // rhythm
+    nc.metric_hold_strength = r(0, 1);
+    nc.momentum_weight = r(0, 0.9);
+    nc.density_weight = r(0, 0.8);
+    nc.suspension_tolerance = r(0, 1);
+    nc.suspension_resolve_bonus = r(0, 1.2);
+    nc.dynamics_weight = r(0.6, 1.4);
+    // harmony
+    nc.interval_exists_in_harmony = r(0.3, 1.5);
+    nc.roughness_weight = r(0.2, 0.8);
+    nc.chord_quality_weight = r(0.3, 1.8);
+    nc.root_position_weight = r(0, 1.2);
+    nc.root_doubling_weight = r(0, 1);
+    nc.tendency_weight = r(0, 1.5);
+    nc.cadence_weight = r(0, 1.2);
+  };
+
+  // "Settings" randomiser: ONLY the scoring scalars — contours, progression and
+  // structure untouched, so the same piece is re-heard under different rules.
+  const handleRandomiseSettings = () => {
+    if (!config) return;
+    const nc = { ...config };
+    randomiseScoringSettings(nc);
+    setConfig(nc);
+    setMessage('Randomised harmony/rhythm/voice-leading settings (contours untouched)');
   };
 
   const handleRandomiseRhythm = () => {
@@ -1951,8 +2046,12 @@ function App() {
             </span>
           )}
 
-          <div className="flex gap-2 items-stretch flex-wrap">
-            <ParamGroup label="Algorithm">
+          <div key={pgVersion} className="flex gap-2 items-start flex-wrap">
+            <div className="flex flex-col gap-0.5 self-start pt-0.5" title="Expand / collapse all setting groups">
+              <button type="button" onClick={() => setAllGroups(true)} className="px-1 text-[10px] leading-4 text-slate-600 hover:text-cyan-300 transition-colors" title="Expand all">▾▾</button>
+              <button type="button" onClick={() => setAllGroups(false)} className="px-1 text-[10px] leading-4 text-slate-600 hover:text-cyan-300 transition-colors" title="Collapse all">▸▸</button>
+            </div>
+            <ParamGroup label="Algorithm" defaultOpen>
               <div className="flex rounded-lg overflow-hidden border border-slate-700">
                 <button
                   onClick={() => updateConfig('schillinger_progression', true)}
@@ -1968,6 +2067,10 @@ function App() {
                 >
                   Chromatic
                 </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Pitch search window: each voice considers candidates within ± this many semitones of its previous pitch. In Schillinger mode this restricts the bar's scale tones — the nearest tone on each side always stays available, so a tight range narrows how far a voice roams, never whether it can move. Wider = more register freedom, slower search.">Cand Range:</span>
+                <NumberField integer value={config.candidate_range ?? 3} onChange={v => updateConfig('candidate_range', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
               </div>
               {sch ? (
                 <>
@@ -1991,10 +2094,6 @@ function App() {
               ) : (
                 <>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Pitch search window: each voice considers its previous pitch ± this many semitones. Wider = more freedom to escape a register, slower search.">Cand Range:</span>
-                    <NumberField integer value={config.candidate_range ?? 3} onChange={v => updateConfig('candidate_range', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
-                  </div>
-                  <div className="flex items-center gap-2">
                     <span className="text-xs uppercase tracking-wider text-slate-500" title="Scale constraint: comma-separated pitch-class offsets from Root that candidates must belong to — 0,2,4,5,7,9,11 with Root 0 is C major, the same list with Root 2 is D major. Empty = truly chromatic. Change Root to transpose without retyping.">Scale:</span>
                     <IntListField
                       value={config.chromatic_scale ?? []}
@@ -2011,6 +2110,10 @@ function App() {
               <div className="flex items-center gap-2">
                 <span className="text-xs uppercase tracking-wider text-slate-500" title="Phrase Length — number of bars per phrase. Controls harmonic progression length and contour grid spacing.">PL:</span>
                 <NumberField integer value={config.pl} onChange={v => updateConfig('pl', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Loop wrap: voice the render's FINAL chord to lead back into its own FIRST chord — seam smoothness + tendency resolution across the wrap, scored on the last chord only. Use when the clip plays as a loop; the beginning stays fixed, the end adapts. 0 = off.">Loop Wrap:</span>
+                <NumberField value={config.loop_wrap_weight ?? 0} onChange={v => updateConfig('loop_wrap_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs uppercase tracking-wider text-slate-500" title="Render Length — total number of phrases to generate. Total bars = PL × Render Len.">Render Len:</span>
@@ -2082,6 +2185,10 @@ function App() {
                 <span className="text-xs uppercase tracking-wider text-slate-500" title="How strongly each voice's pitch contour pulls its notes toward the target pitch. 1 = original strength, 0 = contour ignored.">Contour Wt:</span>
                 <NumberField value={config.voice_contour_weight ?? 1} onChange={v => updateConfig('voice_contour_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
               </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Phrase echo (motif memory): rewards a voice for repeating the melodic interval it made one phrase (pl bars) earlier at the same position — exact match full weight, off-by-a-semitone partial. Transposition-tolerant, so sequences over changing harmony count. Makes phrase 2 rhyme with phrase 1 instead of being new information. 0 = off.">Echo:</span>
+                <NumberField value={config.phrase_echo_weight ?? 0.4} onChange={v => updateConfig('phrase_echo_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
             </ParamGroup>
 
             <ParamGroup label="Rhythm">
@@ -2100,6 +2207,36 @@ function App() {
               <div className="flex items-center gap-2">
                 <span className="text-xs uppercase tracking-wider text-slate-500" title="Uniform onset lattice in beats (e.g. 0.5 = 8ths): every voice emits at this duration and the rhythm contour becomes a density TARGET priced by Density instead of a hard grid — harmony may move at any point and pays in score, not in impossibility. 0 = legacy contour-driven grid. Finer lattice = more groups = slower render.">Lattice:</span>
                 <NumberField value={config.lattice_beats ?? 0} onChange={v => updateConfig('lattice_beats', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Schillinger rhythm generators: durations for EVERY voice come from the resultant r(a÷b) — the interference pattern of these periodicities. 3,2 → 2+1+1+2; 4,3 → 3+1+2+2+1+3; three generators work too (5,4,3). Overrides Lattice and the rhythm contours while set. Empty = off.">R Gens:</span>
+                <IntListField
+                  value={config.rhythm_generators ?? []}
+                  onChange={v => updateConfig('rhythm_generators', v)}
+                  placeholder="off"
+                  className="w-20 bg-transparent text-sm focus:text-cyan-400 outline-none placeholder:text-slate-700"
+                />
+                {(config.rhythm_generators ?? []).length > 0 && (
+                  <span className="text-xs text-slate-500 font-mono select-none" title="The resultant pattern these generators produce, in units">
+                    {resultantPattern(config.rhythm_generators).join('+') || '—'}
+                  </span>
+                )}
+              </div>
+              {(config.rhythm_generators ?? []).length > 0 && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Beats per resultant unit: 0.5 = the pattern counts in 8th notes, 0.25 in 16ths, 1 in quarters.">Unit:</span>
+                    <NumberField value={config.rhythm_unit ?? 0.5} onChange={v => updateConfig('rhythm_unit', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Polyrhythmic strata: each voice starts channel × this many elements further into the pattern, so the voices interlock instead of attacking together. 0 = all voices in phase (homorhythm).">Rotate:</span>
+                    <NumberField integer value={config.rhythm_voice_rotation ?? 0} onChange={v => updateConfig('rhythm_voice_rotation', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                </>
+              )}
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Phrase-shaped dynamics: velocities follow the tension arch (crescendo to mid-phrase, relax into the cadence), metric accents (downbeats strong, offbeats light), melodic direction, plus a seeded ±3 humanization. Scales the swing around velocity 64 — at 1.0 roughly 55–110. 0 = legacy random velocities.">Dynamics:</span>
+                <NumberField value={config.dynamics_weight ?? 1} onChange={v => updateConfig('dynamics_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
               </div>
               {sch && (
                 <>
@@ -2141,6 +2278,10 @@ function App() {
                   <div className="flex items-center gap-2">
                     <span className="text-xs uppercase tracking-wider text-slate-500" title="Rewards doubling the chord root (the first doubling only) and penalizes each extra voice on the key's leading tone. The classical doubling policy — pair with Dup Interval, which pushes the other way. 0 = off.">Root Dbl:</span>
                     <NumberField value={config.root_doubling_weight ?? 0.5} onChange={v => updateConfig('root_doubling_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Cadence awareness: extra pressure on the DOWNBEAT of each phrase-final tonic bar — bass on the root, a complete triad (third present), soprano on the tonic or third, and all voices moving onto the chord together (homorhythmic arrival). Makes phrase closes sound FINAL instead of incidental. Fires only when the phrase actually ends on the tonic. 0 = off.">Cadence:</span>
+                    <NumberField value={config.cadence_weight ?? 0.5} onChange={v => updateConfig('cadence_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
                   </div>
                 </>
               )}
@@ -2377,7 +2518,7 @@ function App() {
             </button>
             <button
               onClick={handleRandomise}
-              title="Randomise all contours"
+              title="Randomise all contours + the harmony/rhythm/voice-leading scoring settings (structure, search and mode toggles stay put)"
               className="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
             >
               Randomise
@@ -2388,6 +2529,13 @@ function App() {
               className="px-4 py-1.5 bg-pink-600 hover:bg-pink-500 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
             >
               Rhythm
+            </button>
+            <button
+              onClick={handleRandomiseSettings}
+              title="Randomise only the harmony/rhythm/voice-leading scoring settings — contours, progression and structure untouched, so the same piece is re-heard under different rules"
+              className="px-4 py-1.5 bg-amber-700 hover:bg-amber-600 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+            >
+              Settings
             </button>
           </div>
         )}

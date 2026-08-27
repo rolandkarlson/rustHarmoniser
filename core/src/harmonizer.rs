@@ -365,7 +365,9 @@ fn bar_chord_pcs(state: &HarmonizerState, start: f64) -> Option<Vec<i32>> {
 /// downbeat (holding earns nothing — moving is free), rising through beat 3,
 /// the backbeats, and 8th offbeats to 1 on 16th offbeats (full stickiness —
 /// moving there is maximally taxed). Positions snap to the nearest 16th.
-fn metric_hold_weight(pos_in_bar: f64) -> f64 {
+/// (pub(crate): the dynamics post-pass in render.rs reuses it as the metric
+/// accent profile, inverted — strong positions get the velocity.)
+pub(crate) fn metric_hold_weight(pos_in_bar: f64) -> f64 {
     let q = ((pos_in_bar * 4.0).round() / 4.0).rem_euclid(4.0);
     if q == 0.0 {
         0.0
@@ -392,6 +394,34 @@ fn momentum_profile(held_beats: f64, target_dur: f64) -> f64 {
         0.3
     } else {
         -0.5
+    }
+}
+
+/// One phrase in beats: `pl` bars of 4 beats. The unit of the cadence and
+/// phrase-echo machinery (gen_cadenced_progression emits phrases of exactly
+/// this length, and literal sequences are treated as phrased the same way).
+fn phrase_beats(config: &Config) -> f64 {
+    (config.pl.max(1) * 4) as f64
+}
+
+/// Where the phrase-echo term looks back to: the same position one phrase
+/// earlier. `None` when echo is off or the first phrase is still playing.
+fn echo_anchor(config: &Config, start_time: f64) -> Option<f64> {
+    if config.phrase_echo_weight == 0.0 {
+        return None;
+    }
+    let p = phrase_beats(config);
+    (start_time >= p).then(|| start_time - p)
+}
+
+/// Scoring-context trim window in beats. 32 covers the longest sustain and the
+/// 5-note history; the phrase-echo term additionally needs to see one full
+/// phrase back, so an active echo widens the window when phrases are long.
+fn context_window_beats(config: &Config) -> f64 {
+    if config.phrase_echo_weight != 0.0 {
+        32f64.max(phrase_beats(config) + 8.0)
+    } else {
+        32.0
     }
 }
 
@@ -515,6 +545,27 @@ fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &
     };
 
     apply_bound(result, notes, config, current_lasts_lead, current_note.channel)
+}
+
+/// The Schillinger candidate window (`config.candidate_range`): keep the scale
+/// tones within ± `range` semitones of `prev` — plus, regardless of range, the
+/// nearest tone strictly below and strictly above `prev`. Chord tones can sit
+/// up to a fourth apart, so a bare distance filter at a small range could leave
+/// a voice with nowhere to move (and the min-voices-changed budget nothing to
+/// act on); the guarantee makes any range musically safe — it tightens how FAR
+/// a voice may roam, never whether it can move at all.
+/// `tones` is sorted and deduped (gen_scale output).
+fn restrict_to_range(mut tones: Vec<i32>, prev: i32, range: i32) -> Vec<i32> {
+    let below = tones.iter().rev().find(|&&p| p < prev).copied();
+    let above = tones.iter().find(|&&p| p > prev).copied();
+    tones.retain(|&p| (p - prev).abs() <= range);
+    for extra in [below, above].into_iter().flatten() {
+        if !tones.contains(&extra) {
+            tones.push(extra);
+        }
+    }
+    tones.sort_unstable();
+    tones
 }
 
 /// Rotate a 12-bit pitch-class mask up by `k` semitones.
@@ -663,9 +714,20 @@ pub struct PrecomputedHarmonyData {
     /// Pitch changes each channel has made among notes STARTING in the current
     /// bar, before this group. Feeds the onset-density term.
     pub bar_changes_by_channel: Vec<u32>,
+    /// Phrase-echo reference per channel: `(pitch sounding one phrase earlier,
+    /// melodic interval the voice made onto it)`. The interval is 0 when the
+    /// voice was holding through that position (an echoed hold is a hold).
+    /// `None` when echo is off, the first phrase is playing, or the voice was
+    /// silent there.
+    pub echo_by_channel: Vec<Option<(i32, i32)>>,
 }
 
-fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: f64) -> PrecomputedHarmonyData {
+fn build_precomputed_data(
+    context: &[Note],
+    current_group: &[Note],
+    start_time: f64,
+    echo_at: Option<f64>,
+) -> PrecomputedHarmonyData {
     let mut sustaining_notes = Vec::new();
     let mut notes_ending_at_start = Vec::new();
     let mut sustaining_at_minus_0_1 = Vec::new();
@@ -677,6 +739,11 @@ fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: 
     let mut run_by_channel: Vec<Option<(i32, f64)>> = vec![None; 16];
     let mut bar_changes_by_channel: Vec<u32> = vec![0; 16];
     let bar_start = (start_time / 4.0).floor() * 4.0;
+    // Phrase-echo tracking: per channel, the latest note starting at or before
+    // `echo_at` and the one before it. Context is start-sorted, so a linear
+    // pass keeps exactly those two.
+    let mut echo_last: Vec<Option<(f64, f64, i32)>> = vec![None; 16]; // (start, dur, pitch)
+    let mut echo_before: Vec<Option<i32>> = vec![None; 16];
 
     for n in context {
         if n.start < start_time && n.muted == 0 {
@@ -723,6 +790,19 @@ fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: 
                 last_notes_by_channel[ch].push(n.pitch);
             }
         }
+
+        // phrase-echo reference: the two latest onsets at or before echo_at
+        if let Some(at) = echo_at {
+            if n.muted == 0 && n.start <= at + 0.001 {
+                let ch = n.channel as usize;
+                if ch < 16 {
+                    if let Some((_, _, p)) = echo_last[ch] {
+                        echo_before[ch] = Some(p);
+                    }
+                    echo_last[ch] = Some((n.start, n.duration, n.pitch));
+                }
+            }
+        }
     }
 
     for notes in &mut last_notes_by_channel {
@@ -761,6 +841,26 @@ fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: 
         .map(|run| run.map_or(-1.0, |(_, s)| (start_time - s).max(0.0)))
         .collect();
 
+    // Resolve the echo reference: the tracked note must actually SOUND at
+    // echo_at (a rest there means nothing to echo). A note that merely
+    // sustains through the position was a hold at that moment — interval 0 —
+    // as is a note with no predecessor in the window.
+    let echo_by_channel = (0..16)
+        .map(|ch| {
+            let at = echo_at?;
+            let (s, d, p) = echo_last[ch]?;
+            if s + d <= at + 0.001 {
+                return None; // resting at that position
+            }
+            let di = if s >= at - 0.001 {
+                p - echo_before[ch].unwrap_or(p)
+            } else {
+                0 // holding through the position
+            };
+            Some((p, di))
+        })
+        .collect();
+
     PrecomputedHarmonyData {
         sustaining_notes,
         boundaries_by_channel,
@@ -769,6 +869,7 @@ fn build_precomputed_data(context: &[Note], current_group: &[Note], start_time: 
         lead_pitch,
         hold_beats_by_channel,
         bar_changes_by_channel,
+        echo_by_channel,
     }
 }
 
@@ -807,6 +908,41 @@ pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channe
     let mut pos = 0.0;
     let mut counter = 0;
     let sf = (SeededRng::random_int(60) + 1) as f64;
+
+    // Schillinger rhythm resultant (config.rhythm_generators): durations come
+    // from the interference pattern r(a÷b[÷c…]) in `rhythm_unit` beats, each
+    // voice phase-shifted by `channel × rhythm_voice_rotation` elements. The
+    // attack grid is kept ABSOLUTE (cumulative pattern positions): an element
+    // that crosses a bar line is split into tied segments at the bar rather
+    // than shifted, so one clamp never phase-drifts the rest of the pattern —
+    // the downstream same-pitch merge re-joins the tie whenever the harmonizer
+    // holds the pitch across it. Takes precedence over the lattice and the
+    // rhythm contours while set.
+    let resultant = crate::schillinger::resultant(&config.rhythm_generators);
+    if !resultant.is_empty() {
+        let unit = if config.rhythm_unit > 0.0 { config.rhythm_unit } else { 0.5 };
+        let rot = mod_shim(channel.max(0) * config.rhythm_voice_rotation, resultant.len() as i32) as usize;
+        let cycle: Vec<f64> = (0..resultant.len())
+            .map(|i| resultant[(i + rot) % resultant.len()] as f64 * unit)
+            .collect();
+        let bar_len = 4.0;
+        while pos < clip_len {
+            let d_full = cycle[counter as usize % cycle.len()];
+            let n = base + pitch_shifts[mod_shim(counter, pitch_shifts.len() as i32) as usize];
+            let v = 1 + SeededRng::random_int(10) + sin(counter as f64, sf, 10.0) as i32;
+            let end = (pos + d_full).min(clip_len);
+            let mut seg = pos;
+            while seg < end - 0.001 {
+                let next_bar = ((seg / bar_len).floor() + 1.0) * bar_len;
+                let seg_end = end.min(next_bar);
+                ar.push(Note::new(n, seg, seg_end - seg, v, muted, channel));
+                seg = seg_end;
+            }
+            pos += d_full;
+            counter += 1;
+        }
+        return ar;
+    }
 
     while pos < clip_len {
         let n = base + pitch_shifts[mod_shim(counter, pitch_shifts.len() as i32) as usize];
@@ -937,6 +1073,36 @@ struct CandTerms {
     /// Suspension gesture: positive tolerance on a dissonant hold that can
     /// resolve down by step, positive reward on the step-down resolution.
     suspension: f64,
+    /// Motif memory: reward for reproducing the melodic interval this voice
+    /// made one phrase earlier at the same position (see phrase_echo_weight).
+    phrase_echo: f64,
+    /// Loop-seam quality: how well this (final-chord) candidate leads back into
+    /// the branch's own opening pitch on the same channel (loop_wrap_weight).
+    loop_wrap: f64,
+}
+
+/// True when the group at `group_start` lies in the render's final bar — the
+/// loop-wrap term's window. The whole bar, not just the last group: with
+/// interlocking rhythms (resultants, rotation) each voice takes its LAST onset
+/// in a different group, so scoring only the very last group would leave some
+/// voices' seam transition unscored. Biasing the whole final bar toward the
+/// opening reads as "the last bar turns toward home".
+fn in_final_bar(group_start: f64, config: &Config) -> bool {
+    let clip_len = (config.pl * 4 * config.render_length) as f64;
+    group_start >= clip_len - 4.0
+}
+
+/// The first sounding pitch per channel — the chord a loop wraps back into.
+/// `notes` is in group order, so the first occurrence per channel is its
+/// opening pitch.
+fn first_pitch_by_channel(notes: &[Note]) -> HashMap<i32, i32> {
+    let mut m = HashMap::new();
+    for n in notes {
+        if n.muted == 0 {
+            m.entry(n.channel).or_insert(n.pitch);
+        }
+    }
+    m
 }
 
 struct JointCand {
@@ -1017,6 +1183,7 @@ fn build_joint_voices(
     config: &Config,
     state: &HarmonizerState,
     precomputed: &PrecomputedHarmonyData,
+    wrap_targets: Option<&HashMap<i32, i32>>,
 ) -> Vec<JointVoice> {
     // The lead pitch anchoring the ceil/floor tintinnabuli bounds: the melody
     // pitch when the lead is fixed, otherwise the lead's most recent HARMONIZED
@@ -1051,6 +1218,20 @@ fn build_joint_voices(
         1.0 - config.metric_hold_strength * (1.0 - metric_hold_weight(pos_in_bar));
     let susp_active = config.schillinger_progression
         && (config.suspension_tolerance != 0.0 || config.suspension_resolve_bonus != 0.0);
+    let echo_active = echo_anchor(config, group_start).is_some();
+
+    // Loop-wrap scoring (final group only — the caller passes targets only
+    // there): the candidate's transition INTO the opening pitch is judged like
+    // any other bar line. The tendency test needs the tonic the wrap lands in
+    // (the key at beat 0) and the root of the chord the candidate belongs to
+    // (this bar), mirroring tendency_term's prev/prev_root semantics.
+    let wrap_active = wrap_targets.is_some() && config.loop_wrap_weight != 0.0;
+    let wrap_tonic = if wrap_active { key_root_at(config, state, 0.0) } else { 0 };
+    let wrap_root = if wrap_active && config.schillinger_progression {
+        bar_root_pc(state, group_start)
+    } else {
+        None
+    };
     let cur_chord_pcs = if susp_active { bar_chord_pcs(state, group_start) } else { None };
     let prev_chord_pcs = if susp_active {
         bar_chord_pcs(state, (group_start - 0.001).max(0.0))
@@ -1111,7 +1292,11 @@ fn build_joint_voices(
             let bounds_lead = if note.channel == 0 { Vec::new() } else { lead_for_bounds.clone() };
             let sch_scale = get_schillinger_scale(note, state, config, bounds_lead);
             let center_octave = (last_note as f64 / 12.0).floor() as i32;
-            gen_scale(&sch_scale, center_octave)
+            // Cand Range applies here too: the scale tones within ± range
+            // semitones of the previous pitch (see restrict_to_range for the
+            // nearest-tone guarantee that keeps a tight range from stranding
+            // the voice).
+            restrict_to_range(gen_scale(&sch_scale, center_octave), last_note, range)
         } else if chromatic_mask != 0 {
             ((last_note - range).max(PITCH_MIN)..=(last_note + range).min(PITCH_MAX))
                 .filter(|p| chromatic_mask & 1 << p.rem_euclid(12) != 0)
@@ -1197,6 +1382,18 @@ fn build_joint_voices(
         let cb_min = *CROSSING_BUFFER_LOWER.get_wrapped(channel_idx);
 
         let eff_melody_force = melody_force_at(state, config, channel_idx, note.start);
+        // Phrase echo: what this voice did one phrase ago at this position —
+        // (the pitch it was sounding, the interval it arrived by).
+        let echo_ref = if echo_active {
+            precomputed.echo_by_channel.get(channel_idx).copied().flatten()
+        } else {
+            None
+        };
+        let wrap_target = if wrap_active {
+            wrap_targets.and_then(|m| m.get(&note.channel)).copied()
+        } else {
+            None
+        };
         let cands = candidates.into_iter().map(|c| {
             // Each named component is computed once and folded into soft_base in
             // the same order as always, so the sum stays bit-identical.
@@ -1206,9 +1403,35 @@ fn build_joint_voices(
                 tendency: tendency_term(last_note, c, tonic, prev_root, config.tendency_weight),
                 ..CandTerms::default()
             };
+            if let Some((_, di)) = echo_ref {
+                // Interval match against last phrase, transposition-tolerant:
+                // the echo survives the harmony moving underneath it, which is
+                // exactly how a melodic sequence works. Off-by-a-semitone still
+                // reads as the same gesture (diatonic vs chromatic step), so it
+                // earns a partial reward.
+                let dc = c - last_note;
+                terms.phrase_echo = if dc == di {
+                    config.phrase_echo_weight
+                } else if (dc - di).abs() == 1 {
+                    0.4 * config.phrase_echo_weight
+                } else {
+                    0.0
+                };
+            }
+            if let Some(target) = wrap_target {
+                // The wrap transition c → opening pitch, scored like a bar
+                // line: seam smoothness plus tendency resolution (a leading
+                // tone in the final chord is rewarded when THIS voice is the
+                // one that lands on the tonic at bar 0).
+                terms.loop_wrap = config.loop_wrap_weight
+                    * (melodic_distance_score(c, target, note.channel)
+                        + tendency_term(c, target, wrap_tonic, wrap_root, 1.0));
+            }
             let mut soft_base = terms.smoothness;
             soft_base += terms.melody_force;
             soft_base += terms.tendency;
+            soft_base += terms.phrase_echo;
+            soft_base += terms.loop_wrap;
             if c == last_note && off_scale_hold {
                 soft_base -= OFF_SCALE_HOLD_PENALTY;
                 terms.off_scale_hold = -OFF_SCALE_HOLD_PENALTY;
@@ -1467,7 +1690,38 @@ struct ChordScorer<'a> {
     /// Allowed pitch-class-set bitmasks from `config.chord_templates`, already
     /// expanded over all 12 transpositions. `None` = chord structure is free.
     chord_masks: Option<&'a [u16]>,
+    /// Cadence pressure for THIS group: `config.cadence_weight` when the group
+    /// is the downbeat of a phrase-final tonic bar, 0 everywhere else — see
+    /// cadence_weight_for_group.
+    cadence_w: f64,
     config: &'a Config,
+}
+
+/// The cadence weight in effect for the group at `group_start`: the configured
+/// weight iff this group is the ARRIVAL of a cadence — the downbeat of the
+/// last bar of a phrase whose chord root is the key tonic (V → I has landed).
+/// Any other group, including the rest of the tonic bar, scores normally.
+fn cadence_weight_for_group(
+    group_start: f64,
+    config: &Config,
+    state: &HarmonizerState,
+    root_pc: Option<i32>,
+) -> f64 {
+    if config.cadence_weight == 0.0 || !config.schillinger_progression {
+        return 0.0;
+    }
+    let Some(root) = root_pc else { return 0.0 };
+    if group_start.rem_euclid(4.0) > 0.001 {
+        return 0.0; // not the bar's downbeat
+    }
+    let bar = (group_start / 4.0).floor() as i32;
+    if mod_shim(bar, config.pl.max(1)) != config.pl.max(1) - 1 {
+        return 0.0; // not the phrase-final bar
+    }
+    if root != key_root_at(config, state, group_start) {
+        return 0.0; // phrase ends off-tonic — nothing to cadence onto
+    }
+    config.cadence_weight
 }
 
 impl ChordScorer<'_> {
@@ -1504,6 +1758,8 @@ impl ChordScorer<'_> {
             sink.voice_term(i, "contour_spring", c.terms.contour_spring);
             sink.voice_term(i, "crossing_penalty", c.terms.crossing_penalty);
             sink.voice_term(i, "suspension", c.terms.suspension);
+            sink.voice_term(i, "phrase_echo", c.terms.phrase_echo);
+            sink.voice_term(i, "loop_wrap", c.terms.loop_wrap);
             if !v.is_fixed_lead {
                 nonlead_sum += c.nonlead_term;
                 let delta = c.lead_term - c.nonlead_term;
@@ -1674,6 +1930,38 @@ impl ChordScorer<'_> {
                 soft += self.config.root_doubling_weight * balance;
                 sink.term("root_doubling", self.config.root_doubling_weight * balance);
             }
+
+            // Cadence arrival (nonzero only on the downbeat of a phrase-final
+            // tonic bar): the conventions that make a close sound FINAL.
+            if self.cadence_w != 0.0 {
+                // The tonic chord arrives in root position...
+                let bass_term = if bass.rem_euclid(12) == root { 1.0 } else { -0.5 };
+                soft += self.cadence_w * bass_term;
+                sink.term("cadence_bass", self.cadence_w * bass_term);
+                // ...complete — a third-less close sounds hollow, not resolved...
+                let has_third = pc_count[(root + 3).rem_euclid(12) as usize] > 0
+                    || pc_count[(root + 4).rem_euclid(12) as usize] > 0;
+                let complete_term = if has_third { 0.5 } else { -0.5 };
+                soft += self.cadence_w * complete_term;
+                sink.term("cadence_complete", self.cadence_w * complete_term);
+                // ...with the soprano on the tonic (perfect) or the third
+                // (imperfect but idiomatic); anything else weakens the close.
+                let mut top = i32::MIN;
+                for (v, &ci) in voices.iter().zip(chosen) {
+                    top = top.max(v.cands[ci].pitch);
+                }
+                for &s in self.sustaining_notes {
+                    top = top.max(s);
+                }
+                let sop_iv = (top.rem_euclid(12) - root).rem_euclid(12);
+                let soprano_term = match sop_iv {
+                    0 => 1.0,
+                    3 | 4 => 0.6,
+                    _ => -0.3,
+                };
+                soft += self.cadence_w * soprano_term;
+                sink.term("cadence_soprano", self.cadence_w * soprano_term);
+            }
         }
 
         // Interval-variety pressure within this one sonority (new + sustaining):
@@ -1755,16 +2043,29 @@ impl ChordScorer<'_> {
         // Voice-change budget as a constraint, common tones as a soft term.
         let mut movers: i32 = 0;
         let mut common: i32 = 0;
+        let mut movable: i32 = 0;
         for (v, &ci) in voices.iter().zip(chosen) {
             if let Some(q) = v.prev {
                 let held = v.cands[ci].pitch == q;
                 if held {
                     common += 1;
                 }
-                if !v.is_fixed_lead && !held {
-                    movers += 1;
+                if !v.is_fixed_lead {
+                    movable += 1;
+                    if !held {
+                        movers += 1;
+                    }
                 }
             }
+        }
+        // Homorhythmic cadence arrival: on the phrase-final tonic downbeat,
+        // every voice moving onto the chord together is what makes the close
+        // read as an EVENT (the hold machinery otherwise lets voices coast
+        // through it one at a time).
+        if self.cadence_w != 0.0 && movable > 0 {
+            let arrival = movers as f64 / movable as f64;
+            soft += self.cadence_w * arrival;
+            sink.term("cadence_arrival", self.cadence_w * arrival);
         }
         if self.config.max_voices_changed >= 0 && movers > self.config.max_voices_changed {
             hard += (movers - self.config.max_voices_changed) as u32;
@@ -1984,6 +2285,7 @@ fn score_group_options(
     precomputed: &PrecomputedHarmonyData,
     k: usize,
     chord_masks: Option<&[u16]>,
+    wrap_targets: Option<&HashMap<i32, i32>>,
 ) -> Vec<(Vec<Note>, f64)> {
     if group.is_empty() {
         return vec![(Vec::new(), 0.0)];
@@ -1993,7 +2295,7 @@ fn score_group_options(
     let (w_harmony, w_smooth, harmony_ctx) = group_weights(group[0].start, config, state);
     let row = get_harmony_row(harmony_ctx, state.harmony_matrix.as_ref());
 
-    let voices = build_joint_voices(group, w_smooth, config, state, precomputed);
+    let voices = build_joint_voices(group, w_smooth, config, state, precomputed, wrap_targets);
     let n = voices.len();
     let table = PairTable::build(&voices, precomputed, &row, config.roughness_weight);
 
@@ -2016,6 +2318,7 @@ fn score_group_options(
         root_quality,
         root_pc,
         chord_masks,
+        cadence_w: cadence_weight_for_group(group[0].start, config, state, root_pc),
         leading_tone_pc: (key_root_at(config, state, group[0].start) + 11).rem_euclid(12),
         config,
     };
@@ -2062,9 +2365,12 @@ fn score_group(
     precomputed: &PrecomputedHarmonyData,
     chord_masks: Option<&[u16]>,
 ) -> f64 {
-    // `score_group_options` always yields at least one entry.
-    let (notes, score) = score_group_options(group, config, state, precomputed, 1, chord_masks)
-        .swap_remove(0);
+    // `score_group_options` always yields at least one entry. The look-ahead
+    // never scores the wrap (targets are a per-branch property of the REAL
+    // final group); it stays a heuristic there.
+    let (notes, score) =
+        score_group_options(group, config, state, precomputed, 1, chord_masks, None)
+            .swap_remove(0);
     temp_group_notes.extend(notes);
     score
 }
@@ -2112,7 +2418,8 @@ fn score_lookahead(
 
     let group = &groups[start_idx];
     let start_time = group[0].start;
-    let precomputed = build_precomputed_data(context, group, start_time);
+    let precomputed =
+        build_precomputed_data(context, group, start_time, echo_anchor(config, start_time));
 
     let mut temp_notes = Vec::new();
     let local_score = score_group(
@@ -2168,17 +2475,32 @@ fn score_group_beam(income: Vec<Note>, config: &Config, state: &HarmonizerState,
                 let start_time = group[0].start;
                 // Trim the scoring context to a recent window. 32 beats comfortably
                 // covers the longest sustain (notes are clamped to one 4-beat bar)
-                // and the 5-note-per-channel history.
-                let cutoff = start_time - 32.0;
+                // and the 5-note-per-channel history; an active phrase echo widens
+                // it to reach one phrase back (see context_window_beats).
+                let cutoff = start_time - context_window_beats(config);
                 let begin = beam_state.notes.partition_point(|n| n.start < cutoff);
                 let trimmed_notes = &beam_state.notes[begin..];
 
-                let precomputed = build_precomputed_data(trimmed_notes, group, start_time);
+                let precomputed = build_precomputed_data(
+                    trimmed_notes, group, start_time, echo_anchor(config, start_time),
+                );
+
+                // Loop wrap: through the render's final BAR, this branch's own
+                // opening chord is the seam target its closing music must lead
+                // into (each branch scores against its own bar 0).
+                let wrap_targets = if config.loop_wrap_weight != 0.0 && in_final_bar(start_time, config) {
+                    Some(first_pitch_by_channel(&beam_state.notes))
+                } else {
+                    None
+                };
 
                 // Branch: this parent's best `beam_width` voicings of the group,
                 // each scored on the horizon that follows it.
                 let group_masks = plan_ref.map(|p| p.masks_for(i));
-                score_group_options(group, config, state, &precomputed, beam_width, group_masks)
+                score_group_options(
+                    group, config, state, &precomputed, beam_width, group_masks,
+                    wrap_targets.as_ref(),
+                )
                     .into_iter()
                     .map(|(added_notes, group_score)| {
                         let actual_score = beam_state.actual_score + group_score;
@@ -2276,16 +2598,26 @@ fn explain_render(
         };
         let start_time = group[0].start;
         // The exact context the beam scored this group against on the winning
-        // path: everything chosen before it, trimmed to the same 32-beat window.
+        // path: everything chosen before it, trimmed to the same window.
         let prior = &final_notes[..consumed];
         consumed += group.len();
-        let begin = prior.partition_point(|n| n.start < start_time - 32.0);
+        let begin =
+            prior.partition_point(|n| n.start < start_time - context_window_beats(config));
         let trimmed = &prior[begin..];
 
-        let precomputed = build_precomputed_data(trimmed, group, start_time);
+        let precomputed =
+            build_precomputed_data(trimmed, group, start_time, echo_anchor(config, start_time));
         let (w_harmony, w_smooth, harmony_ctx) = group_weights(start_time, config, state);
         let row = get_harmony_row(harmony_ctx, state.harmony_matrix.as_ref());
-        let voices = build_joint_voices(group, w_smooth, config, state, &precomputed);
+        // Same wrap targets the beam used on the winning path: the final
+        // render's own opening chord, through the final bar.
+        let wrap_targets = if config.loop_wrap_weight != 0.0 && in_final_bar(start_time, config) {
+            Some(first_pitch_by_channel(final_notes))
+        } else {
+            None
+        };
+        let voices =
+            build_joint_voices(group, w_smooth, config, state, &precomputed, wrap_targets.as_ref());
         let table = PairTable::build(&voices, &precomputed, &row, config.roughness_weight);
         let ending_by_channel: HashMap<i32, i32> = precomputed.notes_ending_at_start.iter()
             .map(|nn| (nn.channel, nn.pitch))
@@ -2304,6 +2636,7 @@ fn explain_render(
             root_quality,
             root_pc,
             chord_masks: plan.as_ref().map(|p| p.masks_for(gi)),
+            cadence_w: cadence_weight_for_group(start_time, config, state, root_pc),
             leading_tone_pc: (key_root_at(config, state, start_time) + 11).rem_euclid(12),
             config,
         };
@@ -2748,7 +3081,7 @@ mod tests {
             Note::new(64, 2.0, 1.0, 100, 0, 1),
         ];
         let group = vec![Note::new(65, 3.0, 1.0, 100, 0, 1)];
-        let pc = build_precomputed_data(&ctx, &group, 3.0);
+        let pc = build_precomputed_data(&ctx, &group, 3.0, None);
         assert_eq!(pc.last_notes_by_channel[1], vec![64, 62, 60]);
     }
 
@@ -2758,7 +3091,7 @@ mod tests {
             .map(|i| Note::new(60 + i, i as f64, 1.0, 100, 0, 1))
             .collect();
         let group = vec![Note::new(80, 8.0, 1.0, 100, 0, 1)];
-        let pc = build_precomputed_data(&ctx, &group, 8.0);
+        let pc = build_precomputed_data(&ctx, &group, 8.0, None);
         // Only the 5 most recent (starts 3..7, pitches 63..67), newest first.
         assert_eq!(pc.last_notes_by_channel[1], vec![67, 66, 65, 64, 63]);
     }
@@ -2767,7 +3100,7 @@ mod tests {
     fn precomputed_detects_sustaining_note() {
         let ctx = vec![Note::new(48, 0.0, 4.0, 100, 0, 4)]; // spans t=2
         let group = vec![Note::new(60, 2.0, 1.0, 100, 0, 0)];
-        let pc = build_precomputed_data(&ctx, &group, 2.0);
+        let pc = build_precomputed_data(&ctx, &group, 2.0, None);
         assert!(pc.sustaining_notes.contains(&48));
     }
 
@@ -3125,8 +3458,8 @@ mod tests {
     /// hold bonus (metric / momentum / density).
     fn hold_term_at(start: f64, pitch: i32, cfg: &Config, context: &[Note]) -> f64 {
         let group = vec![Note::new(pitch, start, 1.0, 100, 0, 1)];
-        let pre = build_precomputed_data(context, &group, start);
-        let voices = build_joint_voices(&group, 1.0, cfg, &test_state(), &pre);
+        let pre = build_precomputed_data(context, &group, start, None);
+        let voices = build_joint_voices(&group, 1.0, cfg, &test_state(), &pre, None);
         voices[0]
             .cands
             .iter()
@@ -3233,8 +3566,8 @@ mod tests {
             Note::new(64, 3.5, 0.5, 100, 0, 1),
         ];
         let group = vec![Note::new(64, 4.0, 0.5, 100, 0, 1)];
-        let pre = build_precomputed_data(&ctx, &group, 4.0);
-        let voices = build_joint_voices(&group, 1.0, &cfg, &state, &pre);
+        let pre = build_precomputed_data(&ctx, &group, 4.0, None);
+        let voices = build_joint_voices(&group, 1.0, &cfg, &state, &pre, None);
         let hold = voices[0].cands.iter().find(|c| c.pitch == 64).unwrap();
         assert!(
             approx(hold.terms.suspension, 0.5),
@@ -3249,8 +3582,8 @@ mod tests {
             Note::new(64, 4.0, 0.5, 100, 0, 1),
         ];
         let group2 = vec![Note::new(64, 4.5, 0.5, 100, 0, 1)];
-        let pre2 = build_precomputed_data(&ctx2, &group2, 4.5);
-        let voices2 = build_joint_voices(&group2, 1.0, &cfg, &state, &pre2);
+        let pre2 = build_precomputed_data(&ctx2, &group2, 4.5, None);
+        let voices2 = build_joint_voices(&group2, 1.0, &cfg, &state, &pre2, None);
         let resolve = voices2[0].cands.iter().find(|c| c.pitch == 62).expect("D candidate");
         assert!(
             approx(resolve.terms.suspension, 0.6),
@@ -3420,9 +3753,9 @@ mod tests {
             Note::new(60, 0.0, 4.0, 100, 0, 0),
             Note::new(48, 0.0, 4.0, 100, 0, 4),
         ];
-        let pc = build_precomputed_data(&[], &group, 0.0);
+        let pc = build_precomputed_data(&[], &group, 0.0, None);
 
-        let opts = score_group_options(&group, &cfg, &state, &pc, 4, None);
+        let opts = score_group_options(&group, &cfg, &state, &pc, 4, None, None);
         assert_eq!(opts.len(), 4, "the beam has nothing to branch on");
 
         // Every option is a complete voicing, and no two are the same chord.
@@ -3530,6 +3863,7 @@ mod tests {
         cfg.no_crossing = 0.0;
         cfg.min_voices_changed = -1;
         cfg.tendency_weight = 0.0;
+        cfg.candidate_range = 24; // every scale tone reachable — only harmony decides
         cfg.harmony_distance_balance = 0.5; // w_smooth = 0: pure harmony
         let input = vec![
             Note::new(60, 0.0, 4.0, 100, 1, 0),

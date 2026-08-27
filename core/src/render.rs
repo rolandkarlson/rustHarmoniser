@@ -80,6 +80,8 @@ pub fn render(
     let mut notes = harmonised.notes;
     let mut breakdown = harmonised.breakdown;
 
+    shape_dynamics(&mut notes, config);
+
     for note in &mut notes {
         note.pitch += config.main_pitch;
     }
@@ -97,6 +99,52 @@ pub fn render(
     }
 
     RenderResult { notes, breakdown, schillinger_notes: state.schillinger_notes }
+}
+
+/// Phrase-shaped dynamics (`config.dynamics_weight`): deterministic velocities
+/// computed from what the music is doing instead of the legacy random jitter.
+///
+/// Three ingredients, all already implied by the render's structure:
+/// * **Tension arch** — a sine over the whole render plus a sine over each
+///   phrase (`pl` bars), so every phrase crescendos toward its middle and
+///   relaxes into its cadence, inside one long swell over the render.
+/// * **Metric accent** — the inverse of the hold-shaping profile: downbeats
+///   full accent, beat 3 next, backbeats lighter, offbeat 16ths none. Note
+///   onsets that survive the downstream same-pitch merge are exactly the ones
+///   this accents.
+/// * **Melodic direction** — rising lines grow, falling lines ease off,
+///   per voice.
+///
+/// A seeded ±3 humanization jitter rides on top so two performances of the
+/// same phrase never accent identically — and so the seed keeps mattering on
+/// a default render (with the literal progression, the legacy random velocity
+/// was the ONLY seed-dependent output; a fully deterministic replacement made
+/// every seed render byte-identical).
+///
+/// `weight` scales the swing around the base level (64): at 1.0 velocities
+/// span roughly 55–110. At 0 the legacy random velocities are left untouched.
+fn shape_dynamics(notes: &mut [Note], config: &Config) {
+    let w = config.dynamics_weight;
+    if w == 0.0 {
+        return;
+    }
+    let total = ((config.pl * 4 * config.render_length).max(1)) as f64;
+    let phrase = (config.pl.max(1) * 4) as f64;
+    let mut prev_by_channel: [Option<i32>; 16] = [None; 16];
+    for n in notes.iter_mut() {
+        let global = (std::f64::consts::PI * (n.start / total).clamp(0.0, 1.0)).sin();
+        let local = (std::f64::consts::PI * (n.start.rem_euclid(phrase) / phrase)).sin();
+        let tension = 0.6 * global + 0.4 * local;
+        let metric = 1.0 - crate::harmonizer::metric_hold_weight(n.start.rem_euclid(4.0));
+        let ch = (n.channel.max(0) as usize).min(15);
+        let dir = prev_by_channel[ch]
+            .map(|p| ((n.pitch - p).clamp(-4, 4) as f64) / 4.0)
+            .unwrap_or(0.0);
+        prev_by_channel[ch] = Some(n.pitch);
+        let jitter = utils::SeededRng::seeded_random(6.0, -3.0);
+        let v = 64.0 + w * (28.0 * tension + 12.0 * metric + 6.0 * dir + jitter);
+        n.velocity = (v.round() as i32).clamp(1, 127);
+    }
 }
 
 #[cfg(test)]
@@ -137,9 +185,9 @@ mod tests {
     #[test]
     fn golden_fingerprint() {
         let expected: [(f64, u64); 3] = [
-            (1.0, 0xa740a51cc69928c5),
-            (7.0, 0xa7737e6007df8364),
-            (42.0, 0xab00ed192c3172d1),
+            (1.0, 0x30dc37bb66bdae6b),
+            (7.0, 0x23d114d753660393),
+            (42.0, 0xfad5ea6604dbaf05),
         ];
         for (seed, want) in expected {
             let mut cfg = default_config();
@@ -316,6 +364,221 @@ mod tests {
         // With an empty clip the generated voice 0 is used instead.
         let r2 = render(&cfg, Some(&Leading { notes: vec![], clip_length: 4.0 }), None);
         assert!(!r2.notes.is_empty());
+    }
+
+    /// The pitch a channel is sounding at `t`, if any (notes never cross bar
+    /// lines, so this is well-defined within a render).
+    fn pitch_at(notes: &[Note], channel: i32, t: f64) -> Option<i32> {
+        notes.iter()
+            .find(|n| n.channel == channel && n.start <= t + 1e-6 && n.start + n.duration > t + 1e-6)
+            .map(|n| n.pitch)
+    }
+
+    #[test]
+    fn dynamics_shape_velocities_by_phrase_and_meter() {
+        // Shaped velocities live in a musical band and accent strong beats.
+        let cfg = default_config();
+        let (notes, _) = pipeline(&cfg);
+        assert!(notes.iter().all(|n| (1..=127).contains(&n.velocity)));
+        let mean = |pred: &dyn Fn(&Note) -> bool| -> f64 {
+            let v: Vec<f64> = notes.iter().filter(|n| pred(n)).map(|n| n.velocity as f64).collect();
+            v.iter().sum::<f64>() / v.len().max(1) as f64
+        };
+        let downbeats = mean(&|n| n.start.rem_euclid(4.0) < 0.001);
+        let offbeats = mean(&|n| {
+            let q = n.start.rem_euclid(1.0);
+            q > 0.2 && q < 0.8
+        });
+        assert!(
+            downbeats > offbeats + 4.0,
+            "downbeat mean {downbeats:.1} should clearly exceed offbeat mean {offbeats:.1}",
+        );
+
+        // Weight 0 restores the legacy random velocities (small values).
+        let mut legacy = default_config();
+        legacy.dynamics_weight = 0.0;
+        let (l, _) = pipeline(&legacy);
+        assert!(
+            l.iter().all(|n| n.velocity < 45),
+            "legacy velocities should be untouched at weight 0",
+        );
+    }
+
+    #[test]
+    fn cadence_weight_lands_the_phrase_final_tonic() {
+        // Cadence quality of each phrase-final downbeat: bass on the tonic,
+        // third present, soprano on tonic/third. Higher weight, better closes.
+        let quality = |w: f64| -> i32 {
+            let mut cfg = default_config();
+            cfg.use_generated_progression = true;
+            cfg.render_length = 3;
+            cfg.cadence_weight = w;
+            let (notes, sch) = pipeline(&cfg);
+            let bars = sch[0].len();
+            let mut q = 0;
+            for bar in (0..bars).filter(|b| (b + 1) % cfg.pl as usize == 0) {
+                let t = bar as f64 * 4.0;
+                let root = sch[0][bar][0].rem_euclid(12);
+                let chord: Vec<&Note> = notes
+                    .iter()
+                    .filter(|n| (n.start - t).abs() < 1e-6)
+                    .collect();
+                let pcs: Vec<i32> = chord.iter().map(|n| n.pitch.rem_euclid(12)).collect();
+                let bass = chord.iter().map(|n| n.pitch).min().unwrap_or(0);
+                let top = chord.iter().map(|n| n.pitch).max().unwrap_or(0);
+                if bass.rem_euclid(12) == root {
+                    q += 1;
+                }
+                if pcs.contains(&(root + 3).rem_euclid(12)) || pcs.contains(&(root + 4).rem_euclid(12)) {
+                    q += 1;
+                }
+                let sop = (top.rem_euclid(12) - root).rem_euclid(12);
+                if sop == 0 || sop == 3 || sop == 4 {
+                    q += 1;
+                }
+            }
+            q
+        };
+        let with = quality(2.0);
+        let without = quality(0.0);
+        println!("cadence quality: {without} -> {with}");
+        assert!(
+            with > without,
+            "cadence quality {without} → {with} should improve with the weight",
+        );
+    }
+
+    #[test]
+    fn phrase_echo_makes_phrases_rhyme() {
+        // Similarity between consecutive phrases: sample every 8th-note position
+        // of phrase 0 and phrase 1 and count positions where a voice repeats the
+        // same melodic move (delta from the previous sample). With the echo
+        // term on, the second phrase should rhyme with the first more often.
+        let similarity = |w: f64| -> f64 {
+            let mut cfg = default_config();
+            cfg.phrase_echo_weight = w;
+            let (notes, _) = pipeline(&cfg);
+            let phrase = (cfg.pl * 4) as f64;
+            let (mut matches, mut total) = (0, 0);
+            for ch in 0..5 {
+                let mut t = 0.5;
+                while t < phrase {
+                    let d0 = match (pitch_at(&notes, ch, t), pitch_at(&notes, ch, t - 0.5)) {
+                        (Some(a), Some(b)) => Some(a - b),
+                        _ => None,
+                    };
+                    let d1 = match (pitch_at(&notes, ch, t + phrase), pitch_at(&notes, ch, t + phrase - 0.5)) {
+                        (Some(a), Some(b)) => Some(a - b),
+                        _ => None,
+                    };
+                    if let (Some(a), Some(b)) = (d0, d1) {
+                        total += 1;
+                        if a == b {
+                            matches += 1;
+                        }
+                    }
+                    t += 0.5;
+                }
+            }
+            matches as f64 / total.max(1) as f64
+        };
+        let with = similarity(2.0);
+        let without = similarity(0.0);
+        println!("phrase similarity: {without:.2} -> {with:.2}");
+        assert!(
+            with > without,
+            "phrase similarity {without:.2} → {with:.2} should rise with the echo",
+        );
+    }
+
+    #[test]
+    fn loop_wrap_weight_smooths_the_seam() {
+        // Seam cost: per voice, semitone distance from the last sounding pitch
+        // back to the first — what the ear crosses when the clip loops.
+        let seam = |w: f64| -> i32 {
+            let mut cfg = default_config();
+            cfg.loop_wrap_weight = w;
+            let (notes, _) = pipeline(&cfg);
+            (0..5)
+                .map(|ch| {
+                    let line: Vec<&Note> = {
+                        let mut l: Vec<&Note> =
+                            notes.iter().filter(|n| n.channel == ch).collect();
+                        l.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+                        l
+                    };
+                    (line.last().unwrap().pitch - line.first().unwrap().pitch).abs()
+                })
+                .sum()
+        };
+        let with = seam(2.0);
+        let without = seam(0.0);
+        println!("seam distance: {without} -> {with}");
+        assert!(
+            with < without,
+            "total seam distance {without} → {with} should shrink with the wrap term",
+        );
+    }
+
+    #[test]
+    fn rhythm_generators_drive_the_attack_pattern() {
+        // r(4÷3) at 8th-note units: durations 1.5,0.5,1.0,1.0,0.5,1.5 beats,
+        // span 6 beats — attacks at 0, 1.5, 2, 3, 4, 4.5, 6, ... per voice.
+        let mut cfg = default_config();
+        cfg.rhythm_generators = vec![4, 3];
+        cfg.rhythm_unit = 0.5;
+        cfg.rhythm_voice_rotation = 0;
+        let (notes, _) = pipeline(&cfg);
+
+        let pattern = [1.5, 0.5, 1.0, 1.0, 0.5, 1.5];
+        let span = 6.0;
+        for ch in 0..5 {
+            let line: Vec<&Note> = {
+                let mut l: Vec<&Note> = notes.iter().filter(|n| n.channel == ch).collect();
+                l.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+                l
+            };
+            // Continuous coverage: each note ends where the next begins (ties
+            // across bar lines are separate notes, so no gaps and no overlaps).
+            for pair in line.windows(2) {
+                assert!(
+                    (pair[0].start + pair[0].duration - pair[1].start).abs() < 1e-6,
+                    "ch{ch}: gap/overlap at {}",
+                    pair[1].start,
+                );
+            }
+            // Every pattern attack (cumulative r(4÷3) position) has a note
+            // starting exactly there.
+            let mut t = 0.0;
+            let mut k = 0;
+            while t < 24.0 {
+                assert!(
+                    line.iter().any(|n| (n.start - t).abs() < 1e-6),
+                    "ch{ch}: no onset at pattern attack {t}",
+                );
+                t += pattern[k % pattern.len()];
+                k += 1;
+            }
+            let _ = span;
+        }
+
+        // Rotation phase-shifts the cycle per voice: with rotation 1, channel 1
+        // starts on the pattern's second element (0.5 beats), channel 0 on its
+        // first (1.5) — their first-note durations must differ accordingly.
+        let mut rot = default_config();
+        rot.rhythm_generators = vec![4, 3];
+        rot.rhythm_unit = 0.5;
+        rot.rhythm_voice_rotation = 1;
+        let (rn, _) = pipeline(&rot);
+        let first_dur = |ch: i32| {
+            rn.iter()
+                .filter(|n| n.channel == ch)
+                .min_by(|a, b| a.start.partial_cmp(&b.start).unwrap())
+                .map(|n| n.duration)
+                .unwrap()
+        };
+        assert!((first_dur(0) - 1.5).abs() < 1e-6, "ch0 should open with 1.5, got {}", first_dur(0));
+        assert!((first_dur(1) - 0.5).abs() < 1e-6, "ch1 should open rotated with 0.5, got {}", first_dur(1));
     }
 
     /// TEMP repro: run the full generation pipeline with a config supplied via

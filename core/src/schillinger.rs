@@ -208,6 +208,39 @@ fn find_sequence_with_condition(possible_steps: &[i32], sequence_length: i32) ->
 
 pub const NUM_VOICES: usize = 16;
 
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+/// Schillinger rhythm resultant r(a÷b[÷c…]) — Book I's interference pattern of
+/// uniform periodicities. Each generator lays attacks at its own multiples;
+/// the resultant is the union of all attack points over one common span (the
+/// generators' LCM), read back as the durations between consecutive attacks:
+///
+///   r(3÷2) = 2+1+1+2      r(4÷3) = 3+1+2+2+1+3      r(5÷4) = 4+1+3+2+2+3+1+4
+///
+/// Every two-generator resultant is a palindrome and sums to the span, which
+/// is why the pattern loops seamlessly. Non-positive generators are ignored;
+/// no usable generator yields an empty pattern (caller treats that as "off").
+pub fn resultant(gens: &[i32]) -> Vec<i32> {
+    let gens: Vec<i64> = gens.iter().filter(|&&g| g > 0).map(|&g| g as i64).collect();
+    if gens.is_empty() {
+        return Vec::new();
+    }
+    let span = gens.iter().fold(1i64, |acc, &g| acc / gcd(acc, g) * g);
+    let mut points: Vec<i64> = vec![0];
+    for &g in &gens {
+        let mut t = g;
+        while t <= span {
+            points.push(t);
+            t += g;
+        }
+    }
+    points.sort_unstable();
+    points.dedup();
+    points.windows(2).map(|w| (w[1] - w[0]) as i32).collect()
+}
+
 /// Phrase-structured chord-root sequence: `render_length` phrases of `pl` bars,
 /// each a mode-aware random walk that closes with the mode's own cadence
 /// (CADENCE_DEGREE → tonic), so every phrase ends on a cadence instead of
@@ -324,6 +357,60 @@ mod tests {
 
     fn prog(c: &Config) -> Vec<Vec<Vec<i32>>> {
         gen_schillinger_progression(c, &Contours::from_config(c))
+    }
+
+    #[test]
+    fn resultants_match_the_classic_patterns() {
+        assert_eq!(resultant(&[3, 2]), vec![2, 1, 1, 2]);
+        assert_eq!(resultant(&[4, 3]), vec![3, 1, 2, 2, 1, 3]);
+        assert_eq!(resultant(&[5, 4]), vec![4, 1, 3, 2, 2, 3, 1, 4]);
+        assert_eq!(resultant(&[5, 3]), vec![3, 2, 1, 3, 1, 2, 3]);
+        // Order and duplicates don't matter; a lone generator is a flat pulse.
+        assert_eq!(resultant(&[2, 3]), resultant(&[3, 2]));
+        assert_eq!(resultant(&[3, 3]), vec![3]);
+        assert_eq!(resultant(&[4]), vec![4]);
+    }
+
+    #[test]
+    fn resultants_are_palindromic_and_span_the_lcm() {
+        for (a, b) in [(3, 2), (4, 3), (5, 2), (5, 3), (5, 4), (7, 4), (9, 5)] {
+            let r = resultant(&[a, b]);
+            let rev: Vec<i32> = r.iter().rev().copied().collect();
+            assert_eq!(r, rev, "r({a}÷{b}) is not a palindrome: {r:?}");
+            let lcm = (a * b) / {
+                let (mut x, mut y) = (a, b);
+                while y != 0 { let t = y; y = x % y; x = t; }
+                x
+            };
+            assert_eq!(r.iter().sum::<i32>(), lcm, "r({a}÷{b}) does not span the lcm");
+            // All pairs above are coprime: they interfere a+b-1 times per span.
+            assert_eq!(r.len() as i32, a + b - 1, "r({a}÷{b}) has the wrong attack count");
+        }
+    }
+
+    #[test]
+    fn degenerate_generators_are_ignored() {
+        assert!(resultant(&[]).is_empty());
+        assert!(resultant(&[0, -3]).is_empty());
+        assert_eq!(resultant(&[0, 3, 2]), vec![2, 1, 1, 2]);
+    }
+
+    #[test]
+    fn three_generator_resultant_interferes_all_three() {
+        // r(5÷4÷3): span 60, attacks at every multiple of 5, 4 and 3.
+        let r = resultant(&[5, 4, 3]);
+        assert_eq!(r.iter().sum::<i32>(), 60);
+        let mut t = 0;
+        let mut points = vec![0];
+        for d in &r {
+            t += d;
+            points.push(t);
+        }
+        for g in [5, 4, 3] {
+            for k in (g..=60).step_by(g as usize) {
+                assert!(points.contains(&k), "r(5÷4÷3) misses attack {k} of generator {g}");
+            }
+        }
     }
 
     #[test]
