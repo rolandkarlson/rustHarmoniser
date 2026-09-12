@@ -31,12 +31,20 @@ pub struct Config {
     pub last_note_exist_in_voice: f64,
     pub same_direction: f64,
     pub consecutive_octav_fift: f64,
+    /// Penalty for historical overlap/clearance and for crossing another voice
+    /// in the selected voicing, including notes that are already sustaining.
     pub no_crossing: f64,
     pub last_note_same: f64,
     pub mode: i32,
     pub interval_exists_in_harmony: f64,
     // New fields
     pub voice_rhythm: Vec<f64>,
+    /// Optional repeating duration cycle per voice, in beats. Empty/missing or
+    /// invalid rows fall back to the lattice/rhythm contour. Valid cycles take
+    /// priority over those controls, but Schillinger rhythm generators override
+    /// them. Cycles keep absolute timing when split at bar boundaries.
+    #[serde(default)]
+    pub voice_rhythm_patterns: Vec<Vec<f64>>,
     pub schillinger_sequence: Vec<i32>,
     pub pl: i32,
     pub harmony_distance_balance: f64,
@@ -164,8 +172,9 @@ pub struct Config {
     /// penalty per extra voice on the key's leading tone. 0 = off.
     #[serde(default = "default_root_doubling")]
     pub root_doubling_weight: f64,
-    /// Tendency-tone pressure: leading tone up to the tonic, chordal minor 7th
-    /// down by step. Applied per voice on (previous pitch → candidate).
+    /// Tendency-tone pressure: leading tone up to the global/local tonic;
+    /// identified major, minor and diminished chordal sevenths down by step
+    /// into the destination chord. Repeated holds retain their source role.
     /// 0 = off. See harmonizer::tendency_term.
     #[serde(default = "default_tendency_weight")]
     pub tendency_weight: f64,
@@ -216,16 +225,16 @@ pub struct Config {
     /// lattice.
     #[serde(default)]
     pub lattice_beats: f64,
-    /// Suspension tolerance: partial score refund for HOLDING a pitch that is
-    /// foreign to the current bar's chord, provided a step-down resolution
-    /// exists in the candidate scale — the harmony-matrix penalty still applies,
-    /// this just prices the dissonant hold as "suspension" instead of "wrong
-    /// note". 0 = off. Schillinger mode only.
+    /// One-time allowance for a consonant preparation held continuously into a
+    /// 4–3, 7–6 or 9–8 suspension over the actual bass. A reachable resolution
+    /// may license its forbidden interval; ordinary soft roughness still applies.
+    /// Set both suspension weights to 0 to disable recognition. Schillinger only.
     #[serde(default = "default_suspension_tolerance")]
     pub suspension_tolerance: f64,
-    /// Suspension resolution reward: bonus for stepping DOWN (1-2 semitones)
-    /// onto a chord tone after a dissonant hold — completes the
-    /// preparation–suspension–resolution gesture. 0 = off. Schillinger mode only.
+    /// Reward for the prepared suspension's downward step onto a chord tone;
+    /// also the penalty for abandoning it or holding beyond the next harmonic
+    /// change / four beats. Repeated wrong notes and rests do not prepare it.
+    /// Set both suspension weights to 0 to disable recognition. Schillinger only.
     #[serde(default = "default_suspension_resolve_bonus")]
     pub suspension_resolve_bonus: f64,
     /// Schillinger rhythm generators: when non-empty, every generated voice's
@@ -349,6 +358,7 @@ impl Default for Config {
             mode: 0,
             interval_exists_in_harmony: 1.0,
             voice_rhythm: vec![4.0],
+            voice_rhythm_patterns: Vec::new(),
             schillinger_sequence: vec![0, 3, 4, 0],
             pl: 4,
             harmony_distance_balance: 0.2,

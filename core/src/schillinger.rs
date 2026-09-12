@@ -6,6 +6,19 @@ use crate::model::Config;
 // PL was 8 in JS, now passed via Config
 const EXP: i32 = 2;
 
+/// Chord-member indices before diatonic expansion. At expansion 2 these are
+/// triad, seventh, diatonic added-sixth, ninth, eleventh and thirteenth pools.
+/// Keep the UI's harmony.ts table in sync. Index 1 must include member 3 (the
+/// seventh); skipping it previously produced an add9/add11 pool without a 7th.
+pub const CHORD_STRUCTURES: [&[i32]; 6] = [
+    &[0, 1, 2],
+    &[0, 1, 2, 3],
+    &[0, 1, 2, 6],
+    &[0, 1, 2, 3, 4],
+    &[0, 1, 2, 3, 4, 5],
+    &[0, 1, 2, 3, 4, 5, 6],
+];
+
 /// Penultimate degree of each mode's characteristic cadence (the caller
 /// appends the tonic). Indexed by mode 0=Ionian … 6=Locrian.
 ///
@@ -276,15 +289,6 @@ pub fn gen_schillinger_progression(config: &Config, contours: &Contours) -> Vec<
     };
     let bars = seq.len();
 
-    let chord_list = vec![
-        vec![0,1,2],
-        vec![0,1,2,4,5],
-        vec![0,1,2,4,5],
-        vec![0,1,2,3,4],
-        vec![0,1,2,3,4,5],
-        vec![0,1,2,3,4,5,6]
-    ];
-
     let mut per_voice: Vec<Vec<Vec<i32>>> = Vec::with_capacity(NUM_VOICES);
 
     for voice in 0..NUM_VOICES {
@@ -306,8 +310,8 @@ pub fn gen_schillinger_progression(config: &Config, contours: &Contours) -> Vec<
                 .map(|v| v.round() as usize)
                 .unwrap_or(0);
 
-            let n_struct = if chord_idx < chord_list.len() {
-                &chord_list[chord_idx]
+            let n_struct = if chord_idx < CHORD_STRUCTURES.len() {
+                CHORD_STRUCTURES[chord_idx]
             } else {
                 &config.chord_structure
             };
@@ -357,6 +361,31 @@ mod tests {
 
     fn prog(c: &Config) -> Vec<Vec<Vec<i32>>> {
         gen_schillinger_progression(c, &Contours::from_config(c))
+    }
+
+    #[test]
+    fn tertian_shapes_realize_sevenths_sixths_and_extensions_in_every_key() {
+        let expected = [
+            vec![0, 4, 7], vec![0, 4, 7, 11], vec![0, 4, 7, 9],
+            vec![0, 4, 7, 11, 2], vec![0, 4, 7, 11, 2, 5], vec![0, 4, 7, 11, 2, 5, 9],
+        ];
+        for root in 0..12 {
+            for (shape, members) in expected.iter().enumerate() {
+                let c = Config {
+                    root, mode: 0, schillinger_sequence: vec![0],
+                    chord_structure_contour: Some(vec![vec![shape as f64]; 16]),
+                    schillinger_ex_contour: Some(vec![vec![2.0]; 16]),
+                    ..Config::default()
+                };
+                assert_eq!(prog(&c)[0][0], members.iter().map(|pc| (pc + root) % 12).collect::<Vec<_>>());
+            }
+        }
+        let c = Config {
+            root: 0, mode: 0, schillinger_sequence: vec![1, 4, 0],
+            chord_structure_contour: Some(vec![vec![1.0]; 16]),
+            ..Config::default()
+        };
+        assert_eq!(prog(&c)[0], vec![vec![2, 5, 9, 0], vec![7, 11, 2, 5], vec![0, 4, 7, 11]]);
     }
 
     #[test]

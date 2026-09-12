@@ -285,45 +285,110 @@ fn melody_force_term(c: i32, lasts: &[i32], weight: f64) -> f64 {
     t * weight
 }
 
-/// Tendency-tone pressure (`config.tendency_weight`): the two resolutions that
-/// carry most of tonal harmony's forward motion, applied per voice as a function
-/// of (previous pitch → candidate).
-///
-/// * **Leading tone → tonic.** A previous pitch a semitone below the KEY tonic
-///   is rewarded for stepping up onto it and penalized for leaping away.
-///   Because the test is literally "one semitone below the tonic", it simply
-///   never fires in modes that have no leading tone (Aeolian, Dorian, …), which
-///   is the musically correct behaviour rather than a special case.
-/// * **Chordal 7th → down by step.** A previous pitch a minor 7th above the
-///   root of the chord it belonged to resolves downward. Major 7ths are
-///   excluded: as a chord tone the M7 tends *up*, and when it is the key's
-///   leading tone the rule above already covers it.
-///
-/// `prev_root` is the root of the chord `prev` was part of (the previous bar at
-/// a bar line), not the chord being built now.
-fn tendency_term(prev: i32, c: i32, tonic: i32, prev_root: Option<i32>, weight: f64) -> f64 {
+/// Rooted pitch-class context. Seventh membership requires a recognizable
+/// tertian chord: a sixth in an added-sixth chord must not become a diminished
+/// seventh merely because both span nine semitones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HarmonicEvent {
+    root: i32,
+    pcs: u16,
+}
+
+impl HarmonicEvent {
+    fn new(root: i32, pitches: &[i32]) -> Self {
+        Self {
+            root: root.rem_euclid(12),
+            pcs: pitches.iter().fold(0, |m, p| m | 1 << p.rem_euclid(12)),
+        }
+    }
+
+    fn contains(self, pitch: i32) -> bool {
+        self.pcs & (1 << pitch.rem_euclid(12)) != 0
+    }
+
+    fn seventh(self) -> Option<i32> {
+        let has = |iv| self.contains(self.root + iv);
+        // Ambiguous pools with both thirds are not an identified chord quality.
+        let minor = has(3) && !has(4);
+        let major = has(4) && !has(3);
+        if !(minor || major) { return None; }
+        let iv = if minor && has(6) && !has(7) && !has(8)
+            && has(9) && !has(10) && !has(11) {
+            9 // fully diminished seventh
+        } else if (has(7) || (minor && has(6)) || (major && has(8)))
+            && has(10) != has(11) {
+            if has(10) { 10 } else { 11 }
+        } else {
+            return None;
+        };
+        Some((self.root + iv).rem_euclid(12))
+    }
+}
+
+fn harmonic_event_at(state: &HarmonizerState, start: f64) -> Option<HarmonicEvent> {
+    Some(HarmonicEvent::new(bar_root_pc(state, start)?, &bar_chord_pcs(state, start)?))
+}
+
+/// Retain the source role of a seventh/leading tone held into a harmony where
+/// it is foreign. Rearticulating the hold must not erase its resolution duty.
+/// A rest ends the run, and a new harmony accepting it as a chord tone adopts
+/// its new role.
+fn tendency_source(history: &[Note], now: f64, state: &HarmonizerState) -> Option<HarmonicEvent> {
+    let last = history.last()?;
+    let at = (last.start + last.duration).min(now) - 0.001;
+    let immediate = harmonic_event_at(state, at)?;
+    if immediate.contains(last.pitch) { return Some(immediate); }
+    let mut run_start = last.start;
+    for note in history.iter().rev().skip(1) {
+        if note.pitch != last.pitch || note.start + note.duration < run_start - 0.001 { break; }
+        run_start = note.start;
+    }
+    let first_bar = (run_start / 4.0).floor() as i32;
+    let last_bar = (at / 4.0).floor() as i32;
+    for bar in (first_bar..last_bar).rev() {
+        if let Some(event) = harmonic_event_at(state, bar as f64 * 4.0) {
+            if event.contains(last.pitch) { return Some(event); }
+        }
+    }
+    Some(immediate)
+}
+
+/// Chordal sevenths (major, minor, or diminished) descend into the destination
+/// harmony. Their chord role takes precedence over the global leading-tone
+/// label, e.g. B in Cmaj7 → F resolves to A, not C. A held seventh can remain
+/// through a prolongation; resolution pressure starts when the harmony changes.
+fn tendency_term(
+    prev: i32, c: i32, tonic: i32,
+    source: Option<HarmonicEvent>, destination: Option<HarmonicEvent>, weight: f64,
+) -> f64 {
     if weight == 0.0 {
         return 0.0;
     }
-    let mut t = 0.0;
     let step = c - prev;
-    if prev.rem_euclid(12) == (tonic + 11).rem_euclid(12) {
-        if step == 1 {
-            t += 1.0;
+    if let Some(src) = source {
+        if src.seventh() == Some(prev.rem_euclid(12)) {
+            if destination == source { return 0.0; }
+            return weight * if matches!(step, -1 | -2)
+                && destination.map_or(true, |dst| dst.contains(c)) {
+                1.0
+            } else if step != 0 { -0.5 } else { 0.0 };
+        }
+    }
+    // The third of an applied dominant resolves to its local tonic.
+    let target = match (source, destination) {
+        (Some(src), Some(dst)) if (src.root - dst.root).rem_euclid(12) == 7
+            && src.contains(src.root + 4) && src.contains(src.root + 7)
+            && prev.rem_euclid(12) == (src.root + 4).rem_euclid(12) => dst.root,
+        _ => tonic,
+    };
+    if prev.rem_euclid(12) == (target + 11).rem_euclid(12) {
+        if step == 1 && destination.map_or(true, |dst| dst.contains(c)) {
+            return weight;
         } else if step.abs() > 2 {
-            t -= 0.5;
+            return -0.5 * weight;
         }
     }
-    if let Some(r) = prev_root {
-        if (prev - r).rem_euclid(12) == 10 {
-            if step == -1 || step == -2 {
-                t += 1.0;
-            } else if step > 0 {
-                t -= 0.5;
-            }
-        }
-    }
-    t * weight
+    0.0
 }
 
 /// Pitch class of the chord root for the bar containing `start`.
@@ -703,6 +768,10 @@ impl ChordPlan {
 
 pub struct PrecomputedHarmonyData {
     pub sustaining_notes: Vec<i32>,
+    sustaining_events: Vec<Note>,
+    /// Full timed history within the scoring window, oldest first. Pitch-only
+    /// repetition history cannot distinguish a tie from a rest or preparation.
+    history_by_channel: Vec<Vec<Note>>,
     pub boundaries_by_channel: Vec<Boundaries>,
     pub last_notes_by_channel: Vec<Vec<i32>>,
     pub notes_ending_at_start: Vec<Note>,
@@ -729,6 +798,8 @@ fn build_precomputed_data(
     echo_at: Option<f64>,
 ) -> PrecomputedHarmonyData {
     let mut sustaining_notes = Vec::new();
+    let mut sustaining_events = Vec::new();
+    let mut history_by_channel = vec![Vec::new(); 16];
     let mut notes_ending_at_start = Vec::new();
     let mut sustaining_at_minus_0_1 = Vec::new();
     let mut last_notes_by_channel: Vec<Vec<i32>> = vec![Vec::new(); 16];
@@ -761,6 +832,7 @@ fn build_precomputed_data(
         // sustaining_notes: start <= start && end > start
         if n.start <= start_time && n.start + n.duration > start_time && n.muted == 0 {
             sustaining_notes.push(n.pitch);
+            sustaining_events.push(*n);
             if n.channel == 0 {
                 sustaining_lead_pitch = Some(n.pitch);
             }
@@ -788,6 +860,7 @@ fn build_precomputed_data(
             let ch = n.channel as usize;
             if ch < 16 {
                 last_notes_by_channel[ch].push(n.pitch);
+                history_by_channel[ch].push(*n);
             }
         }
 
@@ -863,6 +936,8 @@ fn build_precomputed_data(
 
     PrecomputedHarmonyData {
         sustaining_notes,
+        sustaining_events,
+        history_by_channel,
         boundaries_by_channel,
         last_notes_by_channel,
         notes_ending_at_start,
@@ -919,12 +994,18 @@ pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channe
     // holds the pitch across it. Takes precedence over the lattice and the
     // rhythm contours while set.
     let resultant = crate::schillinger::resultant(&config.rhythm_generators);
-    if !resultant.is_empty() {
+    let cycle: Vec<f64> = if !resultant.is_empty() {
         let unit = if config.rhythm_unit > 0.0 { config.rhythm_unit } else { 0.5 };
         let rot = mod_shim(channel.max(0) * config.rhythm_voice_rotation, resultant.len() as i32) as usize;
-        let cycle: Vec<f64> = (0..resultant.len())
+        (0..resultant.len())
             .map(|i| resultant[(i + rot) % resultant.len()] as f64 * unit)
-            .collect();
+            .collect()
+    } else {
+        config.voice_rhythm_patterns.get(channel as usize)
+            .filter(|row| !row.is_empty() && row.iter().all(|d| d.is_finite() && *d >= 0.001))
+            .cloned().unwrap_or_default()
+    };
+    if !cycle.is_empty() {
         let bar_len = 4.0;
         while pos < clip_len {
             let d_full = cycle[counter as usize % cycle.len()];
@@ -939,6 +1020,9 @@ pub fn gen_voice(base: i32, rhythm_data: &Vec<f64>, pitch_shifts: &[i32], channe
                 seg = seg_end;
             }
             pos += d_full;
+            // Swing fractions can accumulate a tiny floating-point error.
+            // Preserve the beat grid before a near-bar-boundary lookup.
+            if (pos - pos.round()).abs() < 1e-9 { pos = pos.round(); }
             counter += 1;
         }
         return ar;
@@ -1070,9 +1154,6 @@ struct CandTerms {
     off_scale_hold: f64,
     contour_spring: f64,
     crossing_penalty: f64,
-    /// Suspension gesture: positive tolerance on a dissonant hold that can
-    /// resolve down by step, positive reward on the step-down resolution.
-    suspension: f64,
     /// Motif memory: reward for reproducing the melodic interval this voice
     /// made one phrase earlier at the same position (see phrase_echo_weight).
     phrase_echo: f64,
@@ -1160,6 +1241,106 @@ struct JointVoice {
     prev: Option<i32>,
     is_fixed_lead: bool,
     cands: Vec<JointCand>,
+    suspension: Option<PreparedSuspension>,
+}
+
+/// An obligation created by a consonant pitch held continuously across a
+/// harmonic change. Candidate resolutions remain attached to that gesture.
+#[derive(Clone, Copy, Debug)]
+struct PreparedSuspension {
+    pitch: i32,
+    entered: f64,
+    harmony: HarmonicEvent,
+    resolutions: [Option<i32>; 2],
+    expired: bool,
+}
+
+impl PreparedSuspension {
+    fn resolves_over(self, to: i32, bass: i32) -> bool {
+        self.pitch > bass && to > bass
+            && matches!(((self.pitch - bass) % 12, (to - bass) % 12),
+                (5, 3 | 4) | (10 | 11, 8 | 9) | (1 | 2, 0))
+    }
+
+    /// Upper-voice 4–3, 7–6 and 9–8 against the actual sounding bass.
+    fn valid_over(self, bass: i32) -> bool {
+        !self.expired && self.resolutions.iter().flatten().any(|&to| {
+            self.resolves_over(to, bass)
+        })
+    }
+
+    fn term(self, pitch: i32, bass: i32, now: f64, config: &Config) -> f64 {
+        if self.expired { return -config.suspension_resolve_bonus; }
+        if !self.valid_over(bass) {
+            // After a verified dissonance, changing the bass or excluding the
+            // target must not silently erase the outstanding resolution.
+            return if now > self.entered + 0.001 { -config.suspension_resolve_bonus } else { 0.0 };
+        }
+        if pitch == self.pitch {
+            // A single gesture earns a single preparation allowance. Repeated
+            // lattice events must not farm the tolerance indefinitely.
+            if (now - self.entered).abs() < 0.001 { config.suspension_tolerance } else { 0.0 }
+        } else if now > self.entered + 0.001
+            && self.resolutions.contains(&Some(pitch)) && self.resolves_over(pitch, bass) {
+            config.suspension_resolve_bonus
+        } else if now > self.entered + 0.001 {
+            -config.suspension_resolve_bonus
+        } else { 0.0 }
+    }
+}
+
+fn prepared_suspension(
+    history: &[Note], now: f64, state: &HarmonizerState,
+    precomputed: &PrecomputedHarmonyData,
+) -> Option<PreparedSuspension> {
+    let last = history.last()?;
+    if last.start + last.duration < now - 0.001 { return None; }
+    let mut run_start = last.start;
+    for note in history.iter().rev().skip(1) {
+        if note.pitch != last.pitch || note.start + note.duration < run_start - 0.001 { break; }
+        run_start = note.start;
+    }
+    let first_bar = (run_start / 4.0).floor() as i32 + 1;
+    let last_bar = ((now + 0.001) / 4.0).floor() as i32;
+    let mut pending: Option<PreparedSuspension> = None;
+    for bar in first_bar..=last_bar {
+        let at = bar as f64 * 4.0;
+        let before = harmonic_event_at(state, at - 0.001)?;
+        let after = harmonic_event_at(state, at)?;
+        if let Some(susp) = &mut pending {
+            if after != susp.harmony || now - susp.entered >= 4.0 - 0.001 {
+                susp.expired = true;
+            }
+            continue;
+        }
+        if !before.contains(last.pitch) || after.contains(last.pitch) { continue; }
+        // Verify the preparation against the bass that actually sounded. With
+        // no lower voice in the context, use the source root's interval class.
+        let bass = precomputed.history_by_channel.iter().flatten()
+            .filter(|n| n.start < at && n.start + n.duration >= at - 0.001)
+            .map(|n| n.pitch).filter(|&p| p < last.pitch).min();
+        let interval = (last.pitch - bass.unwrap_or(before.root)).rem_euclid(12);
+        if !matches!(interval, 0 | 3 | 4 | 7 | 8 | 9) { continue; }
+        let resolutions = [1, 2].map(|step| {
+            let pitch = last.pitch - step;
+            after.contains(pitch).then_some(pitch)
+        });
+        if resolutions.iter().all(Option::is_none) { continue; }
+        pending = Some(PreparedSuspension {
+            pitch: last.pitch, entered: at, harmony: after, resolutions,
+            expired: now - at >= 4.0 - 0.001,
+        });
+    }
+    pending.filter(|susp| {
+        if now <= susp.entered + 0.001 { return true; }
+        // A later resolution must follow a dissonance that actually sounded,
+        // not merely one that could have existed over a different inversion.
+        let bass = precomputed.history_by_channel.iter().flatten()
+            .filter(|n| n.start <= susp.entered + 0.001
+                && n.start + n.duration > susp.entered + 0.001)
+            .map(|n| n.pitch).min();
+        bass.map_or(false, |bass| PreparedSuspension { expired: false, ..*susp }.valid_over(bass))
+    })
 }
 
 /// Lead-voice pitch fixed by the input melody (same snap as the legacy
@@ -1199,17 +1380,11 @@ fn build_joint_voices(
         .map(|p| vec![p])
         .unwrap_or_default();
 
-    // Tendency tones are keyed to the tonic (the key root in effect at this
-    // group — see key_root_at) and to the root of the chord the voice's
-    // PREVIOUS pitch belonged to: at a bar line that is the previous bar, so
-    // step back a hair from this group's start before looking the root up.
     let group_start = group.first().map(|n| n.start).unwrap_or(0.0);
     let tonic = key_root_at(config, state, group_start);
-    let prev_root = if config.schillinger_progression && config.tendency_weight != 0.0 {
-        bar_root_pc(state, (group_start - 0.001).max(0.0))
-    } else {
-        None
-    };
+    let current_harmony = if config.schillinger_progression {
+        harmonic_event_at(state, group_start)
+    } else { None };
 
     // Rhythm-shaping context, shared by every voice in the group: where in the
     // bar this group falls, and the chord pcs the suspension terms test against.
@@ -1224,20 +1399,12 @@ fn build_joint_voices(
     // there): the candidate's transition INTO the opening pitch is judged like
     // any other bar line. The tendency test needs the tonic the wrap lands in
     // (the key at beat 0) and the root of the chord the candidate belongs to
-    // (this bar), mirroring tendency_term's prev/prev_root semantics.
+    // (this bar), mirroring tendency_term's source/destination semantics.
     let wrap_active = wrap_targets.is_some() && config.loop_wrap_weight != 0.0;
     let wrap_tonic = if wrap_active { key_root_at(config, state, 0.0) } else { 0 };
-    let wrap_root = if wrap_active && config.schillinger_progression {
-        bar_root_pc(state, group_start)
-    } else {
-        None
-    };
-    let cur_chord_pcs = if susp_active { bar_chord_pcs(state, group_start) } else { None };
-    let prev_chord_pcs = if susp_active {
-        bar_chord_pcs(state, (group_start - 0.001).max(0.0))
-    } else {
-        None
-    };
+    let wrap_harmony = if wrap_active && config.schillinger_progression {
+        harmonic_event_at(state, 0.0)
+    } else { None };
 
     // Chromatic-mode scale constraint as a pitch-class bitmask: entries are
     // offsets from the key root, so [0,2,4,5,7,9,11] is the major scale on
@@ -1257,11 +1424,21 @@ fn build_joint_voices(
             .and_then(|v| v.first())
             .copied();
 
+        let history = precomputed.history_by_channel.get(channel_idx)
+            .map(Vec::as_slice).unwrap_or(&[]);
+        let source_harmony = if config.schillinger_progression {
+            tendency_source(history, group_start, state)
+        } else { None };
+        let mut suspension = if susp_active {
+            prepared_suspension(history, group_start, state, precomputed)
+        } else { None };
+
         if note.channel == 0 && config.use_leading_voice {
             return JointVoice {
                 note: *note,
                 prev,
                 is_fixed_lead: true,
+                suspension,
                 cands: vec![JointCand {
                     pitch: lead_fixed.unwrap_or(note.pitch),
                     soft_base: 0.0,
@@ -1350,19 +1527,11 @@ fn build_joint_voices(
         let effective_hold_bonus =
             config.same_note_bonus * metric_mult * momentum_mult + density_term;
 
-        // ---- Suspension state ----
-        // A step-down resolution must exist for the dissonant hold to read as a
-        // suspension rather than a stranded wrong note.
-        let has_step_down = candidates.contains(&(last_note - 1))
-            || candidates.contains(&(last_note - 2));
-        // The previous note was a HOLD into a pitch foreign to its bar's chord:
-        // the preparation-suspension half of the gesture. The repeat requirement
-        // stands in for "prepared" (the pitch was struck earlier, when it fit).
-        let suspended = susp_active
-            && current_lasts.len() >= 2
-            && current_lasts[0] == current_lasts[1]
-            && prev_chord_pcs.as_ref()
-                .map_or(false, |pcs| !pcs.contains(&last_note.rem_euclid(12)));
+        if let Some(susp) = &mut suspension {
+            for target in &mut susp.resolutions {
+                if target.map_or(false, |p| !candidates.contains(&p)) { *target = None; }
+            }
+        }
 
         // A voice-contour that exists switches the spring's anchor to
         // "input pitch + sampled offset"; a missing or empty row means offset 0,
@@ -1400,7 +1569,9 @@ fn build_joint_voices(
             let mut terms = CandTerms {
                 smoothness: melodic_distance_score(last_note, c, note.channel) * w_smooth,
                 melody_force: melody_force_term(c, &current_lasts, eff_melody_force),
-                tendency: tendency_term(last_note, c, tonic, prev_root, config.tendency_weight),
+                tendency: if prev.is_some() {
+                    tendency_term(last_note, c, tonic, source_harmony, current_harmony, config.tendency_weight)
+                } else { 0.0 },
                 ..CandTerms::default()
             };
             if let Some((_, di)) = echo_ref {
@@ -1425,7 +1596,7 @@ fn build_joint_voices(
                 // one that lands on the tonic at bar 0).
                 terms.loop_wrap = config.loop_wrap_weight
                     * (melodic_distance_score(c, target, note.channel)
-                        + tendency_term(c, target, wrap_tonic, wrap_root, 1.0));
+                        + tendency_term(c, target, wrap_tonic, current_harmony, wrap_harmony, 1.0));
             }
             let mut soft_base = terms.smoothness;
             soft_base += terms.melody_force;
@@ -1435,23 +1606,6 @@ fn build_joint_voices(
             if c == last_note && off_scale_hold {
                 soft_base -= OFF_SCALE_HOLD_PENALTY;
                 terms.off_scale_hold = -OFF_SCALE_HOLD_PENALTY;
-            }
-
-            if let Some(pcs) = &cur_chord_pcs {
-                let c_in_chord = pcs.contains(&c.rem_euclid(12));
-                if c == last_note && !c_in_chord && has_step_down {
-                    // Dissonant hold with an available step-down: price it as a
-                    // suspension, not a wrong note (partial offset of the
-                    // harmony-matrix penalty it still takes).
-                    terms.suspension = config.suspension_tolerance;
-                } else if suspended
-                    && c_in_chord
-                    && (last_note - c == 1 || last_note - c == 2)
-                {
-                    // The resolution: step down onto a chord tone.
-                    terms.suspension = config.suspension_resolve_bonus;
-                }
-                soft_base += terms.suspension;
             }
 
             if config.voice_contour_weight != 0.0 {
@@ -1492,7 +1646,7 @@ fn build_joint_voices(
             JointCand { pitch: c, soft_base, lead_term, nonlead_term, terms }
         }).collect();
 
-        JointVoice { note: *note, prev, is_fixed_lead: false, cands }
+        JointVoice { note: *note, prev, is_fixed_lead: false, cands, suspension }
     }).collect()
 }
 
@@ -1521,6 +1675,7 @@ fn group_weights(group_start: f64, config: &Config, state: &HarmonizerState) -> 
 /// sonority, so the chord-scoring hot loop is pure index lookups. `soft`/`forbidden`
 /// are flat `m × m` tables indexed by `idx_of[pitch]`.
 struct PairTable {
+    forbidden_classes: [bool; 12],
     pitches: Vec<i32>,
     idx_of: HashMap<i32, usize>,
     m: usize,
@@ -1555,7 +1710,7 @@ impl PairTable {
             }
         }
         let sustaining_idx = precomputed.sustaining_notes.iter().map(|p| idx_of[p]).collect();
-        Self { pitches, idx_of, m, soft, forbidden, sustaining_idx }
+        Self { pitches, idx_of, m, soft, forbidden, sustaining_idx, forbidden_classes: row.forbidden }
     }
 }
 
@@ -1660,6 +1815,24 @@ fn doubling_balance(pc_count: &[u8; 12], root: i32, leading_tone_pc: i32) -> i32
     root_dup - lt_dup - seventh_dup
 }
 
+/// Channel order is soprano → bass. Historical overlap and simultaneous
+/// crossing are separate tests; exact unisons retain their existing constraint.
+fn voices_cross(ch_a: i32, pitch_a: i32, ch_b: i32, pitch_b: i32) -> bool {
+    (ch_a < ch_b && pitch_a < pitch_b) || (ch_a > ch_b && pitch_a > pitch_b)
+}
+
+fn sustaining_suspensions(
+    config: &Config, state: &HarmonizerState, pre: &PrecomputedHarmonyData, start: f64,
+) -> Vec<Option<PreparedSuspension>> {
+    pre.sustaining_events.iter().map(|n| {
+        if !config.schillinger_progression
+            || (config.suspension_tolerance == 0.0 && config.suspension_resolve_bonus == 0.0) {
+            return None;
+        }
+        prepared_suspension(pre.history_by_channel.get(n.channel as usize)?, start, state, pre)
+    }).collect()
+}
+
 /// Scores complete chords (one candidate index per voice) against a prebuilt
 /// `PairTable`. Holds only borrows, so it is cheap to share across rayon workers.
 struct ChordScorer<'a> {
@@ -1667,6 +1840,8 @@ struct ChordScorer<'a> {
     n: usize,
     table: &'a PairTable,
     sustaining_notes: &'a [i32],
+    sustaining_events: &'a [Note],
+    sustaining_suspensions: &'a [Option<PreparedSuspension>],
     ending_by_channel: &'a HashMap<i32, i32>,
     check_dir: bool,
     w_harmony: f64,
@@ -1725,6 +1900,22 @@ fn cadence_weight_for_group(
 }
 
 impl ChordScorer<'_> {
+    /// Only a prepared suspension may license a forbidden pair, and only if
+    /// a retained step-down target removes that clash. Other dissonances in
+    /// the chord still receive their ordinary hard violations.
+    fn suspension_licenses_pair(
+        &self, pitch: i32, other: i32, bass: i32, suspension: Option<PreparedSuspension>,
+    ) -> bool {
+        suspension.map_or(false, |s| {
+            pitch == s.pitch && s.valid_over(bass) && s.harmony.contains(other)
+                && s.resolutions.iter().flatten().any(|&to| {
+                    s.resolves_over(to, bass)
+                        && !self.table.forbidden_classes[((to - other).abs() % 12) as usize]
+                        && to != other
+                })
+        })
+    }
+
     /// `(hard violations, soft score)` for one complete chord — the search
     /// hot path, evaluated untraced.
     #[inline]
@@ -1757,7 +1948,6 @@ impl ChordScorer<'_> {
             sink.voice_term(i, "off_scale_hold", c.terms.off_scale_hold);
             sink.voice_term(i, "contour_spring", c.terms.contour_spring);
             sink.voice_term(i, "crossing_penalty", c.terms.crossing_penalty);
-            sink.voice_term(i, "suspension", c.terms.suspension);
             sink.voice_term(i, "phrase_echo", c.terms.phrase_echo);
             sink.voice_term(i, "loop_wrap", c.terms.loop_wrap);
             if !v.is_fixed_lead {
@@ -1796,6 +1986,22 @@ impl ChordScorer<'_> {
         for &s in self.sustaining_notes {
             bass = bass.min(s);
         }
+        for (i, (v, &ci)) in voices.iter().zip(chosen).enumerate() {
+            if let Some(suspension) = v.suspension {
+                let term = suspension.term(v.cands[ci].pitch, bass, v.note.start, self.config);
+                soft += term;
+                sink.voice_term(i, "suspension", term);
+            }
+        }
+        // Sustained voices do not have a candidate at this onset, but their
+        // dissonance still needs preparation and may not be prolonged forever.
+        for (note, suspension) in self.sustaining_events.iter().zip(self.sustaining_suspensions) {
+            if let Some(suspension) = suspension {
+                let term = suspension.term(note.pitch, bass, voices[0].note.start, self.config);
+                soft += term;
+                sink.term("sustaining_suspension", term);
+            }
+        }
         let mut sum = 0.0;
         let mut worst = f64::INFINITY;
         let mut cnt = 0usize;
@@ -1806,13 +2012,19 @@ impl ChordScorer<'_> {
             let ii = t.idx_of[&pi];
             for j in (i + 1)..n {
                 let pj = voices[j].cands[chosen[j]].pitch;
+                if voices_cross(voices[i].note.channel, pi, voices[j].note.channel, pj) {
+                    soft -= self.config.no_crossing;
+                    sink.term("voice_crossing", -self.config.no_crossing);
+                }
                 if pi == pj {
                     hard += 1; // exact unison collision between two voices
                     sink.hard("unison_collision", 1);
                     continue;
                 }
                 let k = ii * m + t.idx_of[&pj];
-                if t.forbidden[k] {
+                if t.forbidden[k]
+                    && !self.suspension_licenses_pair(pi, pj, bass, voices[i].suspension)
+                    && !self.suspension_licenses_pair(pj, pi, bass, voices[j].suspension) {
                     hard += 1;
                     sink.hard("forbidden_interval", 1);
                 }
@@ -1827,15 +2039,21 @@ impl ChordScorer<'_> {
                     bass_cnt += 1;
                 }
             }
-            for &sj in &t.sustaining_idx {
+            for (si, &sj) in t.sustaining_idx.iter().enumerate() {
                 let pj = t.pitches[sj];
+                if voices_cross(voices[i].note.channel, pi, self.sustaining_events[si].channel, pj) {
+                    soft -= self.config.no_crossing;
+                    sink.term("voice_crossing", -self.config.no_crossing);
+                }
                 if pi == pj {
                     hard += 1;
                     sink.hard("unison_collision", 1);
                     continue;
                 }
                 let k = ii * m + sj;
-                if t.forbidden[k] {
+                if t.forbidden[k]
+                    && !self.suspension_licenses_pair(pi, pj, bass, voices[i].suspension)
+                    && !self.suspension_licenses_pair(pj, pi, bass, self.sustaining_suspensions[si]) {
                     hard += 1;
                     sink.hard("forbidden_interval", 1);
                 }
@@ -2166,26 +2384,45 @@ impl ChordScorer<'_> {
                 for (ci, cand) in self.voices[vi].cands.iter().enumerate() {
                     let mut h = *hard;
                     let mut s = *soft + cand.soft_base + cand.nonlead_term;
+                    let bass = part.iter().enumerate()
+                        .map(|(pos, &cj)| self.voices[order[pos]].cands[cj].pitch)
+                        .chain(self.sustaining_notes.iter().copied())
+                        .chain(std::iter::once(cand.pitch)).min().unwrap();
+                    if let Some(suspension) = self.voices[vi].suspension {
+                        s += suspension.term(cand.pitch, bass, self.voices[vi].note.start, self.config);
+                    }
                     let ii = t.idx_of[&cand.pitch];
                     for (pos, &cj) in part.iter().enumerate() {
-                        let pj = self.voices[order[pos]].cands[cj].pitch;
+                        let other_voice = &self.voices[order[pos]];
+                        let pj = other_voice.cands[cj].pitch;
+                        if voices_cross(self.voices[vi].note.channel, cand.pitch, other_voice.note.channel, pj) {
+                            s -= self.config.no_crossing;
+                        }
                         if pj == cand.pitch {
                             h += 1;
                             continue;
                         }
                         let k = ii * m + t.idx_of[&pj];
-                        if t.forbidden[k] {
+                        if t.forbidden[k]
+                            && !self.suspension_licenses_pair(cand.pitch, pj, bass, self.voices[vi].suspension)
+                            && !self.suspension_licenses_pair(pj, cand.pitch, bass, other_voice.suspension) {
                             h += 1;
                         }
                         s += t.soft[k];
                     }
-                    for &sj in &t.sustaining_idx {
+                    for (si, &sj) in t.sustaining_idx.iter().enumerate() {
+                        if voices_cross(self.voices[vi].note.channel, cand.pitch,
+                            self.sustaining_events[si].channel, t.pitches[sj]) {
+                            s -= self.config.no_crossing;
+                        }
                         if t.pitches[sj] == cand.pitch {
                             h += 1;
                             continue;
                         }
                         let k = ii * m + sj;
-                        if t.forbidden[k] {
+                        if t.forbidden[k]
+                            && !self.suspension_licenses_pair(cand.pitch, t.pitches[sj], bass, self.voices[vi].suspension)
+                            && !self.suspension_licenses_pair(t.pitches[sj], cand.pitch, bass, self.sustaining_suspensions[si]) {
                             h += 1;
                         }
                         s += t.soft[k];
@@ -2306,11 +2543,14 @@ fn score_group_options(
 
     let (root_pc, root_quality, agg) = root_and_agg(group[0].start, config, state, &row);
 
+    let sustained = sustaining_suspensions(config, state, precomputed, group[0].start);
     let scorer = ChordScorer {
         voices: &voices,
         n,
         table: &table,
         sustaining_notes: &precomputed.sustaining_notes,
+        sustaining_events: &precomputed.sustaining_events,
+        sustaining_suspensions: &sustained,
         ending_by_channel: &ending_by_channel,
         check_dir,
         w_harmony,
@@ -2624,11 +2864,14 @@ fn explain_render(
             .collect();
         let check_dir = !ending_by_channel.is_empty() && config.same_direction != 0.0;
         let (root_pc, root_quality, agg) = root_and_agg(start_time, config, state, &row);
+        let sustained = sustaining_suspensions(config, state, &precomputed, start_time);
         let scorer = ChordScorer {
             voices: &voices,
             n: voices.len(),
             table: &table,
             sustaining_notes: &precomputed.sustaining_notes,
+            sustaining_events: &precomputed.sustaining_events,
+            sustaining_suspensions: &sustained,
             ending_by_channel: &ending_by_channel,
             check_dir,
             w_harmony,
@@ -3549,51 +3792,212 @@ mod tests {
         assert!(approx(hold_term_at(6.0, 60, &cfg, &behind), 2.0));
     }
 
-    #[test]
-    fn suspension_tolerates_dissonant_hold_and_rewards_step_down_resolution() {
-        let mut cfg = test_config();
-        cfg.schillinger_progression = true;
-        cfg.suspension_tolerance = 0.5;
-        cfg.suspension_resolve_bonus = 0.6;
+    /// Inspect a specified, reachable voicing using the production scorer.
+    fn inspect_voicing(
+        cfg: &Config, state: &HarmonizerState, context: &[Note], group: &[Note],
+    ) -> TraceCollector {
+        with_scorer(cfg, state, context, group, |scorer| {
+            let chosen: Vec<_> = scorer.voices.iter().map(|v| {
+                v.cands.iter().position(|c| c.pitch == v.note.pitch)
+                    .expect("test voicing must be reachable")
+            }).collect();
+            let mut trace = TraceCollector::with_voices(group.len());
+            let result = scorer.eval_with(&chosen, &mut trace);
+            assert_eq!(result, scorer.eval(&chosen));
+            let sum = trace.chord_terms.iter().chain(trace.voice_terms.iter().flatten())
+                .map(|t| t.value).sum::<f64>();
+            assert!((sum - result.1).abs() < 1e-8, "trace must account for the whole score");
+            trace
+        })
+    }
+
+    fn with_scorer<R>(
+        cfg: &Config, state: &HarmonizerState, context: &[Note], group: &[Note],
+        f: impl FnOnce(&ChordScorer<'_>) -> R,
+    ) -> R {
+        let start = group[0].start;
+        let pre = build_precomputed_data(context, group, start, None);
+        let (w_harmony, w_smooth, ctx) = group_weights(start, cfg, state);
+        let row = get_harmony_row(ctx, state.harmony_matrix.as_ref());
+        let voices = build_joint_voices(group, w_smooth, cfg, state, &pre, None);
+        let table = PairTable::build(&voices, &pre, &row, cfg.roughness_weight);
+        let sustained = sustaining_suspensions(cfg, state, &pre, start);
+        let (root_pc, root_quality, agg) = root_and_agg(start, cfg, state, &row);
+        let ending_by_channel = pre.notes_ending_at_start.iter().map(|n| (n.channel, n.pitch)).collect();
+        f(&ChordScorer {
+            voices: &voices, n: voices.len(), table: &table,
+            sustaining_notes: &pre.sustaining_notes,
+            sustaining_events: &pre.sustaining_events, sustaining_suspensions: &sustained,
+            ending_by_channel: &ending_by_channel, check_dir: cfg.same_direction != 0.0,
+            w_harmony, agg, root_quality, root_pc, chord_masks: None,
+            cadence_w: cadence_weight_for_group(start, cfg, state, root_pc),
+            leading_tone_pc: (key_root_at(cfg, state, start) + 11).rem_euclid(12), config: cfg,
+        })
+    }
+
+    fn named_term(terms: &[crate::trace::Term], name: &str) -> f64 {
+        terms.iter().filter(|t| t.name == name).map(|t| t.value).sum()
+    }
+
+    fn suspension_fixture() -> (Config, HarmonizerState, Vec<Note>) {
+        let cfg = Config { schillinger_progression: true, candidate_range: 24, ..test_config() };
         let mut state = test_state();
-        // Bar 0: C major, bar 1: D minor. Holding E (pc 4) into bar 1 is the
-        // suspension; stepping down to D (pc 2) is the resolution.
-        state.schillinger_notes = vec![vec![vec![0, 4, 7], vec![2, 5, 9]]];
-
-        // At the bar line: E was struck twice in bar 0, held into D minor.
-        let ctx = vec![
-            Note::new(64, 3.0, 0.5, 100, 0, 1),
-            Note::new(64, 3.5, 0.5, 100, 0, 1),
+        // G → Am/C. B is prepared over G, then forms a 7–6 suspension over C.
+        state.schillinger_notes = vec![vec![vec![7, 11, 2], vec![9, 0, 4]]];
+        let context = vec![
+            Note::new(71, 3.0, 1.0, 100, 0, 1),
+            Note::new(55, 3.0, 1.0, 100, 0, 4),
         ];
-        let group = vec![Note::new(64, 4.0, 0.5, 100, 0, 1)];
-        let pre = build_precomputed_data(&ctx, &group, 4.0, None);
-        let voices = build_joint_voices(&group, 1.0, &cfg, &state, &pre, None);
-        let hold = voices[0].cands.iter().find(|c| c.pitch == 64).unwrap();
-        assert!(
-            approx(hold.terms.suspension, 0.5),
-            "dissonant hold should earn the tolerance, got {}",
-            hold.terms.suspension
-        );
+        (cfg, state, context)
+    }
 
-        // One group later, still in bar 1: the held E is now a suspension state;
-        // D (down a whole step, chord tone) earns the resolution bonus.
-        let ctx2 = vec![
-            Note::new(64, 3.5, 0.5, 100, 0, 1),
-            Note::new(64, 4.0, 0.5, 100, 0, 1),
-        ];
-        let group2 = vec![Note::new(64, 4.5, 0.5, 100, 0, 1)];
-        let pre2 = build_precomputed_data(&ctx2, &group2, 4.5, None);
-        let voices2 = build_joint_voices(&group2, 1.0, &cfg, &state, &pre2, None);
-        let resolve = voices2[0].cands.iter().find(|c| c.pitch == 62).expect("D candidate");
-        assert!(
-            approx(resolve.terms.suspension, 0.6),
-            "step-down resolution should earn the bonus, got {}",
-            resolve.terms.suspension
-        );
-        // A leap away from the suspension earns nothing.
-        if let Some(leap) = voices2[0].cands.iter().find(|c| c.pitch == 57) {
-            assert!(approx(leap.terms.suspension, 0.0));
+    #[test]
+    fn prepared_suspensions_hold_and_resolve_against_the_actual_bass() {
+        for (src, dst, prepared, resolved, old_bass, bass) in [
+            (vec![5, 9, 0], vec![0, 4, 7], 65, 64, 53, 48), // 4–3
+            (vec![7, 11, 2], vec![9, 0, 4], 71, 69, 55, 48), // 7–6
+            (vec![0, 4, 7], vec![2, 5, 9], 64, 62, 48, 50), // 9–8
+        ] {
+            let (cfg, mut state, _) = suspension_fixture();
+            state.schillinger_notes = vec![vec![src, dst]];
+            let mut context = vec![Note::new(prepared, 3.0, 1.0, 100, 0, 1),
+                Note::new(old_bass, 3.0, 1.0, 100, 0, 4)];
+            let group = vec![Note::new(prepared, 4.0, 0.5, 100, 0, 1),
+                Note::new(bass, 4.0, 1.0, 100, 0, 4)];
+            let held = inspect_voicing(&cfg, &state, &context, &group);
+            assert_eq!(named_term(&held.voice_terms[0], "suspension"), cfg.suspension_tolerance);
+            assert!(!held.hard.iter().any(|h| h.name == "forbidden_interval"));
+            context.extend(group);
+            let resolved_group = [Note::new(resolved, 4.5, 0.5, 100, 0, 1)];
+            let resolved_trace = inspect_voicing(&cfg, &state, &context, &resolved_group);
+            assert_eq!(named_term(&resolved_trace.voice_terms[0], "suspension"), cfg.suspension_resolve_bonus);
         }
+    }
+
+    #[test]
+    fn repeated_wrong_notes_and_rest_separated_notes_are_not_preparations() {
+        let (cfg, state, context) = suspension_fixture();
+        let group = [Note::new(71, 4.0, 0.5, 100, 0, 1), Note::new(48, 4.0, 1.0, 100, 0, 4)];
+        let mut wrong = context.clone();
+        wrong[0].start = 4.0;
+        wrong[0].duration = 0.25;
+        wrong.push(Note::new(71, 4.25, 0.25, 100, 0, 1));
+        let later = [Note::new(71, 4.5, 0.5, 100, 0, 1), Note::new(48, 4.5, 1.0, 100, 0, 4)];
+        let mut gap = context;
+        gap[0].duration = 0.5;
+        for (ctx, notes) in [(&wrong, later.as_slice()), (&gap, group.as_slice())] {
+            let trace = inspect_voicing(&cfg, &state, ctx, notes);
+            assert_eq!(named_term(&trace.voice_terms[0], "suspension"), 0.0);
+            assert!(trace.hard.iter().any(|h| h.name == "forbidden_interval"));
+        }
+    }
+
+    #[test]
+    fn suspension_abandonment_is_penalized_and_repeat_holds_earn_no_extra_bonus() {
+        let (cfg, state, mut context) = suspension_fixture();
+        context.extend([Note::new(71, 4.0, 0.5, 100, 0, 1), Note::new(48, 4.0, 4.0, 100, 0, 4)]);
+        for (pitch, expected) in [(71, 0.0), (76, -cfg.suspension_resolve_bonus)] {
+            let trace = inspect_voicing(&cfg, &state, &context, &[Note::new(pitch, 4.5, 0.5, 100, 0, 1)]);
+            assert_eq!(named_term(&trace.voice_terms[0], "suspension"), expected);
+        }
+        // Expiration survives a long sequence of rearticulations, beyond the
+        // five-note repetition window, and revokes the forbidden-pair license.
+        for i in 1..8 { context.push(Note::new(71, 4.0 + i as f64 * 0.5, 0.5, 100, 0, 1)); }
+        let trace = inspect_voicing(&cfg, &state, &context,
+            &[Note::new(71, 8.0, 0.5, 100, 0, 1), Note::new(48, 8.0, 1.0, 100, 0, 4)]);
+        assert_eq!(named_term(&trace.voice_terms[0], "suspension"), -cfg.suspension_resolve_bonus);
+    }
+
+    #[test]
+    fn sustaining_suspension_is_recognized_when_only_the_bass_has_an_onset() {
+        let (cfg, state, mut context) = suspension_fixture();
+        context[0].duration = 2.0; // one continuous note, no repeated onset at the change
+        let trace = inspect_voicing(&cfg, &state, &context, &[Note::new(48, 4.0, 1.0, 100, 0, 4)]);
+        assert_eq!(named_term(&trace.chord_terms, "sustaining_suspension"), cfg.suspension_tolerance);
+        assert!(!trace.hard.iter().any(|h| h.name == "forbidden_interval"));
+    }
+
+    #[test]
+    fn suspension_does_not_license_unrelated_clashes_or_an_unreachable_resolution() {
+        let (cfg, state, context) = suspension_fixture();
+        let group = [Note::new(71, 4.0, 0.5, 100, 0, 1), Note::new(48, 4.0, 1.0, 100, 0, 4)];
+        with_scorer(&cfg, &state, &context, &group, |scorer| {
+            let susp = scorer.voices[0].suspension.unwrap();
+            assert!(scorer.suspension_licenses_pair(71, 48, 48, Some(susp)));
+            assert!(!scorer.suspension_licenses_pair(71, 61, 48, Some(susp)), "C# is not a chord tone");
+            assert!(!scorer.suspension_licenses_pair(71, 48, 48,
+                Some(PreparedSuspension { resolutions: [None, None], ..susp })));
+            assert!(!scorer.suspension_licenses_pair(71, 48, 48, None));
+        });
+        let mut off = cfg.clone();
+        off.suspension_tolerance = 0.0;
+        off.suspension_resolve_bonus = 0.0;
+        let trace = inspect_voicing(&off, &state, &context, &group);
+        assert!(trace.hard.iter().any(|h| h.name == "forbidden_interval"));
+    }
+
+    #[test]
+    fn consonant_hold_does_not_turn_into_a_suspension_resolution_retroactively() {
+        let (cfg, state, mut context) = suspension_fixture();
+        // At the change B/E forms a fifth. Moving the bass to C later cannot
+        // retroactively make that first interval a 7–6 suspension.
+        context.extend([Note::new(71, 4.0, 0.5, 100, 0, 1), Note::new(52, 4.0, 0.5, 100, 0, 4)]);
+        let group = [Note::new(69, 4.5, 0.5, 100, 0, 1), Note::new(48, 4.5, 0.5, 100, 0, 4)];
+        let trace = inspect_voicing(&cfg, &state, &context, &group);
+        assert_eq!(named_term(&trace.voice_terms[0], "suspension"), 0.0);
+    }
+
+    #[test]
+    fn changing_the_bass_does_not_erase_an_existing_resolution_obligation() {
+        let (cfg, state, mut context) = suspension_fixture();
+        context.extend([Note::new(71, 4.0, 0.5, 100, 0, 1), Note::new(48, 4.0, 0.5, 100, 0, 4)]);
+        let group = [Note::new(76, 4.5, 0.5, 100, 0, 1), Note::new(52, 4.5, 0.5, 100, 0, 4)];
+        let trace = inspect_voicing(&cfg, &state, &context, &group);
+        assert_eq!(named_term(&trace.voice_terms[0], "suspension"), -cfg.suspension_resolve_bonus);
+    }
+
+    #[test]
+    fn new_voice_order_is_checked_independently_of_historical_overlap() {
+        let cfg = Config { candidate_range: 24, no_crossing: 8.0, ..test_config() };
+        let state = test_state();
+        let history = [Note::new(72, 3.0, 1.0, 100, 0, 0), Note::new(60, 3.0, 1.0, 100, 0, 1)];
+        // Both new notes clear the old neighboring pitch by two semitones.
+        // They nevertheless cross one another in the NEW chord.
+        let crossed = [Note::new(62, 4.0, 1.0, 100, 0, 0), Note::new(70, 4.0, 1.0, 100, 0, 1)];
+        let trace = inspect_voicing(&cfg, &state, &history, &crossed);
+        assert_eq!(named_term(&trace.chord_terms, "voice_crossing"), -8.0);
+        assert!(trace.voice_terms.iter().all(|ts| named_term(ts, "crossing_penalty") == 0.0));
+        // The very first chord also needs ordering, despite having no history.
+        let first = [Note::new(60, 0.0, 1.0, 100, 0, 0), Note::new(67, 0.0, 1.0, 100, 0, 1)];
+        assert_eq!(named_term(&inspect_voicing(&cfg, &state, &[], &first).chord_terms, "voice_crossing"), -8.0);
+        let mut off = cfg.clone();
+        off.no_crossing = 0.0;
+        assert_eq!(named_term(&inspect_voicing(&off, &state, &[], &first).chord_terms, "voice_crossing"), 0.0);
+    }
+
+    #[test]
+    fn voice_order_checks_include_sustaining_voices() {
+        let cfg = Config { candidate_range: 24, no_crossing: 8.0, ..test_config() };
+        let history = [Note::new(60, 3.0, 2.0, 100, 0, 0)];
+        let group = [Note::new(67, 4.0, 1.0, 100, 0, 1)];
+        let trace = inspect_voicing(&cfg, &test_state(), &history, &group);
+        assert_eq!(named_term(&trace.chord_terms, "voice_crossing"), -8.0);
+    }
+
+    #[test]
+    fn exhaustive_and_beam_search_both_avoid_crossed_voicings() {
+        let cfg = Config { candidate_range: 8, no_crossing: 100.0, ..test_config() };
+        let group = [Note::new(60, 0.0, 1.0, 100, 0, 0), Note::new(67, 0.0, 1.0, 100, 0, 1)];
+        with_scorer(&cfg, &test_state(), &[], &group, |scorer| {
+            for results in [scorer.enumerate_topk(3), scorer.beam_search_topk(3)] {
+                assert_eq!(results.len(), 3);
+                for (chosen, _) in results {
+                    let top = scorer.voices[0].cands[chosen[0]].pitch;
+                    let lower = scorer.voices[1].cands[chosen[1]].pitch;
+                    assert!(top > lower, "search retained a crossed/unison voicing: {top}, {lower}");
+                }
+            }
+        });
     }
 
     #[test]
@@ -3606,6 +4010,59 @@ mod tests {
         let notes = gen_voice(60, &vec![4.0], &[0], 1, 1, &cfg, &crate::contour::Contours::default());
         assert_eq!(notes.len(), 8, "one 4-beat bar at 0.5 = 8 notes");
         assert!(notes.iter().all(|n| approx(n.duration, 0.5)));
+    }
+
+    #[test]
+    fn swing_cycle_preserves_triplet_positions_through_many_bars() {
+        let cfg = Config {
+            pl: 4, render_length: 8, lattice_beats: 0.25,
+            voice_rhythm_patterns: vec![vec![2.0 / 3.0, 1.0 / 3.0]],
+            ..test_config()
+        };
+        let notes = gen_voice(60, &vec![4.0], &[0], 0, 1, &cfg, &Contours::default());
+        assert_eq!(notes.len(), 256);
+        for (beat, pair) in notes.chunks_exact(2).enumerate() {
+            assert!(approx(pair[0].start, beat as f64));
+            assert!(approx(pair[1].start, beat as f64 + 2.0 / 3.0));
+            assert!(approx(pair[0].duration, 2.0 / 3.0));
+            assert!(approx(pair[1].duration, 1.0 / 3.0));
+        }
+    }
+
+    #[test]
+    fn duration_cycle_splits_at_barlines_without_restarting_its_phase() {
+        let cfg = Config {
+            pl: 2, render_length: 1, voice_rhythm_patterns: vec![vec![3.0]],
+            ..test_config()
+        };
+        let notes = gen_voice(60, &vec![1.0], &[0, 2, 4], 0, 1, &cfg, &Contours::default());
+        let grid: Vec<_> = notes.iter().map(|n| (n.start, n.duration, n.pitch)).collect();
+        assert_eq!(grid, vec![(0.0, 3.0, 60), (3.0, 1.0, 62), (4.0, 2.0, 62), (6.0, 2.0, 64)]);
+    }
+
+    #[test]
+    fn duration_cycles_fall_back_per_voice_and_yield_to_generators() {
+        let mut cfg = Config {
+            pl: 1, render_length: 1,
+            voice_rhythm_patterns: vec![vec![0.5], vec![], vec![0.0], vec![f64::NAN], vec![-1.0]],
+            ..test_config()
+        };
+        for channel in 0..6 {
+            let notes = gen_voice(60, &vec![1.0], &[0], channel, 1, &cfg, &Contours::default());
+            assert_eq!(notes.len(), if channel == 0 { 8 } else { 4 });
+        }
+        cfg.rhythm_generators = vec![3, 2];
+        cfg.rhythm_unit = 0.5;
+        let notes = gen_voice(60, &vec![1.0], &[0], 0, 1, &cfg, &Contours::default());
+        assert_eq!(notes.iter().map(|n| n.start).collect::<Vec<_>>(), vec![0.0, 1.0, 1.5, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn old_configs_without_duration_cycles_still_deserialize() {
+        let mut json = serde_json::to_value(Config::default()).unwrap();
+        json.as_object_mut().unwrap().remove("voice_rhythm_patterns");
+        let cfg: Config = serde_json::from_value(json).unwrap();
+        assert!(cfg.voice_rhythm_patterns.is_empty());
     }
 
     #[test]
@@ -3805,18 +4262,18 @@ mod tests {
 
     #[test]
     fn tendency_zero_weight_is_noop() {
-        assert_eq!(tendency_term(59, 60, 0, Some(7), 0.0), 0.0);
+        assert_eq!(tendency_term(59, 60, 0, Some(HarmonicEvent::new(7, &[7, 11, 2, 5])), None, 0.0), 0.0);
     }
 
     #[test]
     fn tendency_leading_tone_resolves_up_to_the_tonic() {
         // Key of C: B (59) is the leading tone.
-        assert!(approx(tendency_term(59, 60, 0, None, 1.0), 1.0)); // up a semitone
-        assert!(approx(tendency_term(59, 55, 0, None, 1.0), -0.5)); // leaps away
-        assert!(approx(tendency_term(59, 59, 0, None, 1.0), 0.0)); // holding is neutral
+        assert!(approx(tendency_term(59, 60, 0, None, None, 1.0), 1.0)); // up a semitone
+        assert!(approx(tendency_term(59, 55, 0, None, None, 1.0), -0.5)); // leaps away
+        assert!(approx(tendency_term(59, 59, 0, None, None, 1.0), 0.0)); // holding is neutral
         // Stepping away (B → A) is an ordinary inner-voice escape, not a
         // frustrated leading tone — only leaps are penalized.
-        assert!(approx(tendency_term(59, 57, 0, None, 1.0), 0.0));
+        assert!(approx(tendency_term(59, 57, 0, None, None, 1.0), 0.0));
     }
 
     #[test]
@@ -3824,23 +4281,68 @@ mod tests {
         // Key of A minor: G (55) is a whole tone below the tonic, so the rule
         // never fires — no special-casing needed, the semitone test does it.
         for c in [56, 57, 53] {
-            assert!(approx(tendency_term(55, c, 9, None, 1.0), 0.0));
+            assert!(approx(tendency_term(55, c, 9, None, None, 1.0), 0.0));
         }
     }
 
     #[test]
     fn tendency_chordal_seventh_falls_by_step() {
         // F (65) is the minor 7th of a G7 chord (root pc 7).
-        assert!(approx(tendency_term(65, 64, 0, Some(7), 1.0), 1.0)); // down a semitone
-        assert!(approx(tendency_term(65, 63, 0, Some(7), 1.0), 1.0)); // down a whole tone
-        assert!(approx(tendency_term(65, 67, 0, Some(7), 1.0), -0.5)); // pushed upward
+        assert!(approx(tendency_term(65, 64, 0, Some(HarmonicEvent::new(7, &[7, 11, 2, 5])), None, 1.0), 1.0)); // down a semitone
+        assert!(approx(tendency_term(65, 63, 0, Some(HarmonicEvent::new(7, &[7, 11, 2, 5])), None, 1.0), 1.0)); // down a whole tone
+        assert!(approx(tendency_term(65, 67, 0, Some(HarmonicEvent::new(7, &[7, 11, 2, 5])), None, 1.0), -0.5)); // pushed upward
     }
 
     #[test]
-    fn tendency_ignores_the_major_seventh_as_a_chord_tone() {
-        // B (71) over a C root is a M7: as a chord tone it tends UP, so the
-        // falling-7th rule must not claim it.
-        assert!(approx(tendency_term(71, 69, 3, Some(0), 1.0), 0.0));
+    fn major_and_diminished_sevenths_resolve_as_chord_members() {
+        for (root, pcs, prev, next, dst_root, dst_pcs) in [
+            (5, vec![5, 9, 0, 4], 64, 62, 7, vec![7, 11, 2]), // Fmaj7 → G: E → D
+            (0, vec![0, 4, 7, 11], 71, 69, 5, vec![5, 9, 0]), // Cmaj7 → F: B → A
+            (11, vec![11, 2, 5, 8], 68, 67, 0, vec![0, 4, 7]), // Bdim7 → C: Ab → G
+        ] {
+            let src = Some(HarmonicEvent::new(root, &pcs));
+            let dst = Some(HarmonicEvent::new(dst_root, &dst_pcs));
+            assert_eq!(tendency_term(prev, next, 0, src, dst, 1.0), 1.0);
+            assert_eq!(tendency_term(prev, prev + 1, 0, src, dst, 1.0), -0.5);
+            assert_eq!(tendency_term(prev, next, 0, src, src, 1.0), 0.0,
+                "a prolongation must not demand a premature resolution");
+        }
+    }
+
+    #[test]
+    fn seventh_resolution_must_land_in_the_destination_chord() {
+        let src = Some(HarmonicEvent::new(7, &[7, 11, 2, 5]));
+        let dst = Some(HarmonicEvent::new(0, &[0, 4, 7]));
+        assert_eq!(tendency_term(65, 64, 0, src, dst, 1.0), 1.0);
+        assert_eq!(tendency_term(65, 63, 0, src, dst, 1.0), -0.5);
+    }
+
+    #[test]
+    fn seventh_source_role_survives_a_delayed_resolution_but_not_a_rest() {
+        let (cfg, mut state, _) = suspension_fixture();
+        state.schillinger_notes = vec![vec![vec![5, 9, 0, 4], vec![7, 11, 2]]];
+        let mut history = vec![Note::new(64, 3.0, 1.0, 100, 0, 1),
+            Note::new(64, 4.0, 0.5, 100, 0, 1)];
+        let group = [Note::new(62, 4.5, 0.5, 100, 0, 1)];
+        let trace = inspect_voicing(&cfg, &state, &history, &group);
+        assert_eq!(named_term(&trace.voice_terms[0], "tendency"), cfg.tendency_weight);
+        history[0].duration = 0.5; // the repeated E is now unprepared, after a rest
+        let trace = inspect_voicing(&cfg, &state, &history, &group);
+        assert_eq!(named_term(&trace.voice_terms[0], "tendency"), 0.0);
+    }
+
+    #[test]
+    fn added_sixth_is_not_a_diminished_seventh() {
+        assert_eq!(HarmonicEvent::new(0, &[0, 4, 7, 9]).seventh(), None);
+        assert_eq!(HarmonicEvent::new(0, &[0, 3, 7, 9]).seventh(), None);
+        assert_eq!(HarmonicEvent::new(0, &[0, 3, 6, 10]).seventh(), Some(10));
+    }
+
+    #[test]
+    fn applied_dominant_leading_tone_resolves_to_its_local_tonic() {
+        let src = Some(HarmonicEvent::new(2, &[2, 6, 9, 0]));
+        let dst = Some(HarmonicEvent::new(7, &[7, 11, 2]));
+        assert_eq!(tendency_term(66, 67, 0, src, dst, 1.0), 1.0);
     }
 
     // ----- root-aware chord scoring -----
@@ -4010,4 +4512,3 @@ mod tests {
         assert_ne!(g1.get(&4), g2.get(&4), "ch4 should have moved");
     }
 }
-

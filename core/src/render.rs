@@ -179,17 +179,20 @@ mod tests {
         hits as f64 / total.max(1) as f64
     }
 
-    /// Golden fingerprint of a default render per seed — guards the pure-core
-    /// refactor: any change here means the engine's output changed. Print with:
+    /// Golden fingerprint of a default render per seed. Baselines include the
+    /// prepared-suspension, chordal-seventh and simultaneous voice-order rules,
+    /// and the corrected seventh/added-sixth chord-member tables.
+    /// Any change here means the engine's output changed. Print with:
     ///   cargo test --release golden_fingerprint -- --nocapture
     #[test]
     fn golden_fingerprint() {
         let expected: [(f64, u64); 3] = [
-            (1.0, 0x30dc37bb66bdae6b),
-            (7.0, 0x23d114d753660393),
-            (42.0, 0xfad5ea6604dbaf05),
+            (1.0, 0x70f610d5b2c61d9a),
+            (7.0, 0xd6364cbb1a576dd1),
+            (42.0, 0x0fd373c422660213),
         ];
-        for (seed, want) in expected {
+        let mut actual = Vec::new();
+        for (seed, _) in expected {
             let mut cfg = default_config();
             cfg.rng_seed = seed;
             let (notes, _) = pipeline(&cfg);
@@ -204,8 +207,9 @@ mod tests {
             }
             let got = h.finish();
             println!("seed {seed}: {} notes, fingerprint {got:x}", notes.len());
-            assert_eq!(got, want, "seed {seed}: render output changed");
+            actual.push((seed, got));
         }
+        assert_eq!(actual, expected, "render output changed");
     }
 
     /// Musical read-out of a default render, for tuning by numbers rather than

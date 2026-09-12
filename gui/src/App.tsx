@@ -5,6 +5,8 @@ import CodeMirror, { keymap, Prec, EditorView, type Extension } from '@uiw/react
 import { javascript } from '@codemirror/lang-javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
 import './index.css'
+import { CHORD_LIST, CHORD_NAMES, HARMONY_MATRIX_ROWS, HARMONY_MATRIX_COLS, DEFAULT_HARMONY_MATRIX } from './harmony'
+import { createPreset, PRESET_INFO, type PresetName } from './presets'
 
 // Shared CodeMirror-based script editor. Used both docked at the bottom and
 // blown up to a fullscreen modal. `onRun` fires on ⌘/Ctrl+Enter.
@@ -72,32 +74,6 @@ function sameChord(a: number[], b: number[]): boolean {
   const sa = norm(a), sb = norm(b);
   return sa.length === sb.length && sa.every((v, i) => v === sb[i]);
 }
-
-const CHORD_LIST = [
-  [0,1,2], [0,1,2,4,5], [0,1,2,4,5],
-  [0,1,2,3,4], [0,1,2,3,4,5], [0,1,2,3,4,5,6]
-];
-
-// Harmony scoring matrix — 9 style rows × 12 interval columns.
-// Mirrors the built-in default in src/harmonizer.rs (HARMONY_MATRIX).
-const HARMONY_MATRIX_ROWS = [
-  'Classical', 'Jazz', 'Tension', 'Ethereal', 'Dark', 'Bright', 'Aggressive', 'Ancient', 'Neutral'
-];
-const HARMONY_MATRIX_COLS = ['P1', 'm2', 'M2', 'm3', 'M3', 'P4', 'TT', 'P5', 'm6', 'M6', 'm7', 'M7'];
-const DEFAULT_HARMONY_MATRIX: number[][] = [
-  // Row 0 STRICT CLASSICAL — the tritone is strongly disfavoured but NOT
-  // forbidden (-0.5): hard-forbidding it outlaws the dominant seventh and the
-  // diminished triad. Mirrors harmonizer::HARMONY_MATRIX; keep the two in sync.
-  [1.0, -100.0, -0.4, 0.8, 0.9, 0.5, -0.5, 1.0, 0.7, 0.8, -0.3, -100.0],
-  [0.6, 0.0, 0.7, 0.8, 0.9, 0.5, 0.6, 0.9, 0.5, 0.8, 1.0, 0.8],
-  [-0.2, 0.8, 0.2, -0.3, -0.3, -0.2, 1.0, 0.0, -0.3, -0.3, 0.5, 0.9],
-  [1.0, -100.0, 0.8, -0.2, 0.2, 1.0, -0.5, 1.0, 0.0, 0.5, 0.7, -0.4],
-  [1.0, -0.5, -0.1, 1.0, -0.2, 0.3, -0.2, 0.8, 0.6, 0.2, 0.5, -0.6],
-  [1.0, -0.7, 0.5, -0.1, 1.0, -0.2, 0.8, 0.9, 0.2, 0.6, -0.3, 0.6],
-  [-0.5, 1.0, 0.4, -0.6, -0.6, -0.4, 1.0, -0.5, -0.6, -0.6, 0.5, 1.0],
-  [1.0, -100.0, -100.0, -100.0, -100.0, 1.0, -100.0, 1.0, -100.0, -100.0, -100.0, -100.0],
-  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-];
 
 // Seed pitches for the 5 generated voices (high → low; voice 0 = leading).
 // Semitone offsets from the chord root, for the chord-structure builder.
@@ -240,6 +216,33 @@ function IntListField({ value, onChange, className, title, placeholder }: {
   );
 }
 
+// Beat durations accept decimals or fractions, including exact swing pairs.
+function FloatListField({ value, onChange }: {
+  value: number[];
+  onChange: (v: number[]) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return <input
+    type="text"
+    className="w-64 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-xs"
+    aria-label="Repeating beat durations"
+    placeholder="e.g. 2/3, 1/3; empty uses contour"
+    value={draft ?? value.map(n => n === 2 / 3 ? '2/3' : n === 1 / 3 ? '1/3' : String(n)).join(', ')}
+    onChange={e => {
+      const s = e.target.value;
+      setDraft(s);
+      const tokens = s.trim() === '' ? [] : s.trim().split(/[\s,]+/);
+      const parsed = tokens.map(token => {
+        const parts = token.split('/');
+        if (parts.some(p => p.trim() === '') || parts.length > 2) return NaN;
+        return Number(parts[0]) / (parts.length === 2 ? Number(parts[1]) : 1);
+      });
+      if (parsed.every(n => Number.isFinite(n) && n >= 0.001)) onChange(parsed);
+    }}
+    onBlur={() => setDraft(null)}
+  />;
+}
+
 // Schillinger rhythm resultant r(a÷b[÷c…]) — mirror of core's
 // schillinger::resultant, for the live pattern readout next to the generators.
 function resultantPattern(gens: number[]): number[] {
@@ -336,10 +339,12 @@ const TERM_INFO: Record<string, { label: string; tip: string }> = {
   tendency: { label: 'Tendency tone', tip: 'Leading tone resolving up to the tonic / chordal 7th resolving down by step (tendency_weight).' },
   off_scale_hold: { label: 'Off-scale hold', tip: 'Fixed penalty for holding a pitch that has left the current scale — only survives when the voice-change budget forces it.' },
   contour_spring: { label: 'Contour spring', tip: 'Quadratic pull toward the voice contour\'s target pitch (voice_contour_weight).' },
+  voice_crossing: { label: 'Voice crossing', tip: 'Penalty for crossing another voice in the selected chord, including sustaining voices (no_crossing).' },
+  sustaining_suspension: { label: 'Held suspension', tip: 'Preparation or overdue-resolution score for a voice already sounding at this event.' },
   crossing_penalty: { label: 'Crossing', tip: 'Candidate too close to a neighbouring voice\'s register (no_crossing, applied per violated side).' },
   leader_history: { label: 'Leader history', tip: 'This chord\'s LEADER takes the repeat penalties (last_note_same, last_note_exist_in_voice) so it keeps moving.' },
   hold_stickiness: { label: 'Hold stickiness', tip: 'Non-leader bonus for keeping a common tone (same_note_bonus), shaped by metric position, hold momentum, and onset density (metric_hold_strength / momentum_weight / density_weight). Stagnant voices lose it.' },
-  suspension: { label: 'Suspension', tip: 'Tolerance for holding a non-chord tone that can resolve down by step (suspension_tolerance), or the reward for that step-down resolution onto a chord tone (suspension_resolve_bonus).' },
+  suspension: { label: 'Suspension', tip: 'One-time allowance for a prepared 4–3, 7–6 or 9–8 suspension; reward for its resolution or penalty for abandonment/overholding. Both suspension weights at 0 disable it.' },
   phrase_echo: { label: 'Phrase echo', tip: 'Motif memory: reward for repeating the melodic interval this voice made one phrase (pl bars) earlier at the same position — exact match full weight, off-by-a-semitone partial (phrase_echo_weight). Transposition-tolerant, so sequences count.' },
   loop_wrap: { label: 'Loop wrap', tip: 'Final chord only: how well this voice\'s last pitch leads back into its own opening pitch when the clip loops — seam smoothness plus tendency resolution across the wrap (loop_wrap_weight).' },
   // hard violations
@@ -1104,598 +1109,11 @@ function App() {
     return progression;
   };
 
-  const applyPreset = (preset: 'jazz' | 'classical' | 'bach' | 'ambient' | 'trance') => {
+  const applyPreset = (preset: PresetName) => {
     if (!config) return;
-    const nc = { ...config };
-
-    if (preset === 'jazz') {
-      // Jazz: Dorian/Mixolydian modes, rich voicings, relaxed voice-leading, syncopation
-      nc.pl = 4;
-      nc.main_pitch = Math.floor(Math.random() * 12); // random key
-      nc.mode = 1; // Dorian
-      nc.lookahead_depth = 3;
-      nc.harmony_distance_balance = 0.35;
-      nc.rng_seed = Math.floor(Math.random() * 999999);
-
-      // Relaxed classical rules — jazz embraces parallel motion & voice
-      // overlap. Repeat/melodic terms live on the rescaled ±1 scale.
-      nc.last_note_exist_in_voice = 1.0;
-      nc.same_direction = 0.3;
-      nc.consecutive_octav_fift = 0.0; // parallel 5ths (and antiparallel octaves) are fine in jazz
-      nc.no_crossing = 1.5; // voice overlap tolerated
-      nc.last_note_same = 0.5;
-      nc.same_note_bonus = 0.5; // light hold bias: comping breathes, lines keep moving
-      nc.common_tone_penalty = 0.0;
-      nc.max_voices_changed = -1;
-      nc.min_voices_changed = -1;
-      nc.interval_exists_in_harmony = 0.5;
-      nc.chord_structure = [0, 1, 2, 3, 4, 5]; // full 7th chord voicings
-
-      // Root-aware harmony: jazz plays inversions and rootless voicings freely
-      // and avoids octave doublings, but guide-tone resolution (7th → 3rd) is
-      // the whole point of a ii-V-I, so tendency stays strong.
-      nc.root_position_weight = 0.3;
-      nc.root_doubling_weight = 0.0;
-      nc.chord_quality_weight = 1.0;
-      nc.tendency_weight = 0.8;
-      nc.roughness_weight = 0.4;
-
-      // Rhythm shaping: the metric profile is INVERTED a touch so pitch
-      // changes lean toward offbeats (syncopated comping, anticipations),
-      // momentum keeps lines running and held comps sustained, and
-      // suspensions are welcome — extensions that resolve are the idiom.
-      nc.metric_hold_strength = -0.4;
-      nc.momentum_weight = 0.7;
-      nc.density_weight = 0.5;
-      nc.lattice_beats = 0;
-      nc.suspension_tolerance = 0.8;
-      nc.suspension_resolve_bonus = 0.8;
-
-      // The preset writes its own progression — the generated progression
-      // would silently override it, and a custom matrix would override the
-      // style rows the matrix contour points at.
-      nc.schillinger_progression = true;
-      nc.use_generated_progression = false;
-      nc.harmony_matrix = DEFAULT_HARMONY_MATRIX.map(r => [...r]);
-
-      // Jazz progression: loop-friendly turnarounds — each 4-bar phrase
-      // starts on I and lands on V so the I resolution falls on bar 1 of
-      // the next iteration (across the loop seam).
-      // 0=I, 1=ii, 2=iii, 3=IV, 4=V, 5=vi, 6=vii
-      const jazzBars = nc.pl * nc.render_length; // 32 bars
-      const jazzPatterns = [
-        [0, 5, 1, 4],   // I-vi-ii-V (classic turnaround)
-        [0, 3, 1, 4],   // I-IV-ii-V (rhythm changes)
-        [0, 2, 5, 4],   // I-iii-vi-V
-        [0, 6, 1, 4],   // I-vii-ii-V
-        [0, 3, 5, 4],   // I-IV-vi-V
-        [0, 1, 3, 4],   // I-ii-IV-V
-        [0, 5, 3, 4],   // I-vi-IV-V
-        [0, 2, 1, 4],   // I-iii-ii-V
-      ];
-      nc.schillinger_sequence = [];
-      for (let i = 0; i < jazzBars; i += 4) {
-        const pat = jazzPatterns[Math.floor(Math.random() * jazzPatterns.length)];
-        nc.schillinger_sequence.push(...pat.slice(0, Math.min(4, jazzBars - i)));
-      }
-
-      // Contours
-      const steps = Math.ceil((nc.pl * 4 * nc.render_length) / nc.voice_contour_resolution);
-
-      // Harmony distance: medium-high tension with jazz push-pull
-      nc.harmony_distance_contour = Array.from({ length: steps }, (_, i) => {
-        const phase = i / steps;
-        return parseFloat((0.25 + 0.15 * Math.sin(phase * Math.PI * 3) + 0.05 * Math.sin(phase * Math.PI * 7)).toFixed(2));
-      });
-
-      // Mode: alternate Dorian(1) / Mixolydian(4) / Dorian / Aeolian(5) for color
-      nc.mode_contour = Array.from({ length: steps }, (_, i) => {
-        const section = Math.floor((i / steps) * 4);
-        return [1, 4, 1, 5][section] ?? 1;
-      });
-
-      // Chord structure: rich voicings throughout, thicker at climax — per voice
-      nc.chord_structure_contour = Array.from({ length: 16 }, () =>
-        Array.from({ length: steps }, (_, i) => {
-          const phase = i / steps;
-          return Math.round(3 + 2 * Math.sin(phase * Math.PI));
-        })
-      );
-
-      // Schillinger expansion: moderate, jazzier wider voicings — per voice, slight offset per voice
-      nc.schillinger_ex_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: steps }, (_, i) => {
-          const phase = i / steps;
-          return Math.round(3 + Math.sin(phase * Math.PI * 2 + v * 0.3));
-        })
-      );
-
-      // Rhythm: syncopated — mix of 8ths, dotted quarters, swung feel
-      const jazzSnaps = [0.5, 0.75, 1.0, 0.5, 0.75, 1.0, 2.0];
-      nc.voice_rhythm_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: steps }, (_, i) => {
-          const phase = i / steps;
-          const localPhase = (i % nc.pl) / nc.pl;
-          // Walking bass (channel 4 is the bass): steady quarter notes
-          if (v === 4) return 1.0;
-          // Lead (channel 0): longer, more lyrical
-          if (v === 0) return [1.0, 2.0, 0.75, 1.0][Math.floor(i % 4)];
-          // Comping voices: syncopated
-          return jazzSnaps[Math.floor((phase * 7 + localPhase * 3 + v) % jazzSnaps.length)];
-        })
-      );
-
-      // Voice pitch contour: gentle melodic motion around each voice's own
-      // register (channel 0 = lead on top, channel 4 = bass).
-      nc.voice_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: steps }, (_, i) => {
-          const phase = i / steps;
-          const base = v === 0 ? 3 : v === 4 ? -3 : 0;
-          return Math.round(base + 3 * Math.sin(phase * Math.PI * (2 + v * 0.3)));
-        })
-      );
-
-      // Harmony matrix: Jazz(1) base, dipping into Tension(2) at phrase peaks, Ethereal(3) for ballad sections
-      nc.harmony_matrix_contour = Array.from({ length: steps }, (_, i) => {
-        const phase = i / steps;
-        const section = Math.floor(phase * 4);
-        return [1, 2, 1, 3][section] ?? 1; // Jazz → Tension → Jazz → Ethereal
-      });
-
-      // Melody force: moderate-to-strong moving lines, peaking mid-phrase (0-1)
-      nc.melody_force_contour = Array.from({ length: 16 }, () => Array.from({ length: steps }, (_, i) => {
-        const tension = Math.sin((i / Math.max(steps - 1, 1)) * Math.PI);
-        return parseFloat((0.6 + tension * 0.3).toFixed(2));
-      }));
-
-    } else if (preset === 'classical') {
-      // Classical: Ionian/Aeolian modes, strict voice-leading, balanced phrases
-      nc.pl = 4;
-      nc.main_pitch = Math.floor(Math.random() * 12); // random key
-      nc.mode = 0; // Ionian (major)
-      nc.lookahead_depth = 3;
-      nc.harmony_distance_balance = 0.2;
-      nc.rng_seed = Math.floor(Math.random() * 999999);
-
-      // Strict classical voice-leading rules (rescaled ±1 melodic terms;
-      // rule penalties a few × the soft-score range are already prohibitive)
-      nc.last_note_exist_in_voice = 1.0;
-      nc.same_direction = 1.0; // encourage contrary motion
-      nc.consecutive_octav_fift = 5.0; // parallel AND antiparallel 5ths/octaves effectively banned
-      nc.no_crossing = 10.0; // strict voice separation
-      nc.last_note_same = 0.5;
-      nc.same_note_bonus = 1.0; // chorale hold bias: non-leaders keep common tones
-      nc.common_tone_penalty = 0.0;
-      nc.max_voices_changed = -1;
-      nc.min_voices_changed = -1;
-      // Lowered from 2.0: root doubling is now rewarded explicitly (below), and
-      // this term pushes the other way on exactly those octaves.
-      nc.interval_exists_in_harmony = 1.0;
-      nc.chord_structure = [0, 1, 2, 4]; // triads & simple 7ths
-
-      // Root-aware harmony: functional bass, classical doubling policy (double
-      // the root, never the leading tone), and strong tendency-tone resolution.
-      nc.root_position_weight = 2.0;
-      nc.root_doubling_weight = 1.0;
-      nc.chord_quality_weight = 1.5;
-      nc.tendency_weight = 1.5;
-      // 0.4, not higher: pure roughness ranks 4ths/5ths above 3rds, and at
-      // high weight it drains the thirds out of the texture entirely.
-      nc.roughness_weight = 0.4;
-
-      // Rhythm shaping: chorale meter — pitch changes land on strong beats,
-      // and the full preparation → suspension → resolution gesture (4-3, 7-6)
-      // is rewarded hard; the resolution outweighs the dissonant hold so
-      // suspensions never strand.
-      nc.metric_hold_strength = 0.8;
-      nc.momentum_weight = 0.4;
-      nc.density_weight = 0.5;
-      nc.lattice_beats = 0;
-      nc.suspension_tolerance = 0.6;
-      nc.suspension_resolve_bonus = 1.0;
-
-      // The preset writes its own progression and points at built-in matrix rows.
-      nc.schillinger_progression = true;
-      nc.use_generated_progression = false;
-      nc.harmony_matrix = DEFAULT_HARMONY_MATRIX.map(r => [...r]);
-
-      // Classical progressions: each 4-bar phrase starts on I and ends on V
-      // so the authentic cadence (V -> I) resolves across the loop boundary.
-      const classBars = nc.pl * nc.render_length;
-      const classicalPatterns = [
-        [0, 3, 0, 4],   // I-IV-I-V (prolonged tonic → dominant)
-        [0, 5, 3, 4],   // I-vi-IV-V (50s progression → cadence)
-        [0, 1, 3, 4],   // I-ii-IV-V (predominant approach)
-        [0, 3, 1, 4],   // I-IV-ii-V (circle of fifths)
-        [0, 2, 3, 4],   // I-iii-IV-V
-        [0, 5, 1, 4],   // I-vi-ii-V
-        [0, 2, 5, 4],   // I-iii-vi-V
-        [0, 4, 5, 4],   // I-V-vi-V (deceptive, returns to V)
-      ];
-      nc.schillinger_sequence = [];
-      for (let i = 0; i < classBars; i += 4) {
-        // Structured: exposition, development, recapitulation feel
-        const section = i / classBars;
-        let poolIdx: number;
-        if (section < 0.3) poolIdx = Math.floor(Math.random() * 3); // stable openings
-        else if (section < 0.7) poolIdx = 3 + Math.floor(Math.random() * 3); // development
-        else poolIdx = Math.floor(Math.random() * 2); // return to tonic
-        nc.schillinger_sequence.push(...classicalPatterns[poolIdx].slice(0, Math.min(4, classBars - i)));
-      }
-      // Final bar = V so the loop seam delivers the V -> I authentic cadence.
-      nc.schillinger_sequence[nc.schillinger_sequence.length - 1] = 4;
-
-      const steps = Math.ceil((nc.pl * 4 * nc.render_length) / nc.voice_contour_resolution);
-
-      // Harmony distance: classical arch — low tension at start/end, peak in middle
-      nc.harmony_distance_contour = Array.from({ length: steps }, (_, i) => {
-        const phase = i / steps;
-        return parseFloat((0.15 + 0.25 * Math.sin(phase * Math.PI)).toFixed(2));
-      });
-
-      // Mode: primarily Ionian(0), brief Aeolian(5) in development
-      nc.mode_contour = Array.from({ length: steps }, (_, i) => {
-        const phase = i / steps;
-        // Development section goes minor
-        return (phase > 0.35 && phase < 0.65) ? 5 : 0;
-      });
-
-      // Chord structure: triads expanding to 7ths at climax — per voice
-      nc.chord_structure_contour = Array.from({ length: 16 }, () =>
-        Array.from({ length: steps }, (_, i) => {
-          const phase = i / steps;
-          return Math.round(1 + 3 * Math.sin(phase * Math.PI));
-        })
-      );
-
-      // Schillinger expansion: moderate, wider at climax — per voice
-      nc.schillinger_ex_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: steps }, (_, i) => {
-          const phase = i / steps;
-          return Math.round(2 + 2 * Math.sin(phase * Math.PI) + (v % 2 === 0 ? 0 : 0.5));
-        })
-      );
-
-      // Rhythm: stately — mostly quarter and half notes, faster at climax
-      nc.voice_rhythm_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: steps }, (_, i) => {
-          const phase = i / steps;
-          const tension = Math.sin(phase * Math.PI);
-          // Higher voices move faster at climax
-          if (v <= 1) {
-            // Soprano/alto: quarters at rest, eighths at climax
-            return tension > 0.6 ? 0.5 : 1.0;
-          }
-          // Lower voices: half/whole notes, slightly faster at climax
-          return tension > 0.7 ? 1.0 : 2.0;
-        })
-      );
-
-      // Voice pitch contour: smooth, arched (channel 0 = soprano, 4 = bass;
-      // the bass arcs against the upper voices for contrary large-scale motion)
-      nc.voice_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: steps }, (_, i) => {
-          const phase = i / steps;
-          const base = v === 0 ? 4 : v === 3 ? -2 : v === 4 ? -5 : 0;
-          return Math.round(base + 4 * Math.sin(phase * Math.PI) * (v >= 3 ? -0.5 : 1));
-        })
-      );
-
-      // Harmony matrix: Strict Classical(0) base, Dark(4) in development, back to Classical(0)
-      nc.harmony_matrix_contour = Array.from({ length: steps }, (_, i) => {
-        const phase = i / steps;
-        if (phase > 0.35 && phase < 0.65) return 4; // Dark/Melancholic for development
-        return 0; // Strict Classical for exposition/recap
-      });
-
-      // Melody force: gentle stepwise pressure, easing at phrase boundaries (0-1)
-      nc.melody_force_contour = Array.from({ length: 16 }, () => Array.from({ length: steps }, (_, i) => {
-        const tension = Math.sin((i / Math.max(steps - 1, 1)) * Math.PI);
-        return parseFloat((0.3 + tension * 0.2).toFixed(2));
-      }));
-    } else if (preset === 'bach') {
-      // Bach: motor rhythm and line discipline. Constant 8th-note motion in
-      // the soprano over a chorale core, a walking bass in the development,
-      // circle-of-fifths sequences, suspensions at full strength, and strict
-      // counterpoint. Differs from Classical by MOTION: low hold bias + high
-      // momentum keep every line running instead of parking on common tones.
-      nc.pl = 4;
-      nc.main_pitch = Math.floor(Math.random() * 12);
-      // Major chorale or minor chorale — Aeolian gets the harmonic-minor V
-      // (raised leading tone on dominant bars) automatically.
-      nc.mode = Math.random() < 0.6 ? 0 : 5;
-      nc.lookahead_depth = 3;
-      nc.harmony_distance_balance = 0.2;
-      nc.rng_seed = Math.floor(Math.random() * 999999);
-
-      // Strict counterpoint: parallels banned, contrary motion strongly
-      // favoured, registers separated, and constant stepwise pressure on
-      // every line (melody_force is the Bach line discipline).
-      nc.last_note_exist_in_voice = 1.2;
-      nc.same_direction = 1.2;
-      nc.consecutive_octav_fift = 5.0;
-      nc.no_crossing = 10.0;
-      nc.last_note_same = 0.6;
-      nc.same_note_bonus = 0.4; // low: motion is the default, holds must earn it
-      nc.common_tone_penalty = 0.0;
-      nc.max_voices_changed = -1;
-      nc.min_voices_changed = 1;
-      nc.interval_exists_in_harmony = 1.0;
-      nc.melody_force = 0.8;
-      nc.chord_structure = [0, 1, 2, 4]; // triads & 7ths (V7, ii7)
-
-      // Functional bass, but freer than Classical: Bach walks through first
-      // inversions constantly, so the bass must be allowed off the root.
-      nc.root_position_weight = 0.8;
-      nc.root_doubling_weight = 1.0;
-      nc.chord_quality_weight = 1.5;
-      nc.tendency_weight = 1.5; // leading tones rise, 7ths fall — non-negotiable
-      nc.roughness_weight = 0.4;
-
-      // Rhythm shaping: the motor. Momentum high so a moving line keeps
-      // moving; metric moderate so marginal changes still favour beats; the
-      // suspension gesture at full strength — dissonant holds tolerated,
-      // step-down resolutions rewarded above everything else.
-      nc.metric_hold_strength = 0.5;
-      nc.momentum_weight = 0.8;
-      nc.density_weight = 0.5;
-      nc.lattice_beats = 0;
-      nc.suspension_tolerance = 0.8;
-      nc.suspension_resolve_bonus = 1.2;
-
-      nc.schillinger_progression = true;
-      nc.use_generated_progression = false;
-      nc.harmony_matrix = DEFAULT_HARMONY_MATRIX.map(r => [...r]);
-
-      // Progressions: chorale phrases and the signature circle-of-fifths
-      // sequence (I-IV-vii°-iii-vi-ii-V-I), every phrase closing onto a
-      // cadence. Final bar = V so the loop seam is an authentic cadence.
-      const bachBars = nc.pl * nc.render_length;
-      const bachPhrases = [
-        [0, 3, 4, 0],               // I-IV-V-I (chorale phrase)
-        [0, 1, 4, 0],               // I-ii-V-I
-        [5, 1, 4, 0],               // vi-ii-V-I
-        [0, 5, 3, 4],               // I-vi-IV-V (half cadence)
-        [0, 3, 6, 2, 5, 1, 4, 0],   // full circle of fifths (8 bars)
-      ];
-      nc.schillinger_sequence = [];
-      while (nc.schillinger_sequence.length < bachBars) {
-        const section = nc.schillinger_sequence.length / bachBars;
-        // Sequences belong in the development; plain phrases frame it.
-        const pool = section > 0.3 && section < 0.75 ? [3, 4] : [0, 1, 2];
-        const pat = bachPhrases[pool[Math.floor(Math.random() * pool.length)]];
-        nc.schillinger_sequence.push(...pat.slice(0, bachBars - nc.schillinger_sequence.length));
-      }
-      nc.schillinger_sequence[nc.schillinger_sequence.length - 1] = 4;
-
-      const bachSteps = Math.ceil((nc.pl * 4 * nc.render_length) / nc.voice_contour_resolution);
-
-      // Steady harmonic temperature — Bach's drama is linear, not textural.
-      nc.harmony_distance_contour = Array.from({ length: bachSteps }, (_, i) => {
-        const phase = i / bachSteps;
-        return parseFloat((0.15 + 0.1 * Math.sin(phase * Math.PI)).toFixed(2));
-      });
-      // One mode throughout — the progression supplies the colour.
-      nc.mode_contour = Array.from({ length: bachSteps }, () => nc.mode);
-      // Strict Classical matrix row, flat.
-      nc.harmony_matrix_contour = Array.from({ length: bachSteps }, () => 0);
-      // Triads, 7ths through the sequence-heavy middle.
-      nc.chord_structure_contour = Array.from({ length: 16 }, () =>
-        Array.from({ length: bachSteps }, (_, i) => {
-          const phase = i / bachSteps;
-          return phase > 0.3 && phase < 0.75 ? 1 : 0;
-        }));
-      nc.schillinger_ex_contour = Array.from({ length: 16 }, () =>
-        Array.from({ length: bachSteps }, () => 2));
-
-      // The texture (steps are bars at the default 4-beat resolution):
-      // soprano runs 8ths (the motor) and broadens to quarters on the
-      // cadence bar of each phrase; alto/tenor hold the chorale in quarters;
-      // the bass walks 8ths through the development, quarters elsewhere.
-      nc.voice_rhythm_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: bachSteps }, (_, i) => {
-          const cadenceBar = i % nc.pl === nc.pl - 1;
-          const phase = i / bachSteps;
-          if (v === 0) return cadenceBar ? 1.0 : 0.5;
-          if (v === 4) return (phase > 0.3 && phase < 0.75 && !cadenceBar) ? 0.5 : 1.0;
-          return 1.0;
-        }));
-
-      // Registers stay put; a gentle arch, bass in contrary motion.
-      nc.voice_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: bachSteps }, (_, i) => {
-          const phase = i / bachSteps;
-          const arch = 3 * Math.sin(phase * Math.PI);
-          return Math.round(v === 4 ? -arch * 0.7 : v === 0 ? arch : 0);
-        }));
-
-      // Constant line pressure — every voice, all the time. This is the
-      // stepwise discipline; it eases only slightly at the edges.
-      nc.melody_force_contour = Array.from({ length: 16 }, () =>
-        Array.from({ length: bachSteps }, (_, i) => {
-          const tension = Math.sin((i / Math.max(bachSteps - 1, 1)) * Math.PI);
-          return parseFloat((0.7 + 0.2 * tension).toFixed(2));
-        }));
-    } else if (preset === 'ambient') {
-      // Ambient: Lydian float over the Ethereal matrix row, glacial harmonic
-      // rhythm, deep hold bias with a 1-voice change budget — the texture
-      // drifts one voice at a time instead of progressing.
-      nc.pl = 4;
-      nc.main_pitch = Math.floor(Math.random() * 12);
-      nc.mode = 3; // Lydian
-      nc.lookahead_depth = 2;
-      nc.harmony_distance_balance = 0.1;
-      nc.rng_seed = Math.floor(Math.random() * 999999);
-
-      nc.last_note_exist_in_voice = 0.3;
-      nc.same_direction = 0.0;
-      nc.consecutive_octav_fift = 0.0;
-      nc.no_crossing = 2.0;
-      nc.last_note_same = 0.1;
-      nc.same_note_bonus = 3.0; // deep hold bias — the pad sound
-      nc.common_tone_penalty = 0.0;
-      nc.interval_exists_in_harmony = 0.0; // octave doublings welcome
-      nc.max_voices_changed = 1; // at most one voice moves per chord
-      nc.min_voices_changed = -1;
-      nc.chord_structure = [0, 1, 2];
-
-      nc.root_position_weight = 0.3;
-      nc.root_doubling_weight = 0.0;
-      nc.chord_quality_weight = 0.5;
-      nc.tendency_weight = 0.0; // no functional pull — stasis is the point
-      nc.roughness_weight = 0.6;
-
-      // Rhythm shaping: meterless float — no metric profile, no momentum
-      // push (overheld voices are the sound, not a problem), and dissonant
-      // holds welcome as colour with no hurry to resolve.
-      nc.metric_hold_strength = 0.0;
-      nc.momentum_weight = 0.0;
-      nc.density_weight = 0.0;
-      nc.lattice_beats = 0;
-      nc.suspension_tolerance = 0.8;
-      nc.suspension_resolve_bonus = 0.2;
-
-      nc.schillinger_progression = true;
-      nc.use_generated_progression = false;
-      nc.harmony_matrix = DEFAULT_HARMONY_MATRIX.map(r => [...r]);
-
-      // Two-chord oscillations, four bars each — I↔II is the Lydian float,
-      // never a functional cadence.
-      const ambBars = nc.pl * nc.render_length;
-      const ambPatterns = [
-        [0, 0, 1, 1],   // I - II (the Lydian signature)
-        [0, 0, 5, 5],   // I - vi
-        [0, 1, 0, 1],   // faster I-II rocking
-        [0, 0, 4, 4],   // I - V as color, not cadence
-      ];
-      nc.schillinger_sequence = [];
-      for (let i = 0; i < ambBars; i += 4) {
-        const pat = ambPatterns[Math.floor(Math.random() * ambPatterns.length)];
-        nc.schillinger_sequence.push(...pat.slice(0, Math.min(4, ambBars - i)));
-      }
-
-      const steps = Math.ceil((nc.pl * 4 * nc.render_length) / nc.voice_contour_resolution);
-
-      // Barely-moving harmony weight with one slow swell.
-      nc.harmony_distance_contour = Array.from({ length: steps }, (_, i) =>
-        parseFloat((0.1 + 0.1 * Math.sin((i / Math.max(steps - 1, 1)) * Math.PI)).toFixed(2)));
-      nc.mode_contour = Array.from({ length: steps }, () => 3);
-      nc.harmony_matrix_contour = Array.from({ length: steps }, () => 3); // Ethereal throughout
-      // Open voicings: bare triads, spread wide by the expansion.
-      nc.chord_structure_contour = Array.from({ length: 16 }, () =>
-        Array.from({ length: steps }, () => 0));
-      nc.schillinger_ex_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: steps }, () => 3 + (v % 2)));
-      // Long tones phasing against each other: 2- and 4-beat notes, offset per voice.
-      nc.voice_rhythm_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: steps }, (_, i) => ((i + v) % 3 === 0 ? 2.0 : 4.0)));
-      nc.voice_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: steps }, (_, i) =>
-          Math.round(2 * Math.sin((i / Math.max(steps - 1, 1)) * Math.PI + v))));
-      // Almost no line pressure: lines are allowed to sleep.
-      nc.melody_force_contour = Array.from({ length: 16 }, () =>
-        Array.from({ length: steps }, () => 0.1));
-    } else {
-      // Trance: Aeolian anthem loops (i-VI-III-VII family), pumping bass and
-      // 8th-note lead over held pads, Dark matrix lifting to Bright at the
-      // climax. Parallel octaves/5ths and octave doubling ARE the genre.
-      nc.pl = 4;
-      nc.main_pitch = Math.floor(Math.random() * 12);
-      nc.mode = 5; // Aeolian
-      nc.lookahead_depth = 3;
-      nc.harmony_distance_balance = 0.3;
-      nc.rng_seed = Math.floor(Math.random() * 999999);
-
-      nc.last_note_exist_in_voice = 0.5;
-      nc.same_direction = 0.0;
-      nc.consecutive_octav_fift = 0.0;
-      nc.no_crossing = 3.0;
-      nc.last_note_same = 0.2;
-      nc.same_note_bonus = 2.0; // pads hold until the chord change forces them
-      nc.common_tone_penalty = 0.0;
-      nc.interval_exists_in_harmony = 0.0;
-      nc.max_voices_changed = -1;
-      nc.min_voices_changed = -1;
-      nc.chord_structure = [0, 1, 2];
-
-      nc.root_position_weight = 2.0; // the bass hammers chord roots
-      nc.root_doubling_weight = 1.0;
-      nc.chord_quality_weight = 1.0;
-      nc.tendency_weight = 0.3;
-      nc.roughness_weight = 0.5;
-
-      // Rhythm shaping: hard grid — pitch changes lock to strong beats,
-      // blocky anthem harmony with no suspension gestures.
-      nc.metric_hold_strength = 0.9;
-      nc.momentum_weight = 0.3;
-      nc.density_weight = 0.5;
-      nc.lattice_beats = 0;
-      nc.suspension_tolerance = 0.0;
-      nc.suspension_resolve_bonus = 0.0;
-
-      nc.schillinger_progression = true;
-      nc.use_generated_progression = false;
-      nc.harmony_matrix = DEFAULT_HARMONY_MATRIX.map(r => [...r]);
-
-      // Anthem loops. Degree-4 bars get the harmonic-minor leading tone
-      // automatically (Aeolian V), so patterns ending on V deliver real lift.
-      const trBars = nc.pl * nc.render_length;
-      const trPatterns = [
-        [0, 5, 2, 6],   // i-VI-III-VII (the anthem)
-        [0, 6, 5, 6],   // i-VII-VI-VII
-        [0, 5, 6, 4],   // i-VI-VII-V (V carries the raised leading tone)
-        [0, 3, 5, 6],   // i-iv-VI-VII
-      ];
-      nc.schillinger_sequence = [];
-      for (let i = 0; i < trBars; i += 4) {
-        const pat = trPatterns[Math.floor(Math.random() * trPatterns.length)];
-        nc.schillinger_sequence.push(...pat.slice(0, Math.min(4, trBars - i)));
-      }
-
-      const steps = Math.ceil((nc.pl * 4 * nc.render_length) / nc.voice_contour_resolution);
-
-      // Build: harmony weight rises steadily toward the end of the loop.
-      nc.harmony_distance_contour = Array.from({ length: steps }, (_, i) =>
-        parseFloat((0.2 + 0.15 * (i / Math.max(steps - 1, 1))).toFixed(2)));
-      nc.mode_contour = Array.from({ length: steps }, () => 5);
-      nc.harmony_matrix_contour = Array.from({ length: steps }, (_, i) => {
-        const section = Math.floor((i / steps) * 4);
-        return [4, 4, 5, 4][section] ?? 4; // Dark → Dark → Bright climax → Dark
-      });
-      // Triads, thickening briefly at the climax.
-      nc.chord_structure_contour = Array.from({ length: 16 }, () =>
-        Array.from({ length: steps }, (_, i) => {
-          const phase = i / steps;
-          return phase > 0.5 && phase < 0.75 ? 2 : 0;
-        }));
-      nc.schillinger_ex_contour = Array.from({ length: 16 }, () =>
-        Array.from({ length: steps }, () => 2));
-      // Lead (ch 0) and bass (ch 4) run 8ths; inner pads hold long tones.
-      nc.voice_rhythm_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: steps }, () => {
-          if (v === 0 || v === 4) return 0.5;
-          if (v === 3) return 2.0;
-          return 4.0;
-        }));
-      // Lead climbs through each half of the loop and resets — a riser.
-      nc.voice_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: steps }, (_, i) => {
-          if (v !== 0) return 0;
-          const half = Math.max(Math.ceil(steps / 2), 1);
-          const phase = (i % half) / Math.max(half - 1, 1);
-          return Math.round(phase * 7);
-        }));
-      // Line pressure on the lead only; pads stay glued to their tones.
-      nc.melody_force_contour = Array.from({ length: 16 }, (_, v) =>
-        Array.from({ length: steps }, (_, i) => {
-          if (v !== 0) return 0.15;
-          const tension = Math.sin((i / Math.max(steps - 1, 1)) * Math.PI);
-          return parseFloat((0.8 + 0.4 * tension).toFixed(2));
-        }));
-    }
-
-    setConfig(nc);
-    setMessage(`${preset.charAt(0).toUpperCase() + preset.slice(1)} preset loaded`);
+    const seed = Math.floor(Math.random() * 999999);
+    setConfig(createPreset(preset, config, seed));
+    setMessage(`${PRESET_INFO[preset].label} loaded — key, length and lead clip preserved; musical settings reset`);
   };
 
   const handleInit = async () => {
@@ -1933,12 +1351,13 @@ function App() {
       case 'chord':
         const chordData = config.chord_structure_contour ? config.chord_structure_contour[selectedVoice] : [];
         return <ContourEditor
-          label={`Voice ${selectedVoice} Chord Structure Contour`}
+          label={`Voice ${selectedVoice} Chord Members (names assume thirds)`}
           data={chordData || []}
           yMin={0} yMax={5} xMax={xMax}
           resolution={config.voice_contour_resolution}
           pl={config.pl}
           onChange={(d) => updateConfig('chord_structure_contour', writeVoiceContour(config.chord_structure_contour, d))}
+          yLabelFormatter={(v) => CHORD_NAMES[Math.round(v)] ?? String(v)}
           onResolutionChange={handleResolutionChange}
           color="#86efac"
         />;
@@ -1956,7 +1375,20 @@ function App() {
         />;
       case 'rhythm':
         const rhythmData = config.voice_rhythm_contour ? config.voice_rhythm_contour[selectedVoice] : [];
-        return <ContourEditor
+        return <div className="flex flex-col h-full">
+          <div className="px-4 py-2 flex flex-wrap items-center gap-3 text-sm text-slate-300">
+            <span>Voice {selectedVoice} duration cycle (beats):</span>
+            <FloatListField
+              value={config.voice_rhythm_patterns?.[selectedVoice] ?? []}
+              onChange={d => {
+                const rows = Array.from({ length: 16 }, (_, v) =>
+                  broadcastVoices || v === selectedVoice ? [...d] : [...(config.voice_rhythm_patterns?.[v] ?? [])]);
+                updateConfig('voice_rhythm_patterns', rows);
+              }}
+            />
+            <span className="text-xs text-slate-500">A cycle overrides this contour; clear it to use the contour. R Gens override both.</span>
+          </div>
+          <div className="flex-1 min-h-0"><ContourEditor
           label={`Voice ${selectedVoice} Rhythm Contour`}
           data={rhythmData}
           yMin={0} yMax={4} xMax={xMax}
@@ -1966,7 +1398,8 @@ function App() {
           onChange={(d) => updateConfig('voice_rhythm_contour', writeVoiceContour(config.voice_rhythm_contour, d))}
           onResolutionChange={handleResolutionChange}
           color="#f87171"
-        />;
+        /></div>
+        </div>;
       case 'schillinger':
         return <ContourEditor
           label="Schillinger Sequence (1 Block = 1 Bar)"
@@ -1981,7 +1414,7 @@ function App() {
       case 'schillinger_ex':
         const exData = config.schillinger_ex_contour ? config.schillinger_ex_contour[selectedVoice] : [];
         return <ContourEditor
-          label={`Voice ${selectedVoice} Schillinger Expansion Contour (ex)`}
+          label={`Voice ${selectedVoice} Scale-Degree Stacking (2 = thirds)`}
           data={exData || []}
           yMin={2} yMax={5} xMax={xMax}
           resolution={config.voice_contour_resolution}
@@ -2024,13 +1457,13 @@ function App() {
 
   const tabs = [
     { id: 'schillinger', label: 'Schillinger', tip: 'Chord progression sequence — scale degree indices per bar that define the harmonic framework.' },
-    { id: 'schillinger_ex', label: 'Sch. EXP', tip: 'Expansion multiplier — stretches or compresses chord voicing intervals. Higher = wider voicings.' },
+    { id: 'schillinger_ex', label: 'Sch. EXP', tip: 'Scale-degree stacking: 2=thirds, 3=fourths, 4=fifths. Changes chord identity, not octave spacing. Use Voice Pitch and Start Notes for register.' },
     { id: 'harmony', label: 'Harmony', tip: 'Harmony/Smoothness balance over time. High = favor consonance, Low = favor smooth stepwise voice leading.' },
-    { id: 'mode', label: 'Mode', tip: 'Scale mode over time (0=Ionian → 6=Lydian). Adjacent values differ by 1 note (circle of fifths order).' },
+    { id: 'mode', label: 'Mode', tip: 'Scale mode on the selected tonic: 0=Ionian, 1=Dorian, 2=Phrygian, 3=Lydian, 4=Mixolydian, 5=Aeolian, 6=Locrian. Changing mode changes the key’s pitch collection.' },
     { id: 'root', label: 'Root', tip: 'Key root (tonic) over time — the modulation contour. Overrides the scalar Root per bar; scales, tendency tones and leading-tone terms all follow. Change it at phrase boundaries for classic phrase modulation; move by ±7 semitones (a fifth) for the smoothest key change.' },
-    { id: 'chord', label: 'Chord', tip: 'Chord voicing structure over time. Selects from preset voicings (triads to full 7-note chords).' },
+    { id: 'chord', label: 'Chord', tip: 'Chord members before scale-degree stacking: triad, seventh, diatonic sixth, ninth, eleventh or thirteenth. Names assume expansion 2.' },
     { id: 'voice', label: 'Voice Pitch', tip: 'Per-voice pitch offset in semitones over time. Shifts the target pitch the harmonizer aims for.' },
-    { id: 'rhythm', label: 'Voice Rhythm', tip: 'Per-voice note duration over time. Values in beats (0.25=16th, 0.5=8th, 1=quarter, 4=whole). Clamped at bar boundaries.' },
+    { id: 'rhythm', label: 'Voice Rhythm', tip: 'Per-voice durations in beats (0.5=8th, 1=quarter, 4=whole). Enter a repeating cycle, including fractions such as 2/3, 1/3 for swing, or leave it empty to follow the contour. R Gens take priority.' },
     { id: 'harmony_matrix', label: 'H. Matrix', tip: 'Harmony style profile over time. 0=Classical, 1=Jazz, 2=Tension, 3=Ethereal, 4=Dark, 5=Bright, 6=Aggressive, 7=Ancient, 8=Neutral. Fractional values interpolate between rows.' },
     { id: 'melody_force', label: 'Melody Force', tip: 'Line-shaping pressure over time, applied to every voice. Penalizes recently-used pitches and rewards stepwise motion. 0=off, 2-3=strongly forces moving lines. Overrides the Melody Force number when drawn.' },
   ];
@@ -2209,7 +1642,7 @@ function App() {
                 <NumberField value={config.lattice_beats ?? 0} onChange={v => updateConfig('lattice_beats', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-xs uppercase tracking-wider text-slate-500" title="Schillinger rhythm generators: durations for EVERY voice come from the resultant r(a÷b) — the interference pattern of these periodicities. 3,2 → 2+1+1+2; 4,3 → 3+1+2+2+1+3; three generators work too (5,4,3). Overrides Lattice and the rhythm contours while set. Empty = off.">R Gens:</span>
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Schillinger rhythm generators: durations for EVERY voice come from the resultant r(a÷b) — the interference pattern of these periodicities. 3,2 → 2+1+1+2; 4,3 → 3+1+2+2+1+3; three generators work too (5,4,3). Overrides duration cycles, Lattice and rhythm contours while set. Empty = off.">R Gens:</span>
                 <IntListField
                   value={config.rhythm_generators ?? []}
                   onChange={v => updateConfig('rhythm_generators', v)}
@@ -2241,11 +1674,11 @@ function App() {
               {sch && (
                 <>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Suspension tolerance: partial refund for HOLDING a pitch foreign to the current chord when a step-down resolution exists — prices the dissonant hold as a suspension instead of a wrong note (the harmony penalty still applies). 0 = off.">Susp Hold:</span>
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="One-time allowance for a consonant preparation held into a 4–3, 7–6 or 9–8 suspension. Both suspension weights at 0 disable recognition; this is not a general dissonance allowance.">Susp Hold:</span>
                     <NumberField value={config.suspension_tolerance ?? 0.5} onChange={v => updateConfig('suspension_tolerance', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Suspension resolution: reward for stepping DOWN (1-2 st) onto a chord tone after a dissonant hold — completes preparation → suspension → resolution (4-3, 7-6, 9-8). 0 = off.">Susp Res:</span>
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Reward for resolving a prepared suspension down by step; also the penalty for abandoning it or holding beyond the next harmonic change / four beats. Both suspension weights at 0 disable recognition.">Susp Res:</span>
                     <NumberField value={config.suspension_resolve_bonus ?? 0.6} onChange={v => updateConfig('suspension_resolve_bonus', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
                   </div>
                 </>
@@ -2262,7 +1695,7 @@ function App() {
                 <NumberField value={config.roughness_weight ?? 0.5} onChange={v => updateConfig('roughness_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-xs uppercase tracking-wider text-slate-500" title="Tendency tones: rewards the leading tone stepping up to the tonic and (Schillinger mode) a chordal minor 7th falling by step, penalizes abandoning either. Only fires in modes that actually have a leading tone. This is what gives cadences their pull. 0 = off.">Tendency:</span>
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Rewards leading tones resolving to the global/local tonic and identified major, minor or diminished chordal sevenths descending into the next harmony. Held tones retain their source role. 0 = off.">Tendency:</span>
                 <NumberField value={config.tendency_weight ?? 0.5} onChange={v => updateConfig('tendency_weight', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
               </div>
               {sch && (
@@ -2301,7 +1734,7 @@ function App() {
           <div className="flex gap-2 items-center ml-auto">
             <button
               onClick={toggleGenerators}
-              title="Presets and randomisers — Jazz/Classical/Ambient/Trance, Init, Randomise, Rhythm"
+              title="Presets — Tonal Jazz, Modal Jazz, Classical, Bach-inspired, Ambient and Trance — plus reset and randomisers"
               className={`px-4 py-2 font-bold rounded-lg shadow transition-all active:scale-95 border ${showGenerators ? 'bg-slate-800 border-cyan-500/50 text-cyan-300' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
             >
               {showGenerators ? '▾' : '▸'} Generators
@@ -2472,41 +1905,16 @@ function App() {
         {showGenerators && (
           <div className="flex gap-2 items-center flex-wrap bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-2">
             <span className="text-[10px] uppercase tracking-widest text-slate-600 select-none mr-1">Presets</span>
-            <button
-              onClick={() => applyPreset('jazz')}
-              title="Jazz preset — Dorian/Mixolydian, ii-V-I turnarounds, syncopated rhythms, relaxed voice-leading"
-              className="px-4 py-1.5 bg-yellow-700 hover:bg-yellow-600 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
-            >
-              Jazz
-            </button>
-            <button
-              onClick={() => applyPreset('classical')}
-              title="Classical preset — Ionian/Aeolian, I-IV-V-I, strict counterpoint rules, arch-form dynamics"
-              className="px-4 py-1.5 bg-rose-800 hover:bg-rose-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
-            >
-              Classical
-            </button>
-            <button
-              onClick={() => applyPreset('bach')}
-              title="Bach preset — motor rhythm (soprano 8ths, walking bass), circle-of-fifths sequences, suspensions at full strength, strict counterpoint, cadential broadening"
-              className="px-4 py-1.5 bg-amber-800 hover:bg-amber-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
-            >
-              Bach
-            </button>
-            <button
-              onClick={() => applyPreset('ambient')}
-              title="Ambient preset — Lydian float over the Ethereal matrix, glacial 2-chord oscillations, deep hold bias, one voice drifts at a time"
-              className="px-4 py-1.5 bg-teal-800 hover:bg-teal-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
-            >
-              Ambient
-            </button>
-            <button
-              onClick={() => applyPreset('trance')}
-              title="Trance preset — Aeolian anthem loops (i-VI-III-VII), pumping 8th-note bass and lead over held pads, Dark→Bright climax"
-              className="px-4 py-1.5 bg-violet-800 hover:bg-violet-700 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
-            >
-              Trance
-            </button>
+            {(Object.keys(PRESET_INFO) as PresetName[]).map(name => (
+              <button
+                key={name}
+                onClick={() => applyPreset(name)}
+                title={`${PRESET_INFO[name].description} Preserves key, length and lead clip; resets other musical settings.`}
+                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
+              >
+                {PRESET_INFO[name].label}
+              </button>
+            ))}
             <div className="border-l border-slate-700 h-5 mx-2"></div>
             <span className="text-[10px] uppercase tracking-widest text-slate-600 select-none mr-1">Reset / Randomise</span>
             <button
