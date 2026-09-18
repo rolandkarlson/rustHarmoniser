@@ -1,0 +1,14 @@
+{
+  "eval_id": 0,
+  "eval_name": "dark-aeolian-loop",
+  "prompt": "compose me a dark 8 bar loop in aeolian, tension building into each cadence, tight voice leading. i'll play it in ableton as a loop",
+  "assertions": [
+    "Render is valid: notes on all 5 channels and no real hard violations (the beat-0 voice_budget artifact is allowed)",
+    "8 bars total: pl x render_length == 8 in the archived config",
+    "Aeolian honored: mode == 5 in the archived config",
+    "Loop wrap enabled: loop_wrap_weight > 0 in the archived config",
+    "Tension sits before the arrival: mean dissonant-pair share on pre-cadence bars (bar % pl == pl-2) exceeds that on arrival bars (bar % pl == pl-1)",
+    "Tight voice leading: no melodic jump exceeds 7 semitones in any voice",
+    "Loop seam is small: total last-to-first pitch distance summed over the 5 voices <= 15 semitones"
+  ]
+}

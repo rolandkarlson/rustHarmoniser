@@ -1,0 +1,4656 @@
+{
+  "input": {
+    "config": {
+      "beam_width": 4,
+      "cadence_weight": 1.5,
+      "candidate_range": 3,
+      "chord_quality_weight": 1.0,
+      "chord_structure": [
+        0,
+        1,
+        2,
+        4,
+        5
+      ],
+      "chord_structure_contour": [
+        [
+          0.0,
+          1.0,
+          3.0,
+          0.0,
+          1.0,
+          3.0,
+          3.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          3.0,
+          0.0,
+          1.0,
+          3.0,
+          3.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          3.0,
+          0.0,
+          1.0,
+          3.0,
+          3.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          3.0,
+          0.0,
+          0.0,
+          1.0,
+          3.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "chord_templates": [],
+      "chromatic_scale": [],
+      "common_tone_penalty": 0.0,
+      "consecutive_octav_fift": 0.0,
+      "density_weight": 0.5,
+      "dynamics_weight": 1.2,
+      "harmony_distance_balance": 0.2,
+      "harmony_distance_contour": [
+        0.2,
+        0.3,
+        0.35,
+        0.45,
+        0.2,
+        0.3,
+        0.35,
+        0.45
+      ],
+      "harmony_matrix": [
+        [
+          1.0,
+          -100.0,
+          -0.4,
+          0.8,
+          0.9,
+          0.5,
+          -0.5,
+          1.0,
+          0.7,
+          0.8,
+          -0.3,
+          -100.0
+        ],
+        [
+          0.6,
+          0.0,
+          0.7,
+          0.8,
+          0.9,
+          0.5,
+          0.6,
+          0.9,
+          0.5,
+          0.8,
+          1.0,
+          0.8
+        ],
+        [
+          -0.2,
+          0.8,
+          0.2,
+          -0.3,
+          -0.3,
+          -0.2,
+          1.0,
+          0.0,
+          -0.3,
+          -0.3,
+          0.5,
+          0.9
+        ],
+        [
+          1.0,
+          -100.0,
+          0.8,
+          -0.2,
+          0.2,
+          1.0,
+          -0.5,
+          1.0,
+          0.0,
+          0.5,
+          0.7,
+          -0.4
+        ],
+        [
+          1.0,
+          -0.5,
+          -0.1,
+          1.0,
+          -0.2,
+          0.3,
+          -0.2,
+          0.8,
+          0.6,
+          0.2,
+          0.5,
+          -0.6
+        ],
+        [
+          1.0,
+          -0.7,
+          0.5,
+          -0.1,
+          1.0,
+          -0.2,
+          0.8,
+          0.9,
+          0.2,
+          0.6,
+          -0.3,
+          0.6
+        ],
+        [
+          -0.5,
+          1.0,
+          0.4,
+          -0.6,
+          -0.6,
+          -0.4,
+          1.0,
+          -0.5,
+          -0.6,
+          -0.6,
+          0.5,
+          1.0
+        ],
+        [
+          1.0,
+          -100.0,
+          -100.0,
+          -100.0,
+          -100.0,
+          1.0,
+          -100.0,
+          1.0,
+          -100.0,
+          -100.0,
+          -100.0,
+          -100.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "harmony_matrix_contour": [
+        4.0,
+        4.0,
+        2.0,
+        4.0,
+        4.0,
+        2.0,
+        2.0,
+        4.0
+      ],
+      "interval_exists_in_harmony": 1.0,
+      "last_note_exist_in_voice": 1.0,
+      "last_note_same": 0.5,
+      "lattice_beats": 0.0,
+      "leading_voice_clip": 1,
+      "leading_voice_track": 0,
+      "lookahead_depth": 2,
+      "loop_wrap_weight": 1.5,
+      "main_pitch": 0,
+      "max_common_tones": -1,
+      "max_voices_changed": -1,
+      "melody_force": 0.0,
+      "melody_force_contour": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "metric_hold_strength": 0.6,
+      "min_voices_changed": 1,
+      "mode": 5,
+      "mode_contour": [
+        5.0,
+        5.0,
+        5.0,
+        5.0,
+        5.0,
+        5.0,
+        5.0,
+        5.0
+      ],
+      "momentum_weight": 0.5,
+      "no_crossing": 100.0,
+      "phrase_echo_weight": 0.6,
+      "pl": 4,
+      "render_length": 2,
+      "rhythm_generators": [],
+      "rhythm_unit": 0.5,
+      "rhythm_voice_rotation": 0,
+      "rng_seed": 7.0,
+      "root": 9,
+      "root_contour": [
+        9.0,
+        9.0,
+        9.0,
+        9.0,
+        9.0,
+        9.0,
+        9.0,
+        9.0
+      ],
+      "root_doubling_weight": 0.5,
+      "root_position_weight": 0.7,
+      "roughness_weight": 0.5,
+      "same_direction": 1.0,
+      "same_note_bonus": 2.0,
+      "schillinger_ex_contour": null,
+      "schillinger_progression": true,
+      "schillinger_sequence": [
+        0,
+        3,
+        4,
+        0,
+        5,
+        1,
+        4,
+        0
+      ],
+      "start_notes": [
+        69,
+        64,
+        60,
+        52,
+        33
+      ],
+      "suspension_resolve_bonus": 0.6,
+      "suspension_tolerance": 0.5,
+      "tendency_weight": 1.0,
+      "use_ceiling": false,
+      "use_floor": false,
+      "use_generated_progression": false,
+      "use_leading_voice": false,
+      "use_resolve": false,
+      "voice_contour": null,
+      "voice_contour_resolution": 4.0,
+      "voice_contour_weight": 1.0,
+      "voice_rhythm": [
+        4.0
+      ],
+      "voice_rhythm_contour": [
+        [
+          2.0,
+          1.0,
+          0.5,
+          4.0,
+          2.0,
+          1.0,
+          0.5,
+          4.0
+        ],
+        [
+          2.0,
+          1.0,
+          1.0,
+          4.0,
+          2.0,
+          1.0,
+          0.5,
+          4.0
+        ],
+        [
+          2.0,
+          1.0,
+          1.0,
+          4.0,
+          2.0,
+          1.0,
+          1.0,
+          4.0
+        ],
+        [
+          4.0,
+          2.0,
+          1.0,
+          4.0,
+          4.0,
+          2.0,
+          1.0,
+          4.0
+        ],
+        [
+          4.0,
+          2.0,
+          2.0,
+          4.0,
+          4.0,
+          4.0,
+          2.0,
+          4.0
+        ]
+      ]
+    },
+    "leading": null
+  },
+  "output": {
+    "breakdown": [
+      {
+        "bar": 0,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.0659251719731491
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.0424258910474905
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.05866917452353659
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.13066666666666665
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "interval_variety",
+            "value": -1.0
+          }
+        ],
+        "hard_violation_count": 1,
+        "hard_violations": [
+          {
+            "count": 1,
+            "name": "voice_budget"
+          }
+        ],
+        "root_pc": 9,
+        "score": -995.5782363064556,
+        "scored": true,
+        "soft_score": 4.421763693544433,
+        "start": 0.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 72,
+            "previous_pitch": null,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.1714285714285714
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.0625
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 64,
+            "previous_pitch": null,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.3
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.8
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 60,
+            "previous_pitch": null,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.3
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.8
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": false,
+            "pitch": 52,
+            "previous_pitch": null,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.3
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.8
+              }
+            ]
+          },
+          {
+            "channel": 4,
+            "is_leader": false,
+            "pitch": 33,
+            "previous_pitch": null,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.3
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.8
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 0,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.06890381526984767
+          },
+          {
+            "name": "harmony_worst",
+            "value": 0.009938452008322725
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.06760242987164103
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.13066666666666665
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          },
+          {
+            "name": "interval_variety",
+            "value": -1.0
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 9,
+        "score": 3.7327145384196525,
+        "scored": true,
+        "soft_score": 3.7327145384196525,
+        "start": 2.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 72,
+            "previous_pitch": 72,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.3
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.0625
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": true,
+            "pitch": 69,
+            "previous_pitch": 64,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.0857142857142857
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 60,
+            "previous_pitch": 60,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.3
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 1,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.04115524660895384
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.059925290965207344
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.05409120388288646
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.12400000000000001
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 2,
+        "score": 1.5515830642885378,
+        "scored": true,
+        "soft_score": 1.5515830642885378,
+        "start": 4.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 74,
+            "previous_pitch": 72,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.14285714285714288
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 67,
+            "previous_pitch": 69,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.14285714285714288
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.0625
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 57,
+            "previous_pitch": 60,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.11428571428571428
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.0625
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": false,
+            "pitch": 53,
+            "previous_pitch": 52,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.17142857142857146
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              }
+            ]
+          },
+          {
+            "channel": 4,
+            "is_leader": false,
+            "pitch": 38,
+            "previous_pitch": 33,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.1
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 1,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.022645367966625994
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.059925290965207344
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.04627515632586551
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.12400000000000001
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 2,
+        "score": 4.937138090470141,
+        "scored": true,
+        "soft_score": 4.937138090470141,
+        "start": 5.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 69,
+            "previous_pitch": 74,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.05714285714285714
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 67,
+            "previous_pitch": 67,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.0625
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 57,
+            "previous_pitch": 57,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.0625
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 1,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.033732733874536076
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.043624450159860606
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.05429694074285725
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.12400000000000001
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 2,
+        "score": 7.566714748267056,
+        "scored": true,
+        "soft_score": 7.566714748267056,
+        "start": 6.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 69,
+            "previous_pitch": 69,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 67,
+            "previous_pitch": 67,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.0625
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": true,
+            "pitch": 62,
+            "previous_pitch": 57,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.05714285714285714
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": false,
+            "pitch": 53,
+            "previous_pitch": 53,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          },
+          {
+            "channel": 4,
+            "is_leader": false,
+            "pitch": 38,
+            "previous_pitch": 38,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 1,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.013892510135047557
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.09579698066573664
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.04125335785155185
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.10800000000000003
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 2,
+        "score": 5.525856823828799,
+        "scored": true,
+        "soft_score": 5.525856823828799,
+        "start": 7.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 69,
+            "previous_pitch": 69,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": true,
+            "pitch": 64,
+            "previous_pitch": 67,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.11428571428571428
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 62,
+            "previous_pitch": 62,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 2,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.0058521269661744885
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.05908817299601722
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.00792337916747102
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.034
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 3.9324571744074692,
+        "scored": true,
+        "soft_score": 3.9324571744074692,
+        "start": 8.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 68,
+            "previous_pitch": 69,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.1285714285714286
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 64,
+            "previous_pitch": 64,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.9199999999999999
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 62,
+            "previous_pitch": 62,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.9199999999999999
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": false,
+            "pitch": 53,
+            "previous_pitch": 53,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.6000000000000001
+              }
+            ]
+          },
+          {
+            "channel": 4,
+            "is_leader": false,
+            "pitch": 40,
+            "previous_pitch": 38,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.10714285714285716
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.34027777777777785
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 2,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.013814209537908169
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.05022506908159255
+          },
+          {
+            "name": "harmony_bass",
+            "value": -0.0014791230541163461
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.04675000000000001
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 0.7667965253387072,
+        "scored": true,
+        "soft_score": 0.7667965253387072,
+        "start": 8.5,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 71,
+            "previous_pitch": 68,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.08571428571428573
+              },
+              {
+                "name": "tendency",
+                "value": -0.5
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 2,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.025540632526877178
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.043719781114389906
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.00529681487743288
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.03400000000000001
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          },
+          {
+            "name": "interval_variety",
+            "value": -1.0
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 5.717165285337538,
+        "scored": true,
+        "soft_score": 5.717165285337538,
+        "start": 9.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 71,
+            "previous_pitch": 71,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 64,
+            "previous_pitch": 64,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": true,
+            "pitch": 59,
+            "previous_pitch": 62,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.08571428571428573
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": false,
+            "pitch": 53,
+            "previous_pitch": 53,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.23
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 2,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.004415318837561836
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.04820730799151292
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.04153740570225722
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.04675000000000001
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 1.1565985911514807,
+        "scored": true,
+        "soft_score": 1.1565985911514807,
+        "start": 9.5,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 74,
+            "previous_pitch": 71,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.08571428571428573
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 2,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": -0.010213116103393106
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.07790687861803151
+          },
+          {
+            "name": "harmony_bass",
+            "value": -0.005882091868245535
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 6.28376775468017,
+        "scored": true,
+        "soft_score": 6.28376775468017,
+        "start": 10.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 74,
+            "previous_pitch": 74,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 64,
+            "previous_pitch": 64,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.915
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 59,
+            "previous_pitch": 59,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": true,
+            "pitch": 56,
+            "previous_pitch": 53,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.08571428571428573
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.1111111111111111
+              }
+            ]
+          },
+          {
+            "channel": 4,
+            "is_leader": false,
+            "pitch": 40,
+            "previous_pitch": 40,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.34027777777777785
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 2,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.06339242294052334
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.04507883467157118
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.06795447321976562
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.012750000000000004
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 0.4402879027585591,
+        "scored": true,
+        "soft_score": 0.4402879027585591,
+        "start": 10.5,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 77,
+            "previous_pitch": 74,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.08571428571428573
+              },
+              {
+                "name": "tendency",
+                "value": -0.5
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.4444444444444444
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 2,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.014134386940994796
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.07790687861803151
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.020944592720295637
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.012750000000000004
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 6.337049085170243,
+        "scored": true,
+        "soft_score": 6.337049085170243,
+        "start": 11.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 77,
+            "previous_pitch": 77,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.4444444444444444
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": true,
+            "pitch": 65,
+            "previous_pitch": 64,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.1285714285714286
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 59,
+            "previous_pitch": 59,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": false,
+            "pitch": 56,
+            "previous_pitch": 56,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.1111111111111111
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 2,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.019957147077534883
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.048433761994459236
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.04153740570225722
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.027200000000000002
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": -0.3476360346114924,
+        "scored": true,
+        "soft_score": -0.3476360346114924,
+        "start": 11.5,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 74,
+            "previous_pitch": 77,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.08571428571428573
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              },
+              {
+                "name": "leader_history",
+                "value": -1.0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 3,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.09808019114440777
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.05757799499302281
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.08281621592785567
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.17733333333333332
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          },
+          {
+            "name": "cadence_bass",
+            "value": 1.5
+          },
+          {
+            "name": "cadence_complete",
+            "value": 0.75
+          },
+          {
+            "name": "cadence_soprano",
+            "value": 0.8999999999999999
+          },
+          {
+            "name": "interval_variety",
+            "value": -1.0
+          },
+          {
+            "name": "cadence_arrival",
+            "value": 1.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 9,
+        "score": 6.103826348587177,
+        "scored": true,
+        "soft_score": 6.103826348587177,
+        "start": 12.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 72,
+            "previous_pitch": 74,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.035714285714285705
+              },
+              {
+                "name": "tendency",
+                "value": 1.0
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.0625
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 64,
+            "previous_pitch": 65,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.04285714285714285
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 60,
+            "previous_pitch": 59,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.04285714285714285
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": false,
+            "pitch": 57,
+            "previous_pitch": 56,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.04285714285714285
+              },
+              {
+                "name": "tendency",
+                "value": 1.0
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              }
+            ]
+          },
+          {
+            "channel": 4,
+            "is_leader": false,
+            "pitch": 45,
+            "previous_pitch": 40,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.024999999999999994
+              },
+              {
+                "name": "contour_spring",
+                "value": -1.0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 4,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.06412056661720403
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.03840660165097701
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.03743273247985394
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.07466666666666666
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          },
+          {
+            "name": "interval_variety",
+            "value": -1.0
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 5,
+        "score": 5.736027649827033,
+        "scored": true,
+        "soft_score": 5.736027649827033,
+        "start": 16.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 72,
+            "previous_pitch": 72,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.3
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.0625
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.9199999999999999
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": true,
+            "pitch": 65,
+            "previous_pitch": 64,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2571428571428572
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.24
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 60,
+            "previous_pitch": 60,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.3
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.9199999999999999
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": false,
+            "pitch": 57,
+            "previous_pitch": 57,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.3
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.9199999999999999
+              }
+            ]
+          },
+          {
+            "channel": 4,
+            "is_leader": false,
+            "pitch": 41,
+            "previous_pitch": 45,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.1285714285714286
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.4444444444444444
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 4,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.016653320578041825
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.08164778905707402
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.03405790322335192
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.049
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 5,
+        "score": 5.198484069664954,
+        "scored": true,
+        "soft_score": 5.198484069664954,
+        "start": 18.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 71,
+            "previous_pitch": 72,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2571428571428572
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.24
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 65,
+            "previous_pitch": 65,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.3
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 60,
+            "previous_pitch": 60,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.3
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.915
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 5,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.001819976072623743
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.0658729553366611
+          },
+          {
+            "name": "harmony_bass",
+            "value": -0.010392737716838258
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.05760000000000001
+          },
+          {
+            "name": "root_position",
+            "value": 0.27999999999999997
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 11,
+        "score": 2.0869241242889656,
+        "scored": true,
+        "soft_score": 2.0869241242889656,
+        "start": 20.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 71,
+            "previous_pitch": 71,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.9199999999999999
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": true,
+            "pitch": 69,
+            "previous_pitch": 65,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.08571428571428573
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 60,
+            "previous_pitch": 60,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.6000000000000001
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": false,
+            "pitch": 53,
+            "previous_pitch": 57,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.08571428571428573
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              }
+            ]
+          },
+          {
+            "channel": 4,
+            "is_leader": false,
+            "pitch": 38,
+            "previous_pitch": 41,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.11428571428571428
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 5,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.007940880086675041
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.0529342162999196
+          },
+          {
+            "name": "harmony_bass",
+            "value": -0.021044170557084314
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.04000000000000001
+          },
+          {
+            "name": "root_position",
+            "value": 0.27999999999999997
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 11,
+        "score": 5.0730577313249094,
+        "scored": true,
+        "soft_score": 5.0730577313249094,
+        "start": 21.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 71,
+            "previous_pitch": 71,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.23
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 69,
+            "previous_pitch": 69,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": true,
+            "pitch": 59,
+            "previous_pitch": 60,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.17142857142857146
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.24
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 5,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": -0.01440928228335674
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.0529342162999196
+          },
+          {
+            "name": "harmony_bass",
+            "value": -0.017268872047995362
+          },
+          {
+            "name": "harmony_quality",
+            "value": -0.008000000000000002
+          },
+          {
+            "name": "root_position",
+            "value": 0.27999999999999997
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 11,
+        "score": 6.411482867463967,
+        "scored": true,
+        "soft_score": 6.411482867463967,
+        "start": 22.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 71,
+            "previous_pitch": 71,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.915
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 69,
+            "previous_pitch": 69,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 59,
+            "previous_pitch": 59,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": true,
+            "pitch": 52,
+            "previous_pitch": 53,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.17142857142857146
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.24
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 5,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": -0.012529172004306564
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.0529342162999196
+          },
+          {
+            "name": "harmony_bass",
+            "value": -0.017705388586163304
+          },
+          {
+            "name": "harmony_quality",
+            "value": -0.008000000000000002
+          },
+          {
+            "name": "root_position",
+            "value": 0.27999999999999997
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 11,
+        "score": 4.064950270728658,
+        "scored": true,
+        "soft_score": 4.064950270728658,
+        "start": 23.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 74,
+            "previous_pitch": 71,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.11428571428571428
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 69,
+            "previous_pitch": 69,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.23
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 59,
+            "previous_pitch": 59,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.2
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 6,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": -0.002298900753722341
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.052499004377628236
+          },
+          {
+            "name": "harmony_bass",
+            "value": -0.004339284505347207
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 6.914632651633143,
+        "scored": true,
+        "soft_score": 6.914632651633143,
+        "start": 24.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 74,
+            "previous_pitch": 74,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.24
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.9199999999999999
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": true,
+            "pitch": 68,
+            "previous_pitch": 69,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.1285714285714286
+              },
+              {
+                "name": "tendency",
+                "value": 1.0
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.1111111111111111
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.24
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 59,
+            "previous_pitch": 59,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.6000000000000001
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": false,
+            "pitch": 52,
+            "previous_pitch": 52,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.9199999999999999
+              }
+            ]
+          },
+          {
+            "channel": 4,
+            "is_leader": false,
+            "pitch": 40,
+            "previous_pitch": 38,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.10714285714285716
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.34027777777777785
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 6,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.04246076428389118
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.048433761994459236
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.05131112376862179
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.04675000000000001
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 2.212246856216784,
+        "scored": true,
+        "soft_score": 2.212246856216784,
+        "start": 24.5,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 74,
+            "previous_pitch": 74,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.365
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": true,
+            "pitch": 65,
+            "previous_pitch": 68,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.08571428571428573
+              },
+              {
+                "name": "tendency",
+                "value": -0.5
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 6,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.012253880187700045
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.07843898482467683
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.009225392162241823
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.034
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 8.167087906572885,
+        "scored": true,
+        "soft_score": 8.167087906572885,
+        "start": 25.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 74,
+            "previous_pitch": 74,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.23
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 65,
+            "previous_pitch": 65,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": true,
+            "pitch": 56,
+            "previous_pitch": 59,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.08571428571428573
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.1111111111111111
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": false,
+            "pitch": 52,
+            "previous_pitch": 52,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.23
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 6,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.02428565015568361
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.05534822182408786
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.029802859390435005
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.012750000000000004
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 4.1054823512140945,
+        "scored": true,
+        "soft_score": 4.1054823512140945,
+        "start": 25.5,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 71,
+            "previous_pitch": 74,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.08571428571428573
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 65,
+            "previous_pitch": 65,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 2.093
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 6,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.010647687255202916
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.08362137118255822
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.016587864456864724
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.012750000000000004
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 8.415880053545381,
+        "scored": true,
+        "soft_score": 8.415880053545381,
+        "start": 26.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 71,
+            "previous_pitch": 71,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 65,
+            "previous_pitch": 65,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.915
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 56,
+            "previous_pitch": 56,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.1111111111111111
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": true,
+            "pitch": 53,
+            "previous_pitch": 52,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.1285714285714286
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              }
+            ]
+          },
+          {
+            "channel": 4,
+            "is_leader": false,
+            "pitch": 40,
+            "previous_pitch": 40,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.34027777777777785
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.4029999999999998
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 6,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.014626859745156862
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.05887199971717295
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.015839806289449133
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.027200000000000002
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 2.971953396476163,
+        "scored": true,
+        "soft_score": 2.971953396476163,
+        "start": 26.5,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 71,
+            "previous_pitch": 71,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 2.093
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": true,
+            "pitch": 62,
+            "previous_pitch": 65,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.08571428571428573
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 6,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": -0.00195610961434388
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.08362137118255822
+          },
+          {
+            "name": "harmony_bass",
+            "value": -0.0036345532522993476
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.012750000000000004
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 8.076847489760322,
+        "scored": true,
+        "soft_score": 8.076847489760322,
+        "start": 27.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": false,
+            "pitch": 71,
+            "previous_pitch": 71,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.027777777777777776
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.23
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": true,
+            "pitch": 64,
+            "previous_pitch": 62,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.10714285714285716
+              },
+              {
+                "name": "tendency",
+                "value": -0.5
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.24
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 56,
+            "previous_pitch": 56,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.1111111111111111
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": false,
+            "pitch": 53,
+            "previous_pitch": 53,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.006944444444444444
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 1.8859999999999997
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 6,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.0255172448210505
+          },
+          {
+            "name": "harmony_worst",
+            "value": -0.06116988387728257
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.010866288350293645
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.034
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 4,
+        "score": 3.964316823897236,
+        "scored": true,
+        "soft_score": 3.964316823897236,
+        "start": 27.5,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 74,
+            "previous_pitch": 71,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.08571428571428573
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.17361111111111113
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 64,
+            "previous_pitch": 64,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.15000000000000002
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 2.093
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "bar": 7,
+        "chord_terms": [
+          {
+            "name": "harmony_mean",
+            "value": 0.09775549169193622
+          },
+          {
+            "name": "harmony_worst",
+            "value": 0.008500111934080755
+          },
+          {
+            "name": "harmony_bass",
+            "value": 0.07638601028138828
+          },
+          {
+            "name": "harmony_quality",
+            "value": 0.17733333333333332
+          },
+          {
+            "name": "root_position",
+            "value": 0.7
+          },
+          {
+            "name": "root_doubling",
+            "value": 0.5
+          },
+          {
+            "name": "cadence_bass",
+            "value": 1.5
+          },
+          {
+            "name": "cadence_complete",
+            "value": 0.75
+          },
+          {
+            "name": "cadence_soprano",
+            "value": 0.8999999999999999
+          },
+          {
+            "name": "interval_variety",
+            "value": -1.0
+          },
+          {
+            "name": "cadence_arrival",
+            "value": 1.2000000000000002
+          }
+        ],
+        "hard_violation_count": 0,
+        "hard_violations": [],
+        "root_pc": 9,
+        "score": 14.768546375812168,
+        "scored": true,
+        "soft_score": 14.768546375812168,
+        "start": 28.0,
+        "voices": [
+          {
+            "channel": 0,
+            "is_leader": true,
+            "pitch": 72,
+            "previous_pitch": 74,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.035714285714285705
+              },
+              {
+                "name": "tendency",
+                "value": 1.0
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.0625
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "loop_wrap",
+                "value": 1.5
+              }
+            ]
+          },
+          {
+            "channel": 1,
+            "is_leader": false,
+            "pitch": 64,
+            "previous_pitch": 64,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.04999999999999999
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.24
+              },
+              {
+                "name": "loop_wrap",
+                "value": 1.5
+              },
+              {
+                "name": "hold_stickiness",
+                "value": 0.6400000000000001
+              }
+            ]
+          },
+          {
+            "channel": 2,
+            "is_leader": false,
+            "pitch": 57,
+            "previous_pitch": 56,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.04285714285714285
+              },
+              {
+                "name": "tendency",
+                "value": 1.0
+              },
+              {
+                "name": "contour_spring",
+                "value": -0.0625
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "loop_wrap",
+                "value": 0.8571428571428571
+              }
+            ]
+          },
+          {
+            "channel": 3,
+            "is_leader": false,
+            "pitch": 52,
+            "previous_pitch": 53,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.04285714285714285
+              },
+              {
+                "name": "loop_wrap",
+                "value": 1.5
+              }
+            ]
+          },
+          {
+            "channel": 4,
+            "is_leader": false,
+            "pitch": 45,
+            "previous_pitch": 40,
+            "terms": [
+              {
+                "name": "smoothness",
+                "value": 0.024999999999999994
+              },
+              {
+                "name": "contour_spring",
+                "value": -1.0
+              },
+              {
+                "name": "phrase_echo",
+                "value": 0.6
+              },
+              {
+                "name": "loop_wrap",
+                "value": 0.75
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "note_count": 105,
+    "notes": [
+      {
+        "channel": 0,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 72,
+        "probability": 0,
+        "start": 0.0,
+        "velocity": 77
+      },
+      {
+        "channel": 1,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 64,
+        "probability": 0,
+        "start": 0.0,
+        "velocity": 84
+      },
+      {
+        "channel": 2,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 60,
+        "probability": 0,
+        "start": 0.0,
+        "velocity": 77
+      },
+      {
+        "channel": 3,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 52,
+        "probability": 0,
+        "start": 0.0,
+        "velocity": 75
+      },
+      {
+        "channel": 4,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 33,
+        "probability": 0,
+        "start": 0.0,
+        "velocity": 76
+      },
+      {
+        "channel": 0,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 72,
+        "probability": 0,
+        "start": 2.0,
+        "velocity": 79
+      },
+      {
+        "channel": 1,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 69,
+        "probability": 0,
+        "start": 2.0,
+        "velocity": 92
+      },
+      {
+        "channel": 2,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 60,
+        "probability": 0,
+        "start": 2.0,
+        "velocity": 88
+      },
+      {
+        "channel": 0,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 74,
+        "probability": 0,
+        "start": 4.0,
+        "velocity": 105
+      },
+      {
+        "channel": 1,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 67,
+        "probability": 0,
+        "start": 4.0,
+        "velocity": 90
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 57,
+        "probability": 0,
+        "start": 4.0,
+        "velocity": 92
+      },
+      {
+        "channel": 3,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 53,
+        "probability": 0,
+        "start": 4.0,
+        "velocity": 94
+      },
+      {
+        "channel": 4,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 38,
+        "probability": 0,
+        "start": 4.0,
+        "velocity": 102
+      },
+      {
+        "channel": 0,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 69,
+        "probability": 0,
+        "start": 5.0,
+        "velocity": 83
+      },
+      {
+        "channel": 1,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 67,
+        "probability": 0,
+        "start": 5.0,
+        "velocity": 86
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 57,
+        "probability": 0,
+        "start": 5.0,
+        "velocity": 89
+      },
+      {
+        "channel": 0,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 69,
+        "probability": 0,
+        "start": 6.0,
+        "velocity": 96
+      },
+      {
+        "channel": 1,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 67,
+        "probability": 0,
+        "start": 6.0,
+        "velocity": 97
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 62,
+        "probability": 0,
+        "start": 6.0,
+        "velocity": 109
+      },
+      {
+        "channel": 3,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 53,
+        "probability": 0,
+        "start": 6.0,
+        "velocity": 95
+      },
+      {
+        "channel": 4,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 38,
+        "probability": 0,
+        "start": 6.0,
+        "velocity": 95
+      },
+      {
+        "channel": 0,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 69,
+        "probability": 0,
+        "start": 7.0,
+        "velocity": 91
+      },
+      {
+        "channel": 1,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 64,
+        "probability": 0,
+        "start": 7.0,
+        "velocity": 92
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 62,
+        "probability": 0,
+        "start": 7.0,
+        "velocity": 92
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 68,
+        "probability": 0,
+        "start": 8.0,
+        "velocity": 105
+      },
+      {
+        "channel": 1,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 64,
+        "probability": 0,
+        "start": 8.0,
+        "velocity": 104
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 62,
+        "probability": 0,
+        "start": 8.0,
+        "velocity": 108
+      },
+      {
+        "channel": 3,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 53,
+        "probability": 0,
+        "start": 8.0,
+        "velocity": 107
+      },
+      {
+        "channel": 4,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 40,
+        "probability": 0,
+        "start": 8.0,
+        "velocity": 106
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 71,
+        "probability": 0,
+        "start": 8.5,
+        "velocity": 104
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 71,
+        "probability": 0,
+        "start": 9.0,
+        "velocity": 98
+      },
+      {
+        "channel": 1,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 64,
+        "probability": 0,
+        "start": 9.0,
+        "velocity": 101
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 59,
+        "probability": 0,
+        "start": 9.0,
+        "velocity": 92
+      },
+      {
+        "channel": 3,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 53,
+        "probability": 0,
+        "start": 9.0,
+        "velocity": 104
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 74,
+        "probability": 0,
+        "start": 9.5,
+        "velocity": 105
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 74,
+        "probability": 0,
+        "start": 10.0,
+        "velocity": 106
+      },
+      {
+        "channel": 1,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 64,
+        "probability": 0,
+        "start": 10.0,
+        "velocity": 102
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 59,
+        "probability": 0,
+        "start": 10.0,
+        "velocity": 103
+      },
+      {
+        "channel": 3,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 56,
+        "probability": 0,
+        "start": 10.0,
+        "velocity": 105
+      },
+      {
+        "channel": 4,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 40,
+        "probability": 0,
+        "start": 10.0,
+        "velocity": 108
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 77,
+        "probability": 0,
+        "start": 10.5,
+        "velocity": 98
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 77,
+        "probability": 0,
+        "start": 11.0,
+        "velocity": 94
+      },
+      {
+        "channel": 1,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 65,
+        "probability": 0,
+        "start": 11.0,
+        "velocity": 97
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 59,
+        "probability": 0,
+        "start": 11.0,
+        "velocity": 97
+      },
+      {
+        "channel": 3,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 56,
+        "probability": 0,
+        "start": 11.0,
+        "velocity": 94
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 74,
+        "probability": 0,
+        "start": 11.5,
+        "velocity": 92
+      },
+      {
+        "channel": 0,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 72,
+        "probability": 0,
+        "start": 12.0,
+        "velocity": 104
+      },
+      {
+        "channel": 1,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 64,
+        "probability": 0,
+        "start": 12.0,
+        "velocity": 105
+      },
+      {
+        "channel": 2,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 60,
+        "probability": 0,
+        "start": 12.0,
+        "velocity": 111
+      },
+      {
+        "channel": 3,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 57,
+        "probability": 0,
+        "start": 12.0,
+        "velocity": 115
+      },
+      {
+        "channel": 4,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 45,
+        "probability": 0,
+        "start": 12.0,
+        "velocity": 116
+      },
+      {
+        "channel": 0,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 72,
+        "probability": 0,
+        "start": 16.0,
+        "velocity": 100
+      },
+      {
+        "channel": 1,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 65,
+        "probability": 0,
+        "start": 16.0,
+        "velocity": 98
+      },
+      {
+        "channel": 2,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 60,
+        "probability": 0,
+        "start": 16.0,
+        "velocity": 105
+      },
+      {
+        "channel": 3,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 57,
+        "probability": 0,
+        "start": 16.0,
+        "velocity": 102
+      },
+      {
+        "channel": 4,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 41,
+        "probability": 0,
+        "start": 16.0,
+        "velocity": 93
+      },
+      {
+        "channel": 0,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 71,
+        "probability": 0,
+        "start": 18.0,
+        "velocity": 103
+      },
+      {
+        "channel": 1,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 65,
+        "probability": 0,
+        "start": 18.0,
+        "velocity": 102
+      },
+      {
+        "channel": 2,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 60,
+        "probability": 0,
+        "start": 18.0,
+        "velocity": 100
+      },
+      {
+        "channel": 0,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 71,
+        "probability": 0,
+        "start": 20.0,
+        "velocity": 113
+      },
+      {
+        "channel": 1,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 69,
+        "probability": 0,
+        "start": 20.0,
+        "velocity": 120
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 60,
+        "probability": 0,
+        "start": 20.0,
+        "velocity": 107
+      },
+      {
+        "channel": 3,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 53,
+        "probability": 0,
+        "start": 20.0,
+        "velocity": 101
+      },
+      {
+        "channel": 4,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 38,
+        "probability": 0,
+        "start": 20.0,
+        "velocity": 105
+      },
+      {
+        "channel": 0,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 71,
+        "probability": 0,
+        "start": 21.0,
+        "velocity": 102
+      },
+      {
+        "channel": 1,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 69,
+        "probability": 0,
+        "start": 21.0,
+        "velocity": 104
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 59,
+        "probability": 0,
+        "start": 21.0,
+        "velocity": 98
+      },
+      {
+        "channel": 0,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 71,
+        "probability": 0,
+        "start": 22.0,
+        "velocity": 110
+      },
+      {
+        "channel": 1,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 69,
+        "probability": 0,
+        "start": 22.0,
+        "velocity": 106
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 59,
+        "probability": 0,
+        "start": 22.0,
+        "velocity": 108
+      },
+      {
+        "channel": 3,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 52,
+        "probability": 0,
+        "start": 22.0,
+        "velocity": 102
+      },
+      {
+        "channel": 0,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 74,
+        "probability": 0,
+        "start": 23.0,
+        "velocity": 100
+      },
+      {
+        "channel": 1,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 69,
+        "probability": 0,
+        "start": 23.0,
+        "velocity": 104
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 59,
+        "probability": 0,
+        "start": 23.0,
+        "velocity": 99
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 74,
+        "probability": 0,
+        "start": 24.0,
+        "velocity": 110
+      },
+      {
+        "channel": 1,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 68,
+        "probability": 0,
+        "start": 24.0,
+        "velocity": 105
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 59,
+        "probability": 0,
+        "start": 24.0,
+        "velocity": 111
+      },
+      {
+        "channel": 3,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 52,
+        "probability": 0,
+        "start": 24.0,
+        "velocity": 111
+      },
+      {
+        "channel": 4,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 40,
+        "probability": 0,
+        "start": 24.0,
+        "velocity": 112
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 74,
+        "probability": 0,
+        "start": 24.5,
+        "velocity": 94
+      },
+      {
+        "channel": 1,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 65,
+        "probability": 0,
+        "start": 24.5,
+        "velocity": 94
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 74,
+        "probability": 0,
+        "start": 25.0,
+        "velocity": 98
+      },
+      {
+        "channel": 1,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 65,
+        "probability": 0,
+        "start": 25.0,
+        "velocity": 91
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 56,
+        "probability": 0,
+        "start": 25.0,
+        "velocity": 89
+      },
+      {
+        "channel": 3,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 52,
+        "probability": 0,
+        "start": 25.0,
+        "velocity": 96
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 71,
+        "probability": 0,
+        "start": 25.5,
+        "velocity": 93
+      },
+      {
+        "channel": 1,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 65,
+        "probability": 0,
+        "start": 25.5,
+        "velocity": 95
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 71,
+        "probability": 0,
+        "start": 26.0,
+        "velocity": 95
+      },
+      {
+        "channel": 1,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 65,
+        "probability": 0,
+        "start": 26.0,
+        "velocity": 101
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 56,
+        "probability": 0,
+        "start": 26.0,
+        "velocity": 95
+      },
+      {
+        "channel": 3,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 53,
+        "probability": 0,
+        "start": 26.0,
+        "velocity": 97
+      },
+      {
+        "channel": 4,
+        "duration": 2.0,
+        "muted": 0,
+        "pitch": 40,
+        "probability": 0,
+        "start": 26.0,
+        "velocity": 99
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 71,
+        "probability": 0,
+        "start": 26.5,
+        "velocity": 88
+      },
+      {
+        "channel": 1,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 62,
+        "probability": 0,
+        "start": 26.5,
+        "velocity": 80
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 71,
+        "probability": 0,
+        "start": 27.0,
+        "velocity": 96
+      },
+      {
+        "channel": 1,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 64,
+        "probability": 0,
+        "start": 27.0,
+        "velocity": 95
+      },
+      {
+        "channel": 2,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 56,
+        "probability": 0,
+        "start": 27.0,
+        "velocity": 86
+      },
+      {
+        "channel": 3,
+        "duration": 1.0,
+        "muted": 0,
+        "pitch": 53,
+        "probability": 0,
+        "start": 27.0,
+        "velocity": 90
+      },
+      {
+        "channel": 0,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 74,
+        "probability": 0,
+        "start": 27.5,
+        "velocity": 89
+      },
+      {
+        "channel": 1,
+        "duration": 0.5,
+        "muted": 0,
+        "pitch": 64,
+        "probability": 0,
+        "start": 27.5,
+        "velocity": 89
+      },
+      {
+        "channel": 0,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 72,
+        "probability": 0,
+        "start": 28.0,
+        "velocity": 91
+      },
+      {
+        "channel": 1,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 64,
+        "probability": 0,
+        "start": 28.0,
+        "velocity": 100
+      },
+      {
+        "channel": 2,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 57,
+        "probability": 0,
+        "start": 28.0,
+        "velocity": 97
+      },
+      {
+        "channel": 3,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 52,
+        "probability": 0,
+        "start": 28.0,
+        "velocity": 100
+      },
+      {
+        "channel": 4,
+        "duration": 4.0,
+        "muted": 0,
+        "pitch": 45,
+        "probability": 0,
+        "start": 28.0,
+        "velocity": 106
+      }
+    ]
+  },
+  "timestamp_unix_ms": 1787737677618
+}

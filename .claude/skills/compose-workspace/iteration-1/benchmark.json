@@ -1,0 +1,256 @@
+{
+  "metadata": {
+    "skill_name": "compose",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-08-26T10:16:40Z",
+    "evals_run": [
+      0,
+      1
+    ],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": 0,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 7,
+        "failed": 0,
+        "total": 7,
+        "time_seconds": 398.7,
+        "tokens": 73663,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Render is valid: notes on all 5 channels and no real hard violations (the beat-0 voice_budget artifact is allowed)",
+          "passed": true,
+          "evidence": "channels=[0, 1, 2, 3, 4], real hard violations=0"
+        },
+        {
+          "text": "8 bars total: pl x render_length == 8 in the archived config",
+          "passed": true,
+          "evidence": "pl=4 render_length=2"
+        },
+        {
+          "text": "Aeolian honored: mode == 5 in the archived config",
+          "passed": true,
+          "evidence": "mode=5"
+        },
+        {
+          "text": "Loop wrap enabled: loop_wrap_weight > 0 in the archived config",
+          "passed": true,
+          "evidence": "loop_wrap_weight=1.5"
+        },
+        {
+          "text": "Tension sits before the arrival: mean dissonant-pair share on pre-cadence bars (bar % pl == pl-2) exceeds that on arrival bars (bar % pl == pl-1)",
+          "passed": true,
+          "evidence": "pre-cadence mean=0.39, arrival mean=0.12"
+        },
+        {
+          "text": "Tight voice leading: no melodic jump exceeds 7 semitones in any voice",
+          "passed": true,
+          "evidence": "max jump=5"
+        },
+        {
+          "text": "Loop seam is small: total last-to-first pitch distance summed over the 5 voices <= 15 semitones",
+          "passed": true,
+          "evidence": "seam total=6"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 352.9,
+        "tokens": 73773,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Render is valid: notes on all 5 channels and no real hard violations (the beat-0 voice_budget artifact is allowed)",
+          "passed": true,
+          "evidence": "channels=[0, 1, 2, 3, 4], real hard violations=0"
+        },
+        {
+          "text": "16 bars total: pl x render_length == 16 in the archived config",
+          "passed": true,
+          "evidence": "pl=4 render_length=4"
+        },
+        {
+          "text": "Bright character: mode is major-family (0, 3 or 4) or the harmony_matrix_contour spends time on rows 3-5 (Ethereal/Bright)",
+          "passed": true,
+          "evidence": "mode=3, matrix contour range=[0.0, 5.0]"
+        },
+        {
+          "text": "Interlocking rhythm: rhythm_generators is non-empty with rhythm_voice_rotation >= 1, or voices demonstrably attack at offset times (not homorhythmic)",
+          "passed": true,
+          "evidence": "rhythm_generators=[4, 3], rotation=1"
+        },
+        {
+          "text": "Strong final close: the last bar's downbeat chord has the bass on the chord root and a third present",
+          "passed": true,
+          "evidence": "final bar 15: root_pc=0, bass pc=0, third_present=True"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 0,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 7,
+        "failed": 0,
+        "total": 7,
+        "time_seconds": 440.6,
+        "tokens": 91542,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Render is valid: notes on all 5 channels and no real hard violations (the beat-0 voice_budget artifact is allowed)",
+          "passed": true,
+          "evidence": "channels=[0, 1, 2, 3, 4], real hard violations=0"
+        },
+        {
+          "text": "8 bars total: pl x render_length == 8 in the archived config",
+          "passed": true,
+          "evidence": "pl=4 render_length=2"
+        },
+        {
+          "text": "Aeolian honored: mode == 5 in the archived config",
+          "passed": true,
+          "evidence": "mode=5"
+        },
+        {
+          "text": "Loop wrap enabled: loop_wrap_weight > 0 in the archived config",
+          "passed": true,
+          "evidence": "loop_wrap_weight=1.5"
+        },
+        {
+          "text": "Tension sits before the arrival: mean dissonant-pair share on pre-cadence bars (bar % pl == pl-2) exceeds that on arrival bars (bar % pl == pl-1)",
+          "passed": true,
+          "evidence": "pre-cadence mean=0.42, arrival mean=0.00"
+        },
+        {
+          "text": "Tight voice leading: no melodic jump exceeds 7 semitones in any voice",
+          "passed": true,
+          "evidence": "max jump=5"
+        },
+        {
+          "text": "Loop seam is small: total last-to-first pitch distance summed over the 5 voices <= 15 semitones",
+          "passed": true,
+          "evidence": "seam total=15"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 320.7,
+        "tokens": 84720,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Render is valid: notes on all 5 channels and no real hard violations (the beat-0 voice_budget artifact is allowed)",
+          "passed": true,
+          "evidence": "channels=[0, 1, 2, 3, 4], real hard violations=0"
+        },
+        {
+          "text": "16 bars total: pl x render_length == 16 in the archived config",
+          "passed": true,
+          "evidence": "pl=4 render_length=4"
+        },
+        {
+          "text": "Bright character: mode is major-family (0, 3 or 4) or the harmony_matrix_contour spends time on rows 3-5 (Ethereal/Bright)",
+          "passed": true,
+          "evidence": "mode=0, matrix contour range=[0.0, 1.0]"
+        },
+        {
+          "text": "Interlocking rhythm: rhythm_generators is non-empty with rhythm_voice_rotation >= 1, or voices demonstrably attack at offset times (not homorhythmic)",
+          "passed": true,
+          "evidence": "rhythm_generators=[4, 3], rotation=1"
+        },
+        {
+          "text": "Strong final close: the last bar's downbeat chord has the bass on the chord root and a third present",
+          "passed": true,
+          "evidence": "final bar 15: root_pc=0, bass pc=0, third_present=True"
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 375.8,
+        "stddev": 32.3855,
+        "min": 352.9,
+        "max": 398.7
+      },
+      "tokens": {
+        "mean": 73718.0,
+        "stddev": 77.7817,
+        "min": 73663,
+        "max": 73773
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 380.65,
+        "stddev": 84.7821,
+        "min": 320.7,
+        "max": 440.6
+      },
+      "tokens": {
+        "mean": 88131.0,
+        "stddev": 4823.8825,
+        "min": 84720,
+        "max": 91542
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.00",
+      "time_seconds": "-4.8",
+      "tokens": "-14413"
+    }
+  },
+  "notes": []
+}

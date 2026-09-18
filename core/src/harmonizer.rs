@@ -3,6 +3,7 @@ use crate::trace::{GroupBreakdown, TraceCollector, VoiceBreakdown};
 use crate::model::{Note, Config, ChordTemplate};
 use crate::utils::{SeededRng, ArrayExt, mod_shim, sin};
 use crate::music_theory::{gen_scale};
+use crate::fugue::{FixedNoteConstraints, FugueTimeline};
 
 use dashmap::DashMap;
 use rayon::prelude::*;
@@ -104,6 +105,7 @@ const CONTOUR_PITCH_SPAN: f64 = 12.0;
 /// A resolved consonance profile for one fractional harmony-context value.
 /// `soft` holds bounded style preferences per interval class (0..11); `forbidden`
 /// marks hard-rejected interval classes (kept out of the soft LERP).
+#[derive(Clone, Copy)]
 struct HarmonyRow {
     soft: [f64; 12],
     forbidden: [bool; 12],
@@ -250,13 +252,18 @@ const BASS_LEAP_SCORE: f64 = 0.5;
 /// progression; the raw ramp scored a cadential 5th leap at 0.0 and an octave
 /// at −0.71, so the bass was pressured to creep stepwise through changes the
 /// upper voices were free to sing over. Other channels keep the strict ramp.
-fn melodic_distance_score(prev_note: i32, current_note: i32, channel: i32) -> f64 {
+fn melodic_distance_score_for(prev_note: i32, current_note: i32, channel: i32, bass_voice: i32) -> f64 {
     let s = get_distance_score(prev_note, current_note);
-    if channel == 4 && matches!((prev_note - current_note).abs(), 5 | 7 | 12) {
+    if channel == bass_voice && matches!((prev_note - current_note).abs(), 5 | 7 | 12) {
         s.max(BASS_LEAP_SCORE)
     } else {
         s
     }
+}
+
+#[cfg(test)]
+fn melodic_distance_score(prev_note: i32, current_note: i32, channel: i32) -> f64 {
+    melodic_distance_score_for(prev_note, current_note, channel, 4)
 }
 
 /// Melody force (config.melody_force): line-shaping pressure applied to EVERY
@@ -513,6 +520,8 @@ pub struct HarmonizerState {
     pub schillinger_notes: Vec<Vec<Vec<i32>>>,
     pub contours: Contours,
     pub harmony_matrix: Option<Vec<Vec<f64>>>,
+    pub fixed_notes: FixedNoteConstraints,
+    pub fugue_timeline: FugueTimeline,
 }
 
 impl HarmonizerState {
@@ -524,11 +533,28 @@ impl HarmonizerState {
             schillinger_notes: crate::schillinger::gen_schillinger_progression(config, &contours),
             contours,
             harmony_matrix: config.harmony_matrix.clone(),
+            fixed_notes: FixedNoteConstraints::default(),
+            fugue_timeline: FugueTimeline::default(),
         }
     }
 
     pub fn from_config(config: &Config) -> Self {
         Self::new(config, Contours::from_config(config))
+    }
+
+    pub fn with_fixed_notes(mut self, fixed_notes: FixedNoteConstraints) -> Self {
+        self.fixed_notes = fixed_notes;
+        self
+    }
+
+    pub fn with_fugue_plan(
+        mut self,
+        fixed_notes: FixedNoteConstraints,
+        fugue_timeline: FugueTimeline,
+    ) -> Self {
+        self.fixed_notes = fixed_notes;
+        self.fugue_timeline = fugue_timeline;
+        self
     }
 }
 
@@ -593,14 +619,14 @@ fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &
 
     let result = if config.use_resolve {
         if bar % config.pl == 0 || bar % config.pl == config.pl - 1 {
-            if current_note.channel == 4 {
+            if current_note.channel == config.bass_voice {
                 vec![notes[0]]
-            } else if current_note.channel == 0 {
+            } else if current_note.channel == config.soprano_voice {
                 vec![notes[2]]
             } else {
                 vec![notes[0], notes[1], notes[2]]
             }
-        } else if current_note.channel == 4 {
+        } else if current_note.channel == config.bass_voice {
             vec![notes[0]]
         } else {
             notes.clone()
@@ -1160,6 +1186,12 @@ struct CandTerms {
     /// Loop-seam quality: how well this (final-chord) candidate leads back into
     /// the branch's own opening pitch on the same channel (loop_wrap_weight).
     loop_wrap: f64,
+    /// Candidate sustain that will overlap a later protected subject/answer
+    /// onset in another voice.
+    fugue_future_overlap: f64,
+    /// Motion from the last generated note into this voice's next protected
+    /// subject/answer return.
+    fugue_entry_approach: f64,
 }
 
 /// True when the group at `group_start` lies in the render's final bar — the
@@ -1358,6 +1390,94 @@ fn fixed_lead_pitch(note: &Note, state: &HarmonizerState, config: &Config) -> i3
     }
 }
 
+#[derive(Clone, Copy)]
+struct FutureProtectedOverlap {
+    note: Note,
+    fraction: f64,
+    row: HarmonyRow,
+}
+
+fn future_protected_overlaps(
+    note: &Note,
+    config: &Config,
+    state: &HarmonizerState,
+) -> Vec<FutureProtectedOverlap> {
+    if !config.fugue_mode || config.fugue_subject_anticipation <= 0.0 {
+        return Vec::new();
+    }
+    let end = note.start + note.duration;
+    state.fugue_timeline.future_overlaps(note).into_iter().filter_map(|future| {
+        let overlap = end.min(future.start + future.duration) - future.start.max(note.start);
+        if overlap <= 0.001 {
+            return None;
+        }
+        let fraction = (overlap / future.duration.max(0.001)).clamp(0.0, 1.0);
+        let harmony_ctx = state.contours.harmony_matrix.as_ref()
+            .map(|contour| contour.at(future.start))
+            .unwrap_or(0.0);
+        Some(FutureProtectedOverlap {
+            note: future,
+            fraction,
+            row: get_harmony_row(harmony_ctx, state.harmony_matrix.as_ref()),
+        })
+    }).collect()
+}
+
+fn fugue_future_overlap_term(
+    candidate: i32,
+    channel: i32,
+    overlaps: &[FutureProtectedOverlap],
+    config: &Config,
+) -> f64 {
+    let weight = config.fugue_subject_anticipation.max(0.0);
+    if weight == 0.0 {
+        return 0.0;
+    }
+    overlaps.iter().map(|future| {
+        let ic = ((candidate - future.note.pitch).abs() % 12) as usize;
+        let pair = if future.row.forbidden[ic] {
+            -1.0
+        } else {
+            (1.0 - config.roughness_weight) * future.row.soft[ic]
+                - config.roughness_weight * pair_roughness(candidate, future.note.pitch)
+        };
+        let crossing = if voices_cross(channel, candidate, future.note.channel, future.note.pitch) {
+            1.0
+        } else {
+            0.0
+        };
+        let unison = if candidate == future.note.pitch { 1.0 } else { 0.0 };
+        -weight * future.fraction * ((-pair).max(0.0) + crossing + unison)
+    }).sum()
+}
+
+fn fugue_entry_approach_term(
+    candidate: i32,
+    note: &Note,
+    config: &Config,
+    state: &HarmonizerState,
+) -> f64 {
+    let weight = config.fugue_entry_approach.max(0.0);
+    if weight == 0.0 {
+        return 0.0;
+    }
+    let Some(approach) = state.fugue_timeline.approach_for(note) else {
+        return 0.0;
+    };
+    let gap = approach.target_start - (note.start + note.duration);
+    if !(-0.001..=4.0).contains(&gap) {
+        return 0.0;
+    }
+    let distance = (candidate - approach.target_pitch).abs();
+    let preparation = match distance {
+        1 | 2 => 1.0,
+        0 | 3 => 0.5,
+        4 => 0.25,
+        _ => get_distance_score(candidate, approach.target_pitch).min(0.0),
+    };
+    weight * preparation
+}
+
 fn build_joint_voices(
     group: &[Note],
     w_smooth: f64,
@@ -1372,7 +1492,7 @@ fn build_joint_voices(
     // placed in the same chord — the raw input lead pitch is a constant seed, so
     // anchoring to it would freeze every lower voice on one pitch class).
     let lead_fixed: Option<i32> = group.iter()
-        .find(|n| n.channel == 0 && config.use_leading_voice)
+        .find(|n| n.channel == 0 && config.use_leading_voice && !config.fugue_mode)
         .map(|n| fixed_lead_pitch(n, state, config));
     let lead_for_bounds: Vec<i32> = lead_fixed
         .or_else(|| precomputed.last_notes_by_channel.first().and_then(|v| v.first()).copied())
@@ -1433,7 +1553,23 @@ fn build_joint_voices(
             prepared_suspension(history, group_start, state, precomputed)
         } else { None };
 
-        if note.channel == 0 && config.use_leading_voice {
+        if let Some(pitch) = state.fixed_notes.pitch_for(note) {
+            return JointVoice {
+                note: *note,
+                prev,
+                is_fixed_lead: true,
+                suspension,
+                cands: vec![JointCand {
+                    pitch,
+                    soft_base: 0.0,
+                    lead_term: 0.0,
+                    nonlead_term: 0.0,
+                    terms: CandTerms::default(),
+                }],
+            };
+        }
+
+        if note.channel == 0 && config.use_leading_voice && !config.fugue_mode {
             return JointVoice {
                 note: *note,
                 prev,
@@ -1448,6 +1584,10 @@ fn build_joint_voices(
                 }],
             };
         }
+
+        // Future protected notes are gathered once for this generated note;
+        // candidate pitches only evaluate the small set that truly overlaps.
+        let future_overlaps = future_protected_overlaps(note, config, state);
 
         let mut current_lasts = precomputed.last_notes_by_channel
             .get(channel_idx)
@@ -1547,8 +1687,21 @@ fn build_joint_voices(
         let bounds = precomputed.boundaries_by_channel
             .get(channel_idx)
             .unwrap_or(&default_bounds);
-        let cb_max = *CROSSING_BUFFER_UPPER.get_wrapped(channel_idx);
-        let cb_min = *CROSSING_BUFFER_LOWER.get_wrapped(channel_idx);
+        // The legacy tables describe five fixed parts. Wider fugues move the
+        // bass-specific octave clearance to their actual last two channels;
+        // ordinary harmony and the original three-voice fugue remain exact.
+        let (cb_max, cb_min) = if config.fugue_mode && config.fugue_voice_count > 3 {
+            let bass = (config.fugue_voice_count - 1) as usize;
+            (
+                if channel_idx == bass { 7 } else { 2 },
+                if channel_idx == bass { 1 } else if channel_idx + 1 == bass { 7 } else { 2 },
+            )
+        } else {
+            (
+                *CROSSING_BUFFER_UPPER.get_wrapped(channel_idx),
+                *CROSSING_BUFFER_LOWER.get_wrapped(channel_idx),
+            )
+        };
 
         let eff_melody_force = melody_force_at(state, config, channel_idx, note.start);
         // Phrase echo: what this voice did one phrase ago at this position —
@@ -1567,7 +1720,7 @@ fn build_joint_voices(
             // Each named component is computed once and folded into soft_base in
             // the same order as always, so the sum stays bit-identical.
             let mut terms = CandTerms {
-                smoothness: melodic_distance_score(last_note, c, note.channel) * w_smooth,
+                smoothness: melodic_distance_score_for(last_note, c, note.channel, config.bass_voice) * w_smooth,
                 melody_force: melody_force_term(c, &current_lasts, eff_melody_force),
                 tendency: if prev.is_some() {
                     tendency_term(last_note, c, tonic, source_harmony, current_harmony, config.tendency_weight)
@@ -1595,14 +1748,19 @@ fn build_joint_voices(
                 // tone in the final chord is rewarded when THIS voice is the
                 // one that lands on the tonic at bar 0).
                 terms.loop_wrap = config.loop_wrap_weight
-                    * (melodic_distance_score(c, target, note.channel)
+                    * (melodic_distance_score_for(c, target, note.channel, config.bass_voice)
                         + tendency_term(c, target, wrap_tonic, current_harmony, wrap_harmony, 1.0));
             }
+            terms.fugue_future_overlap =
+                fugue_future_overlap_term(c, note.channel, &future_overlaps, config);
+            terms.fugue_entry_approach = fugue_entry_approach_term(c, note, config, state);
             let mut soft_base = terms.smoothness;
             soft_base += terms.melody_force;
             soft_base += terms.tendency;
             soft_base += terms.phrase_echo;
             soft_base += terms.loop_wrap;
+            soft_base += terms.fugue_future_overlap;
+            soft_base += terms.fugue_entry_approach;
             if c == last_note && off_scale_hold {
                 soft_base -= OFF_SCALE_HOLD_PENALTY;
                 terms.off_scale_hold = -OFF_SCALE_HOLD_PENALTY;
@@ -1950,6 +2108,8 @@ impl ChordScorer<'_> {
             sink.voice_term(i, "crossing_penalty", c.terms.crossing_penalty);
             sink.voice_term(i, "phrase_echo", c.terms.phrase_echo);
             sink.voice_term(i, "loop_wrap", c.terms.loop_wrap);
+            sink.voice_term(i, "fugue_future_overlap", c.terms.fugue_future_overlap);
+            sink.voice_term(i, "fugue_entry_approach", c.terms.fugue_entry_approach);
             if !v.is_fixed_lead {
                 nonlead_sum += c.nonlead_term;
                 let delta = c.lead_term - c.nonlead_term;
@@ -2229,7 +2389,8 @@ impl ChordScorer<'_> {
         // (held notes are oblique motion and exempt).
         if self.check_dir {
             for (v, &ci) in voices.iter().zip(chosen) {
-                if v.note.channel != 0 && v.note.channel != 4 {
+                if v.note.channel != self.config.soprano_voice
+                    && v.note.channel != self.config.bass_voice {
                     continue;
                 }
                 let Some(q) = v.prev else { continue };
@@ -2944,6 +3105,7 @@ fn explain_render(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fugue::plan_exposition;
     use crate::model::{Config, Note};
 
     fn approx(a: f64, b: f64) -> bool {
@@ -2957,6 +3119,8 @@ mod tests {
             schillinger_notes: vec![],
             contours: Contours::default(),
             harmony_matrix: None,
+            fixed_notes: FixedNoteConstraints::default(),
+            fugue_timeline: FugueTimeline::default(),
         }
     }
 
@@ -3044,6 +3208,18 @@ mod tests {
         // A tritone or a 7th in the bass is not an idiomatic root move.
         assert!(approx(melodic_distance_score(48, 54, 4), get_distance_score(48, 54)));
         assert!(approx(melodic_distance_score(48, 58, 4), get_distance_score(48, 58)));
+    }
+
+    #[test]
+    fn bass_leap_role_is_configurable_for_three_voice_writing() {
+        assert!(approx(
+            melodic_distance_score_for(48, 55, 2, 2),
+            BASS_LEAP_SCORE
+        ));
+        assert!(approx(
+            melodic_distance_score_for(48, 55, 2, 4),
+            get_distance_score(48, 55)
+        ));
     }
 
     #[test]
@@ -3837,6 +4013,163 @@ mod tests {
 
     fn named_term(terms: &[crate::trace::Term], name: &str) -> f64 {
         terms.iter().filter(|t| t.name == name).map(|t| t.value).sum()
+    }
+
+    fn anticipation_config() -> Config {
+        let mut cfg = test_config();
+        cfg.fugue_mode = true;
+        cfg.fugue_voice_count = 3;
+        cfg.fugue_entry_spacing = 1.0;
+        cfg.fugue_answer_interval = 0;
+        cfg.fugue_bass_subject_shift = 0;
+        cfg.pl = 1;
+        cfg.render_length = 2;
+        cfg.candidate_range = 5;
+        cfg.harmony_distance_balance = -0.5;
+        cfg.roughness_weight = 0.0;
+        cfg.no_crossing = 0.0;
+        cfg.last_note_same = 0.0;
+        cfg.last_note_exist_in_voice = 0.0;
+        cfg.same_note_bonus = 0.0;
+        cfg.melody_force = 0.0;
+        cfg.voice_contour_weight = 0.0;
+        cfg.metric_hold_strength = 0.0;
+        cfg.momentum_weight = 0.0;
+        cfg.density_weight = 0.0;
+        cfg.min_voices_changed = -1;
+        cfg.max_voices_changed = -1;
+        cfg
+    }
+
+    fn planned_state(cfg: &Config, pitch: i32, source_length: f64) -> HarmonizerState {
+        let contours = Contours::from_config(cfg);
+        let plan = plan_exposition(
+            &[Note::new(pitch, 0.0, source_length, 90, 0, 0)],
+            source_length,
+            cfg,
+            &contours,
+        ).unwrap();
+        HarmonizerState::new(cfg, contours).with_fugue_plan(plan.fixed, plan.timeline)
+    }
+
+    fn choose_single_pitch(
+        cfg: &Config,
+        state: &HarmonizerState,
+        context: &[Note],
+        note: Note,
+    ) -> i32 {
+        let group = [note];
+        let pre = build_precomputed_data(context, &group, note.start, None);
+        score_group_options(&group, cfg, state, &pre, 1, None, None)[0].0[0].pitch
+    }
+
+    #[test]
+    fn subject_anticipation_avoids_a_future_cross_voice_fixed_clash() {
+        let mut cfg = anticipation_config();
+        let state = planned_state(&cfg, 61, 1.0);
+        let history = [Note::new(61, 0.0, 1.0, 90, 0, 1)];
+        let generated = Note::new(61, 1.0, 2.0, 80, 0, 1);
+
+        assert_eq!(choose_single_pitch(&cfg, &state, &history, generated), 61);
+        cfg.fugue_subject_anticipation = 10.0;
+        assert_eq!(choose_single_pitch(&cfg, &state, &history, generated), 64);
+
+        let clashing = [Note { pitch: 61, ..generated }];
+        let trace = inspect_voicing(&cfg, &state, &history, &clashing);
+        assert!(named_term(&trace.voice_terms[0], "fugue_future_overlap") < 0.0);
+
+        // A release exactly at the future onset does not overlap, and the
+        // fixed note at the current onset is already scored by the chord path.
+        let nonoverlap = Note { duration: 1.0, ..generated };
+        let group = [nonoverlap];
+        let pre = build_precomputed_data(&history, &group, group[0].start, None);
+        let voices = build_joint_voices(&group, 1.0, &cfg, &state, &pre, None);
+        assert!(voices[0].cands.iter().all(|cand| cand.terms.fugue_future_overlap == 0.0));
+    }
+
+    #[test]
+    fn subject_anticipation_changes_the_greedy_beam_before_a_protected_entry() {
+        fn run(mut cfg: Config, anticipation: f64) -> (Vec<Note>, Vec<Note>) {
+            cfg.fugue_answer_interval = 12;
+            cfg.fugue_subject_anticipation = anticipation;
+            cfg.beam_width = 1;
+            cfg.lookahead_depth = 0;
+            let contours = Contours::from_config(&cfg);
+            let plan = plan_exposition(
+                &[Note::new(61, 0.0, 1.0, 90, 0, 0)],
+                1.0,
+                &cfg,
+                &contours,
+            ).unwrap();
+            let protected: Vec<Note> = plan.notes.iter().copied()
+                .filter(|note| plan.fixed.pitch_for(note).is_some() && note.start <= 2.0)
+                .collect();
+            let mut income = protected.clone();
+            income.push(Note::new(61, 1.0, 2.0, 80, 0, 1));
+            income.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap()
+                .then_with(|| b.pitch.cmp(&a.pitch)));
+            let state = HarmonizerState::new(&cfg, contours)
+                .with_fugue_plan(plan.fixed, plan.timeline);
+            (harmonise_explained(income, &cfg, &state, None).notes, protected)
+        }
+
+        let cfg = anticipation_config();
+        let (off, protected) = run(cfg.clone(), 0.0);
+        let (on, _) = run(cfg, 10.0);
+        let free_pitch = |notes: &[Note]| notes.iter()
+            .find(|note| note.channel == 1 && (note.start - 1.0).abs() < 0.001)
+            .unwrap().pitch;
+        assert_eq!(free_pitch(&off), 61, "without anticipation the octave hold wins");
+        let anticipated = free_pitch(&on);
+        assert!(matches!((anticipated - 61).abs() % 12, 3 | 4 | 5 | 7 | 8 | 9));
+        for fixed in protected {
+            for output in [&off, &on] {
+                let actual = output.iter().find(|note| {
+                    note.channel == fixed.channel && (note.start - fixed.start).abs() < 0.001
+                }).unwrap();
+                assert_eq!((actual.pitch, actual.duration), (fixed.pitch, fixed.duration));
+            }
+        }
+    }
+
+    #[test]
+    fn entry_approach_shapes_only_the_last_generated_note_before_a_return() {
+        let mut cfg = anticipation_config();
+        cfg.fugue_repeat_subject = true;
+        cfg.voice_rhythm_patterns = vec![vec![0.5]; 3];
+        let contours = Contours::from_config(&cfg);
+        let plan = plan_exposition(
+            &[Note::new(64, 0.0, 1.0, 90, 0, 0)],
+            1.0,
+            &cfg,
+            &contours,
+        ).unwrap();
+        let preparation = plan.notes.iter().copied().find(|note| {
+            note.channel == 1
+                && plan.fixed.pitch_for(note).is_none()
+                && plan.timeline.approach_for(note).is_some()
+        }).unwrap();
+        let earlier = plan.notes.iter().copied().find(|note| {
+            note.channel == 1
+                && plan.fixed.pitch_for(note).is_none()
+                && note.start < preparation.start - 0.001
+        }).unwrap();
+        let state = HarmonizerState::new(&cfg, contours)
+            .with_fugue_plan(plan.fixed, plan.timeline);
+        let history = [Note::new(60, preparation.start - 0.5, 0.5, 80, 0, 1)];
+
+        assert_eq!(choose_single_pitch(&cfg, &state, &history, preparation), 60);
+        cfg.fugue_entry_approach = 10.0;
+        assert_eq!(choose_single_pitch(&cfg, &state, &history, preparation), 62);
+
+        let approached = [Note { pitch: 62, ..preparation }];
+        let trace = inspect_voicing(&cfg, &state, &history, &approached);
+        assert!(named_term(&trace.voice_terms[0], "fugue_entry_approach") > 0.0);
+
+        let earlier_group = [earlier];
+        let pre = build_precomputed_data(&[], &earlier_group, earlier.start, None);
+        let voices = build_joint_voices(&earlier_group, 1.0, &cfg, &state, &pre, None);
+        assert!(voices[0].cands.iter().all(|cand| cand.terms.fugue_entry_approach == 0.0));
     }
 
     fn suspension_fixture() -> (Config, HarmonizerState, Vec<Note>) {

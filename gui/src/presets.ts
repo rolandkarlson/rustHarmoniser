@@ -11,6 +11,44 @@ export const PRESET_INFO = {
 
 export type PresetName = keyof typeof PRESET_INFO;
 
+export const DEFAULT_FUGUE_TRANSFORM_CYCLE = [
+  { invert: true, time_scale: 1 },
+  { invert: false, time_scale: 2 },
+  { invert: true, time_scale: 2 },
+  { invert: false, time_scale: 1 },
+] as const;
+
+export const DEFAULT_FUGUE_REGISTER_SHIFTS = [0, 0, -12, -24, -24, -36, -36, -48] as const;
+
+export function resizeFugueRegisterShifts(value: unknown, count: number): number[] {
+  const saved = Array.isArray(value) ? value : [];
+  return Array.from({ length: count }, (_, i) =>
+    typeof saved[i] === 'number' && Number.isFinite(saved[i])
+      ? Math.round(saved[i])
+      : DEFAULT_FUGUE_REGISTER_SHIFTS[i]
+  );
+}
+
+/** Keep valid custom routes in order, then append unused track indices. */
+export function resizeFugueOutputTracks(value: unknown, count: number): number[] {
+  const routes: number[] = [];
+  if (Array.isArray(value)) {
+    for (const raw of value) {
+      const track = typeof raw === 'number' && Number.isSafeInteger(raw)
+        && raw >= 0 && raw <= 2_147_483_647 ? raw : -1;
+      if (track >= 0 && !routes.includes(track) && routes.length < count) routes.push(track);
+    }
+  }
+  const highest = routes.length > 0 ? Math.max(...routes) : -1;
+  let candidate = highest < 2_147_483_647 ? highest + 1 : 0;
+  while (routes.length < count) {
+    while (routes.includes(candidate)) candidate = candidate === 2_147_483_647 ? 0 : candidate + 1;
+    routes.push(candidate);
+    candidate = candidate === 2_147_483_647 ? 0 : candidate + 1;
+  }
+  return routes;
+}
+
 const finite = (value: unknown, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 
@@ -112,6 +150,21 @@ export function createPreset(kind: PresetName, previous: Record<string, unknown>
     cadence_weight: 1,
     loop_wrap_weight: 0,
     phrase_echo_weight: 0.5,
+    fugue_mode: false,
+    fugue_voice_count: 3,
+    fugue_voice_register_shifts: [] as number[],
+    fugue_repeat_subject: false,
+    fugue_transform_cycle: DEFAULT_FUGUE_TRANSFORM_CYCLE.map(step => ({ ...step })),
+    fugue_entry_spacing: 0,
+    fugue_answer_interval: 7,
+    fugue_fit_to_scale: false,
+    fugue_bass_subject_shift: -12,
+    fugue_subject_anticipation: 0,
+    fugue_entry_approach: 0,
+    soprano_voice: 0,
+    bass_voice: 4,
+    fugue_output_tracks: [4, 5, 6],
+    fugue_output_clip: 2,
   };
 
   if (kind === 'jazz') {

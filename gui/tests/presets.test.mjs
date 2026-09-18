@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createPreset, PRESET_INFO } from '../src/presets.ts';
+import { createPreset, DEFAULT_FUGUE_TRANSFORM_CYCLE, PRESET_INFO, resizeFugueOutputTracks, resizeFugueRegisterShifts } from '../src/presets.ts';
 import { CHORD_LIST } from '../src/harmony.ts';
 
 const names = Object.keys(PRESET_INFO);
@@ -91,4 +91,23 @@ test('modal, ambient and dance settings match their distinct textures', () => {
     assert.equal(trance.schillinger_sequence[bar], trance.schillinger_sequence[bar % 4]);
   }
   assert.deepEqual(trance.voice_rhythm_patterns[4], [0.5]);
+});
+
+test('presets reset fugue repeats to an independent default transform cycle', () => {
+  const first = createPreset('bach', {}, 42);
+  const second = createPreset('bach', {}, 42);
+  assert.equal(first.fugue_repeat_subject, false);
+  assert.equal(first.fugue_fit_to_scale, false);
+  assert.deepEqual(first.fugue_transform_cycle, DEFAULT_FUGUE_TRANSFORM_CYCLE);
+  first.fugue_transform_cycle[0].invert = false;
+  assert.equal(second.fugue_transform_cycle[0].invert, true, 'preset cycles must not share mutable rows');
+});
+
+test('fugue voice helpers preserve custom values and safely fill new slots', () => {
+  assert.deepEqual(resizeFugueRegisterShifts([1, 0, -13], 5), [1, 0, -13, -24, -24]);
+  assert.deepEqual(resizeFugueOutputTracks([7, 2, 7, -1], 5), [7, 2, 8, 9, 10]);
+  assert.deepEqual(resizeFugueOutputTracks([2_147_483_647], 3), [2_147_483_647, 0, 1]);
+  assert.deepEqual(resizeFugueOutputTracks([1e30, 4], 3), [4, 5, 6]);
+  assert.equal(createPreset('bach', {}, 42).fugue_voice_count, 3);
+  assert.deepEqual(createPreset('bach', {}, 42).fugue_voice_register_shifts, []);
 });

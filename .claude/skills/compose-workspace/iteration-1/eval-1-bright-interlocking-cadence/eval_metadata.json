@@ -1,0 +1,12 @@
+{
+  "eval_id": 1,
+  "eval_name": "bright-interlocking-cadence",
+  "prompt": "make a bright 16-bar piece where the voices have interlocking rhythms, and it should end with a strong final cadence",
+  "assertions": [
+    "Render is valid: notes on all 5 channels and no real hard violations (the beat-0 voice_budget artifact is allowed)",
+    "16 bars total: pl x render_length == 16 in the archived config",
+    "Bright character: mode is major-family (0, 3 or 4) or the harmony_matrix_contour spends time on rows 3-5 (Ethereal/Bright)",
+    "Interlocking rhythm: rhythm_generators is non-empty with rhythm_voice_rotation >= 1, or voices demonstrably attack at offset times (not homorhythmic)",
+    "Strong final close: the last bar's downbeat chord has the bass on the chord root and a third present"
+  ]
+}

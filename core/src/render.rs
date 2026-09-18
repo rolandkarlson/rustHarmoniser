@@ -7,6 +7,7 @@ use crate::harmonizer::{gen_voice, gen_voice_from_notes, harmonise_explained, Ha
 use crate::model::{Config, Note, DEFAULT_START_NOTES};
 use crate::trace::GroupBreakdown;
 use crate::utils;
+use crate::fugue::{plan_exposition, scoring_config, validate_voice_count, FugueError};
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::Sender;
 
@@ -36,7 +37,24 @@ pub fn render(
     leading: Option<&Leading>,
     progress: Option<&Sender<(usize, usize)>>,
 ) -> RenderResult {
+    try_render(config, leading, progress).expect("invalid render input")
+}
+
+/// Checked render entry point used by the server. Legacy callers can keep using
+/// `render`; fugue mode reports malformed/polyphonic subjects as a user error.
+pub fn try_render(
+    config: &Config,
+    leading: Option<&Leading>,
+    progress: Option<&Sender<(usize, usize)>>,
+) -> Result<RenderResult, FugueError> {
     utils::SeededRng::set_seed(config.rng_seed);
+
+    if config.fugue_mode {
+        validate_voice_count(config)?;
+    }
+
+    let effective_config = if config.fugue_mode { scoring_config(config) } else { config.clone() };
+    let config = &effective_config;
 
     // Starting/seed pitch per voice (high → low). Configurable via the GUI
     // "Start Notes" modal; falls back per index to the historical defaults.
@@ -50,17 +68,28 @@ pub fn render(
 
     let contours = Contours::from_config(config);
 
+    let mut fugue_plan = None;
     let mut income = Vec::new();
-    let lead_from_clip = config.use_leading_voice
-        && leading.map_or(false, |l| !l.notes.is_empty());
-    if lead_from_clip {
-        let l = leading.unwrap();
-        income.extend(gen_voice_from_notes(&l.notes, l.clip_length, config));
+    if config.fugue_mode {
+        if !config.use_leading_voice {
+            return Err(FugueError("fugue mode requires Lead Clip to be enabled".into()));
+        }
+        let l = leading.ok_or_else(|| FugueError("fugue mode requires an imported Ableton subject".into()))?;
+        let plan = plan_exposition(&l.notes, l.clip_length, config, &contours)?;
+        income = plan.notes.clone();
+        fugue_plan = Some(plan);
     } else {
-        income.extend(gen_voice(start(0), &config.voice_rhythm, &[0], 0, 1, config, &contours));
-    }
-    for v in 1..5 {
-        income.extend(gen_voice(start(v), &config.voice_rhythm, &[0], v as i32, 1, config, &contours));
+        let lead_from_clip = config.use_leading_voice
+            && leading.map_or(false, |l| !l.notes.is_empty());
+        if lead_from_clip {
+            let l = leading.unwrap();
+            income.extend(gen_voice_from_notes(&l.notes, l.clip_length, config));
+        } else {
+            income.extend(gen_voice(start(0), &config.voice_rhythm, &[0], 0, 1, config, &contours));
+        }
+        for v in 1..5 {
+            income.extend(gen_voice(start(v), &config.voice_rhythm, &[0], v as i32, 1, config, &contours));
+        }
     }
 
     // Sort by start time, then pitch descending within a group.
@@ -74,7 +103,21 @@ pub fn render(
 
     // Runs the Schillinger progression internally — must stay AFTER the voice
     // generation above so the seeded RNG stream keeps its historical order.
-    let state = HarmonizerState::new(config, contours);
+    let mut state = HarmonizerState::new(config, contours);
+    if let Some(mut plan) = fugue_plan {
+        if config.schillinger_progression && config.fugue_fit_to_scale {
+            plan.fit_to_schillinger(&state.schillinger_notes)?;
+            income = plan.notes.clone();
+            income.sort_by(|a, b| {
+                if (a.start - b.start).abs() > 0.001 {
+                    a.start.partial_cmp(&b.start).unwrap()
+                } else {
+                    b.pitch.cmp(&a.pitch)
+                }
+            });
+        }
+        state = state.with_fugue_plan(plan.fixed, plan.timeline);
+    }
 
     let harmonised = harmonise_explained(income, config, &state, progress);
     let mut notes = harmonised.notes;
@@ -83,7 +126,13 @@ pub fn render(
     shape_dynamics(&mut notes, config);
 
     for note in &mut notes {
-        note.pitch += config.main_pitch;
+        note.pitch = note.pitch.checked_add(config.main_pitch)
+            .ok_or_else(|| FugueError("main pitch transposition overflowed".into()))?;
+        if config.fugue_mode && !(0..=127).contains(&note.pitch) {
+            return Err(FugueError(format!(
+                "main pitch transposition puts MIDI pitch {} outside 0..127", note.pitch
+            )));
+        }
     }
     // Keep the breakdown in the same pitch space as the notes it explains.
     for g in &mut breakdown {
@@ -98,7 +147,7 @@ pub fn render(
         }
     }
 
-    RenderResult { notes, breakdown, schillinger_notes: state.schillinger_notes }
+    Ok(RenderResult { notes, breakdown, schillinger_notes: state.schillinger_notes })
 }
 
 /// Phrase-shaped dynamics (`config.dynamics_weight`): deterministic velocities
@@ -368,6 +417,276 @@ mod tests {
         // With an empty clip the generated voice 0 is used instead.
         let r2 = render(&cfg, Some(&Leading { notes: vec![], clip_length: 4.0 }), None);
         assert!(!r2.notes.is_empty());
+    }
+
+    #[test]
+    fn fugue_render_preserves_all_three_entries_and_generates_free_counterpoint() {
+        for tonic in [60, 67] {
+            let mut cfg = default_config();
+            cfg.fugue_mode = true;
+            cfg.use_leading_voice = true;
+            cfg.main_pitch = 0;
+            cfg.render_length = 1;
+            cfg.beam_width = 1;
+            let subject = vec![
+                Note::new(tonic, 0.0, 1.0, 90, 0, 0),
+                Note::new(tonic, 1.0, 0.5, 75, 0, 0),
+                Note::new(tonic + 2, 1.5, 2.5, 80, 0, 0),
+            ];
+            let leading = Leading { notes: subject.clone(), clip_length: 4.0 };
+            let out = try_render(&cfg, Some(&leading), None).unwrap().notes;
+
+            for (channel, offset, shift) in [(1, 0.0, 0), (0, 4.0, 7), (2, 8.0, -12)] {
+                let entry: Vec<_> = out.iter().filter(|n| n.channel == channel
+                    && n.start >= offset && n.start < offset + 4.0).collect();
+                assert_eq!(entry.len(), subject.len());
+                for (actual, original) in entry.iter().zip(&subject) {
+                    assert_eq!(actual.pitch, original.pitch + shift);
+                    assert_eq!(actual.start, original.start + offset);
+                    assert_eq!(actual.duration, original.duration);
+                }
+                assert!(!out.iter().any(|n| n.channel == channel && n.start < offset));
+            }
+
+            let free_soprano: Vec<_> = out.iter().filter(|n| n.channel == 0 && n.start >= 8.0).collect();
+            assert!(!free_soprano.is_empty());
+            assert!(free_soprano.iter().any(|n| n.pitch != cfg.start_notes[0]),
+                "free soprano remained frozen to its generated seed");
+            assert!(out.iter().all(|n| (0..=2).contains(&n.channel)));
+        }
+    }
+
+    #[test]
+    fn fugue_render_reports_bad_subject_and_output_transposition() {
+        let mut cfg = default_config();
+        cfg.fugue_mode = true;
+        cfg.use_leading_voice = true;
+        cfg.main_pitch = 80;
+        let poly = Leading {
+            notes: vec![
+                Note::new(60, 0.0, 2.0, 90, 0, 0),
+                Note::new(64, 1.0, 1.0, 90, 0, 0),
+            ],
+            clip_length: 4.0,
+        };
+        assert!(try_render(&cfg, Some(&poly), None).err().unwrap().0.contains("polyphonic"));
+
+        let mono = Leading {
+            notes: vec![Note::new(60, 0.0, 4.0, 90, 0, 0)],
+            clip_length: 4.0,
+        };
+        assert!(try_render(&cfg, Some(&mono), None).err().unwrap().0.contains("outside 0..127"));
+    }
+
+    #[test]
+    fn fugue_constraints_do_not_snap_chromatic_subject_notes_to_the_progression() {
+        let mut cfg = default_config();
+        cfg.fugue_mode = true;
+        cfg.use_leading_voice = true;
+        cfg.main_pitch = 0;
+        cfg.render_length = 1;
+        cfg.beam_width = 1;
+        let leading = Leading {
+            notes: vec![
+                Note::new(60, 0.0, 1.0, 90, 0, 0),
+                Note::new(66, 1.0, 1.0, 90, 0, 0),
+                Note::new(67, 2.0, 2.0, 90, 0, 0),
+            ],
+            clip_length: 4.0,
+        };
+        let out = try_render(&cfg, Some(&leading), None).unwrap().notes;
+        assert_eq!(
+            out.iter().filter(|n| n.channel == 1 && n.start < 4.0)
+                .map(|n| n.pitch).collect::<Vec<_>>(),
+            vec![60, 66, 67]
+        );
+        assert_eq!(
+            out.iter().filter(|n| n.channel == 0 && n.start >= 4.0 && n.start < 8.0)
+                .map(|n| n.pitch).collect::<Vec<_>>(),
+            vec![67, 73, 74]
+        );
+    }
+
+    #[test]
+    fn fugue_scale_fit_uses_the_returned_generated_progression() {
+        let mut cfg = default_config();
+        cfg.fugue_mode = true;
+        cfg.fugue_fit_to_scale = true;
+        cfg.use_leading_voice = true;
+        cfg.use_generated_progression = true;
+        cfg.main_pitch = 0;
+        cfg.pl = 3;
+        cfg.render_length = 1;
+        cfg.beam_width = 1;
+        cfg.lookahead_depth = 0;
+        cfg.dynamics_weight = 0.0;
+        let leading = Leading {
+            notes: vec![
+                Note::new(61, 0.0, 1.0, 91, 0, 0),
+                Note::new(66, 2.0, 2.0, 83, 0, 0),
+            ],
+            clip_length: 4.0,
+        };
+        let result = try_render(&cfg, Some(&leading), None).unwrap();
+        let entries = [(1, 0.0, 0), (0, 4.0, 7), (2, 8.0, -12)];
+        let mut changed = false;
+        for (channel, entry_start, transpose) in entries {
+            for source in &leading.notes {
+                let start = entry_start + source.start;
+                let note = result.notes.iter().find(|note| {
+                    note.channel == channel && (note.start - start).abs() < 0.001
+                }).unwrap();
+                let bars = &result.schillinger_notes[channel as usize];
+                let bar = (start / 4.0).floor() as usize % bars.len();
+                assert!(bars[bar]
+                    .iter()
+                    .any(|pc| pc.rem_euclid(12) == note.pitch.rem_euclid(12)));
+                assert_eq!(note.start, start);
+                assert_eq!(note.duration, source.duration);
+                assert_eq!(note.velocity, source.velocity);
+                changed |= note.pitch != source.pitch + transpose;
+            }
+        }
+        assert!(changed, "fixture should demonstrate an audible scale fit");
+    }
+
+    #[test]
+    fn fugue_scale_fit_is_ignored_when_schillinger_is_off() {
+        let mut cfg = default_config();
+        cfg.fugue_mode = true;
+        cfg.use_leading_voice = true;
+        cfg.schillinger_progression = false;
+        cfg.main_pitch = 0;
+        cfg.render_length = 1;
+        cfg.beam_width = 1;
+        let leading = Leading {
+            notes: vec![
+                Note::new(61, 0.0, 1.0, 90, 0, 0),
+                Note::new(66, 1.0, 3.0, 80, 0, 0),
+            ],
+            clip_length: 4.0,
+        };
+        let off = try_render(&cfg, Some(&leading), None).unwrap().notes;
+        cfg.fugue_fit_to_scale = true;
+        let ignored = try_render(&cfg, Some(&leading), None).unwrap().notes;
+        assert_eq!(
+            serde_json::to_value(ignored).unwrap(),
+            serde_json::to_value(off).unwrap(),
+        );
+    }
+
+    #[test]
+    fn transformed_fugue_entries_survive_the_full_render() {
+        let mut cfg = default_config();
+        cfg.fugue_mode = true;
+        cfg.fugue_repeat_subject = true;
+        cfg.use_leading_voice = true;
+        cfg.main_pitch = 0;
+        cfg.render_length = 2;
+        cfg.beam_width = 1;
+        let leading = Leading {
+            notes: vec![
+                Note::new(60, 0.0, 1.0, 90, 0, 0),
+                Note::new(60, 1.0, 0.5, 75, 0, 0),
+                Note::new(62, 1.5, 2.5, 80, 0, 0),
+            ],
+            clip_length: 4.0,
+        };
+        let out = try_render(&cfg, Some(&leading), None).unwrap().notes;
+
+        let inverted: Vec<_> = out.iter().filter(|n| n.channel == 1
+            && n.start >= 12.0 && n.start < 16.0).collect();
+        assert_eq!(inverted.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![60, 60, 58]);
+        assert_eq!(inverted.iter().map(|n| n.start).collect::<Vec<_>>(), vec![12.0, 13.0, 13.5]);
+
+        let stretched: Vec<_> = out.iter().filter(|n| n.channel == 0
+            && n.start >= 16.0 && n.start < 24.0).collect();
+        assert_eq!(stretched.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![67, 67, 69]);
+        assert_eq!(stretched.iter().map(|n| n.start).collect::<Vec<_>>(), vec![16.0, 18.0, 19.0]);
+        assert_eq!(stretched.iter().map(|n| n.duration).collect::<Vec<_>>(), vec![2.0, 1.0, 5.0]);
+    }
+
+    #[test]
+    fn fugue_anticipation_never_changes_protected_entries() {
+        let mut cfg = default_config();
+        cfg.fugue_mode = true;
+        cfg.fugue_repeat_subject = true;
+        cfg.fugue_subject_anticipation = 20.0;
+        cfg.fugue_entry_approach = 20.0;
+        cfg.use_leading_voice = true;
+        cfg.main_pitch = 0;
+        cfg.render_length = 2;
+        cfg.beam_width = 1;
+        let leading = Leading {
+            notes: vec![
+                Note::new(60, 0.0, 1.0, 90, 0, 0),
+                Note::new(62, 1.0, 1.0, 80, 0, 0),
+                Note::new(64, 2.0, 2.0, 85, 0, 0),
+            ],
+            clip_length: 4.0,
+        };
+        let contours = Contours::from_config(&scoring_config(&cfg));
+        let planned = plan_exposition(&leading.notes, leading.clip_length, &scoring_config(&cfg), &contours).unwrap();
+        let expected: Vec<_> = planned.notes.iter()
+            .filter(|note| planned.fixed.pitch_for(note).is_some())
+            .map(|note| (note.channel, note.pitch, note.start, note.duration))
+            .collect();
+        let out = try_render(&cfg, Some(&leading), None).unwrap().notes;
+        for (channel, pitch, start, duration) in expected {
+            let actual = out.iter().find(|note| {
+                note.channel == channel && (note.start - start).abs() < 0.001
+            }).unwrap();
+            assert_eq!(actual.pitch, pitch);
+            assert_eq!(actual.start, start);
+            assert_eq!(actual.duration, duration);
+        }
+    }
+
+    #[test]
+    fn eight_voice_fugue_renders_end_to_end_with_every_entry_protected() {
+        let mut cfg = default_config();
+        cfg.fugue_mode = true;
+        cfg.fugue_voice_count = 8;
+        cfg.use_leading_voice = true;
+        cfg.main_pitch = 0;
+        cfg.pl = 1;
+        cfg.render_length = 1;
+        cfg.fugue_entry_spacing = 0.5;
+        cfg.beam_width = 1;
+        cfg.lookahead_depth = 0;
+        cfg.candidate_range = 1;
+        cfg.dynamics_weight = 0.0;
+        cfg.lattice_beats = 0.5;
+        let leading = Leading {
+            notes: vec![Note::new(72, 0.0, 0.5, 91, 0, 0)],
+            clip_length: 0.5,
+        };
+        let out = try_render(&cfg, Some(&leading), None).unwrap().notes;
+        let channels = [1, 0, 2, 3, 4, 5, 6, 7];
+        for (ordinal, channel) in channels.into_iter().enumerate() {
+            let register = if channel < 2 { 0 } else { -12 * ((channel + 1) / 2) };
+            let transpose = register + if ordinal % 2 == 1 { 7 } else { 0 };
+            let note = out.iter().find(|n| n.channel == channel
+                && (n.start - ordinal as f64 * 0.5).abs() < 0.001).unwrap();
+            assert_eq!(note.pitch, 72 + transpose);
+            assert_eq!(note.duration, 0.5);
+            assert_eq!(note.velocity, 91);
+        }
+        assert!(out.iter().all(|n| (0..8).contains(&n.channel)));
+    }
+
+    #[test]
+    fn checked_render_rejects_invalid_fugue_voice_count_before_planning() {
+        let mut cfg = default_config();
+        cfg.fugue_mode = true;
+        cfg.use_leading_voice = true;
+        cfg.fugue_voice_count = 99;
+        let leading = Leading { notes: vec![Note::new(60, 0.0, 1.0, 90, 0, 0)], clip_length: 1.0 };
+        let error = match try_render(&cfg, Some(&leading), None) {
+            Ok(_) => panic!("invalid voice count unexpectedly rendered"),
+            Err(error) => error,
+        };
+        assert!(error.0.contains("between 3 and 8"));
     }
 
     /// The pitch a channel is sounding at `t`, if any (notes never cross bar

@@ -1,0 +1,44 @@
+{
+  "expectations": [
+    {
+      "text": "Render is valid: notes on all 5 channels and no real hard violations (the beat-0 voice_budget artifact is allowed)",
+      "passed": true,
+      "evidence": "channels=[0, 1, 2, 3, 4], real hard violations=0"
+    },
+    {
+      "text": "8 bars total: pl x render_length == 8 in the archived config",
+      "passed": true,
+      "evidence": "pl=4 render_length=2"
+    },
+    {
+      "text": "Aeolian honored: mode == 5 in the archived config",
+      "passed": true,
+      "evidence": "mode=5"
+    },
+    {
+      "text": "Loop wrap enabled: loop_wrap_weight > 0 in the archived config",
+      "passed": true,
+      "evidence": "loop_wrap_weight=1.5"
+    },
+    {
+      "text": "Tension sits before the arrival: mean dissonant-pair share on pre-cadence bars (bar % pl == pl-2) exceeds that on arrival bars (bar % pl == pl-1)",
+      "passed": true,
+      "evidence": "pre-cadence mean=0.39, arrival mean=0.12"
+    },
+    {
+      "text": "Tight voice leading: no melodic jump exceeds 7 semitones in any voice",
+      "passed": true,
+      "evidence": "max jump=5"
+    },
+    {
+      "text": "Loop seam is small: total last-to-first pitch distance summed over the 5 voices <= 15 semitones",
+      "passed": true,
+      "evidence": "seam total=6"
+    }
+  ],
+  "summary": {
+    "passed": 7,
+    "total": 7,
+    "pass_rate": 1.0
+  }
+}

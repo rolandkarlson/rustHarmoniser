@@ -25,6 +25,22 @@ impl Note {
     }
 }
 
+/// One deterministic transformation applied to a later fugue subject entry.
+/// Every entry is derived from the original imported subject.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct FugueTransformation {
+    #[serde(default)]
+    pub invert: bool,
+    #[serde(default = "default_one_f64")]
+    pub time_scale: f64,
+}
+
+impl FugueTransformation {
+    pub fn new(invert: bool, time_scale: f64) -> Self {
+        Self { invert, time_scale }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     pub schillinger_progression: bool,
@@ -281,6 +297,67 @@ pub struct Config {
     /// changing under them (sequences fall out for free). 0 = off.
     #[serde(default = "default_phrase_echo_weight")]
     pub phrase_echo_weight: f64,
+    /// Build a configurable 3–8 voice fugal exposition from the imported
+    /// Ableton clip. The legacy
+    /// five-voice harmonizer is unchanged while this is false.
+    #[serde(default)]
+    pub fugue_mode: bool,
+    /// Number of fugue voices. Three preserves the original middle–upper–bass
+    /// exposition; additional entries extend through lower-register parts.
+    #[serde(default = "default_fugue_voice_count")]
+    pub fugue_voice_count: i32,
+    /// Optional register shifts by channel. Missing entries use the planner's
+    /// octave spread. In three-voice mode `fugue_bass_subject_shift` remains
+    /// authoritative for snapshot compatibility. A real-answer interval is
+    /// added separately to answer entries.
+    #[serde(default)]
+    pub fugue_voice_register_shifts: Vec<i32>,
+    /// Continue after the opening exposition with protected subject entries
+    /// that cycle through `fugue_transform_cycle` and all fugue voices.
+    #[serde(default)]
+    pub fugue_repeat_subject: bool,
+    /// Later-entry transformations. Inversion reflects chromatic semitone
+    /// intervals around the subject's first sounding pitch; time_scale changes
+    /// relative starts, durations and the whole source clip span.
+    #[serde(default = "default_fugue_transform_cycle")]
+    pub fugue_transform_cycle: Vec<FugueTransformation>,
+    /// Distance in beats between successive exposition entries. Zero selects
+    /// the imported subject clip length, so entries do not overlap by default.
+    #[serde(default = "default_fugue_entry_spacing")]
+    pub fugue_entry_spacing: f64,
+    /// Literal semitone transposition of the real answer (7 = dominant above).
+    #[serde(default = "default_fugue_answer_interval")]
+    pub fugue_answer_interval: i32,
+    /// Legacy three-voice bass register shift. The GUI also mirrors its value
+    /// into the last item of `fugue_voice_register_shifts` for wider fugues;
+    /// for direct 4–8 voice configs the vector (or automatic spread) wins.
+    #[serde(default = "default_fugue_bass_subject_shift")]
+    pub fugue_bass_subject_shift: i32,
+    /// Anticipate protected subject/answer notes that begin in another voice
+    /// while a generated note will still be sustaining. Zero keeps the former
+    /// scoring exactly; positive values penalize future clashes and crossings.
+    #[serde(default)]
+    pub fugue_subject_anticipation: f64,
+    /// Shape the last generated note before a returning subject/answer toward
+    /// that entry's first sounding pitch. Zero disables the entry approach.
+    #[serde(default)]
+    pub fugue_entry_approach: f64,
+    /// Quantize every protected subject/answer note at its onset to the nearest
+    /// pitch in that voice and bar's Schillinger harmony. Ties prefer the lower
+    /// pitch. Ignored outside fugue mode or when Schillinger is disabled.
+    #[serde(default)]
+    pub fugue_fit_to_scale: bool,
+    /// Voices treated as the outer parts by channel-aware scoring. Fugue mode
+    /// overrides these with soprano 0 and the selected last voice as bass.
+    #[serde(default)]
+    pub soprano_voice: i32,
+    #[serde(default = "default_bass_voice")]
+    pub bass_voice: i32,
+    /// Ableton destinations for direct, articulation-preserving fugue export.
+    #[serde(default = "default_fugue_output_tracks")]
+    pub fugue_output_tracks: Vec<i32>,
+    #[serde(default = "default_fugue_output_clip")]
+    pub fugue_output_clip: i32,
 }
 
 /// One entry in `Config::chord_templates`: a chord's pitch classes relative to an
@@ -344,6 +421,21 @@ fn default_rhythm_unit() -> f64 { 0.5 }
 fn default_dynamics_weight() -> f64 { 1.0 }
 fn default_cadence_weight() -> f64 { 0.5 }
 fn default_phrase_echo_weight() -> f64 { 0.4 }
+fn default_fugue_entry_spacing() -> f64 { 0.0 }
+fn default_fugue_voice_count() -> i32 { 3 }
+fn default_fugue_answer_interval() -> i32 { 7 }
+fn default_fugue_bass_subject_shift() -> i32 { -12 }
+fn default_bass_voice() -> i32 { 4 }
+fn default_fugue_output_tracks() -> Vec<i32> { vec![4, 5, 6] }
+fn default_fugue_output_clip() -> i32 { 2 }
+fn default_fugue_transform_cycle() -> Vec<FugueTransformation> {
+    vec![
+        FugueTransformation::new(true, 1.0),
+        FugueTransformation::new(false, 2.0),
+        FugueTransformation::new(true, 2.0),
+        FugueTransformation::new(false, 1.0),
+    ]
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -421,6 +513,21 @@ impl Default for Config {
             loop_wrap_weight: 0.0,
             cadence_weight: default_cadence_weight(),
             phrase_echo_weight: default_phrase_echo_weight(),
+            fugue_mode: false,
+            fugue_voice_count: default_fugue_voice_count(),
+            fugue_voice_register_shifts: Vec::new(),
+            fugue_repeat_subject: false,
+            fugue_transform_cycle: default_fugue_transform_cycle(),
+            fugue_entry_spacing: default_fugue_entry_spacing(),
+            fugue_answer_interval: default_fugue_answer_interval(),
+            fugue_bass_subject_shift: default_fugue_bass_subject_shift(),
+            fugue_subject_anticipation: 0.0,
+            fugue_entry_approach: 0.0,
+            fugue_fit_to_scale: false,
+            soprano_voice: 0,
+            bass_voice: default_bass_voice(),
+            fugue_output_tracks: default_fugue_output_tracks(),
+            fugue_output_clip: default_fugue_output_clip(),
         }
     }
 }

@@ -10,3 +10,4 @@ pub mod schillinger;
 pub mod utils;
 pub mod render;
 pub mod trace;
+pub mod fugue;

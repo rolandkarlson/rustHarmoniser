@@ -1,0 +1,35 @@
+{
+  "skill_name": "compose",
+  "evals": [
+    {
+      "id": 0,
+      "eval_name": "dark-aeolian-loop",
+      "prompt": "compose me a dark 8 bar loop in aeolian, tension building into each cadence, tight voice leading. i'll play it in ableton as a loop",
+      "expected_output": "A rendered 8-bar loop: mode 5, loop wrap enabled, tension peaking on pre-cadence bars not arrivals, max melodic jumps small, seam distance low. Render archive + analysis saved.",
+      "files": [],
+      "assertions": [
+        "Render is valid: notes on all 5 channels and no real hard violations (the beat-0 voice_budget artifact is allowed)",
+        "8 bars total: pl x render_length == 8 in the archived config",
+        "Aeolian honored: mode == 5 in the archived config",
+        "Loop wrap enabled: loop_wrap_weight > 0 in the archived config",
+        "Tension sits before the arrival: mean dissonant-pair share on pre-cadence bars (bar % pl == pl-2) exceeds that on arrival bars (bar % pl == pl-1)",
+        "Tight voice leading: no melodic jump exceeds 7 semitones in any voice",
+        "Loop seam is small: total last-to-first pitch distance summed over the 5 voices <= 15 semitones"
+      ]
+    },
+    {
+      "id": 1,
+      "eval_name": "bright-interlocking-cadence",
+      "prompt": "make a bright 16-bar piece where the voices have interlocking rhythms, and it should end with a strong final cadence",
+      "expected_output": "16 bars, bright character (Lydian mode or bright matrix row), rhythm generators with voice rotation for interlock, strong tonic close on the last bar (root in bass, third present).",
+      "files": [],
+      "assertions": [
+        "Render is valid: notes on all 5 channels and no real hard violations (the beat-0 voice_budget artifact is allowed)",
+        "16 bars total: pl x render_length == 16 in the archived config",
+        "Bright character: mode is major-family (0, 3 or 4) or the harmony_matrix_contour spends time on rows 3-5 (Ethereal/Bright)",
+        "Interlocking rhythm: rhythm_generators is non-empty with rhythm_voice_rotation >= 1, or voices demonstrably attack at offset times (not homorhythmic)",
+        "Strong final close: the last bar's downbeat chord has the bass on the chord root and a third present"
+      ]
+    }
+  ]
+}

@@ -6,7 +6,9 @@ import { javascript } from '@codemirror/lang-javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
 import './index.css'
 import { CHORD_LIST, CHORD_NAMES, HARMONY_MATRIX_ROWS, HARMONY_MATRIX_COLS, DEFAULT_HARMONY_MATRIX } from './harmony'
-import { createPreset, PRESET_INFO, type PresetName } from './presets'
+import { createPreset, DEFAULT_FUGUE_TRANSFORM_CYCLE, PRESET_INFO, resizeFugueOutputTracks, resizeFugueRegisterShifts, type PresetName } from './presets'
+import { OutputPage } from './OutputPage'
+import { initialOutput, saveOutput, type OutputSettings } from './output'
 
 // Shared CodeMirror-based script editor. Used both docked at the bottom and
 // blown up to a fullscreen modal. `onRun` fires on ⌘/Ctrl+Enter.
@@ -133,6 +135,7 @@ const chordName = (pcs: number[]): string => chordPresetFor(pcs)?.name ?? 'Custo
 // A chord_templates entry, matching model::ChordTemplate: a bare offset list means
 // "no stated preference", the object form carries a usage weight.
 type ChordTemplate = number[] | { pcs: number[]; weight: number };
+type FugueTransform = { invert: boolean; time_scale: number };
 
 const tplPcs = (t: ChordTemplate): number[] => (Array.isArray(t) ? t : t.pcs);
 const tplWeight = (t: ChordTemplate): number => (Array.isArray(t) ? 1 : t.weight);
@@ -526,6 +529,8 @@ function ChordInspector({ breakdown, onClose }: { breakdown: GroupBd[]; onClose:
 
 function App() {
   const [config, setConfig] = useState<any>(null);
+  const [workspace, setWorkspace] = useState<'compose' | 'output'>(() => window.location.hash === '#output' ? 'output' : 'compose');
+  const [output, setOutput] = useState<OutputSettings | null>(null);
   const [activeTab, setActiveTab] = useState('harmony');
   const [selectedVoice, setSelectedVoice] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -585,6 +590,19 @@ function App() {
       .catch(err => setMessage(`Error loading config: ${err}`));
   }, []);
 
+  useEffect(() => {
+    if (config && !output) setOutput(initialOutput(config));
+  }, [config, output]);
+
+  const updateOutput = (next: OutputSettings) => {
+    setOutput(next);
+    saveOutput(next);
+  };
+
+  useEffect(() => {
+    window.history.replaceState(null, '', workspace === 'output' ? '#output' : window.location.pathname + window.location.search);
+  }, [workspace]);
+
   // Expose current config to the browser console for debugging.
   // In DevTools: `config` (live snapshot), `setConfig(obj)` to overwrite, `patchConfig({key: val})` to merge.
   useEffect(() => {
@@ -600,6 +618,17 @@ function App() {
       setActiveTab('harmony');
     }
   }, [config, activeTab]);
+
+  // Saved fugue snapshots may predate configurable voices. Keep their route
+  // list complete and distinct whenever fugue mode is active.
+  useEffect(() => {
+    if (!config?.fugue_mode) return;
+    const count = Math.min(8, Math.max(3, Math.round(Number(config.fugue_voice_count) || 3)));
+    const routes = resizeFugueOutputTracks(config.fugue_output_tracks, count);
+    if (JSON.stringify(routes) !== JSON.stringify(config.fugue_output_tracks)) {
+      setConfig((current: any) => ({ ...current, fugue_output_tracks: routes }));
+    }
+  }, [config?.fugue_mode, config?.fugue_voice_count, config?.fugue_output_tracks]);
 
   // Close snapshot menu on outside click
   useEffect(() => {
@@ -684,7 +713,7 @@ function App() {
       const res = await fetch('http://127.0.0.1:3000/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config)
+        body: JSON.stringify({ config, output: output ?? initialOutput(config) })
       });
       
       if (!res.ok) {
@@ -703,6 +732,66 @@ function App() {
 
   const updateConfig = (key: string, value: any) => {
     setConfig({ ...config, [key]: value });
+  };
+
+  const fugueVoiceCount = (): number =>
+    Math.min(8, Math.max(3, Math.round(Number(config?.fugue_voice_count) || 3)));
+
+  const fugueRegisterShifts = (): number[] => {
+    const shifts = resizeFugueRegisterShifts(config?.fugue_voice_register_shifts, fugueVoiceCount());
+    // Three-part snapshots predate the vector and keep Bass Shift authoritative.
+    if (fugueVoiceCount() === 3) shifts[2] = Math.round(config?.fugue_bass_subject_shift ?? -12);
+    return shifts;
+  };
+
+  const updateFugueVoiceCount = (rawCount: number) => {
+    const oldCount = fugueVoiceCount();
+    const count = Math.min(8, Math.max(3, Math.round(rawCount)));
+    let shifts = resizeFugueRegisterShifts(config?.fugue_voice_register_shifts, oldCount);
+    if (oldCount === 3) shifts[2] = Math.round(config?.fugue_bass_subject_shift ?? -12);
+    shifts = resizeFugueRegisterShifts(shifts, count);
+    setConfig({
+      ...config,
+      fugue_voice_count: count,
+      fugue_voice_register_shifts: shifts,
+      fugue_bass_subject_shift: shifts[count - 1],
+    });
+  };
+
+  const updateFugueRegisterShifts = (value: number[]) => {
+    const shifts = resizeFugueRegisterShifts(value, fugueVoiceCount());
+    setConfig({
+      ...config,
+      fugue_voice_register_shifts: shifts,
+      fugue_bass_subject_shift: shifts[shifts.length - 1],
+    });
+  };
+
+  const updateFugueBassShift = (value: number) => {
+    const shifts = fugueRegisterShifts();
+    shifts[shifts.length - 1] = Math.round(value);
+    setConfig({ ...config, fugue_bass_subject_shift: Math.round(value), fugue_voice_register_shifts: shifts });
+  };
+
+  const fugueTransformCycle = (): FugueTransform[] => {
+    const saved = config?.fugue_transform_cycle;
+    return Array.isArray(saved) && saved.length > 0
+      ? saved
+      : DEFAULT_FUGUE_TRANSFORM_CYCLE.map(step => ({ ...step }));
+  };
+
+  const updateFugueTransform = (index: number, patch: Partial<FugueTransform>) => {
+    const cycle = fugueTransformCycle().map(step => ({ ...step }));
+    cycle[index] = { ...cycle[index], ...patch };
+    updateConfig('fugue_transform_cycle', cycle);
+  };
+
+  const moveFugueTransform = (index: number, direction: -1 | 1) => {
+    const cycle = fugueTransformCycle().map(step => ({ ...step }));
+    const target = index + direction;
+    if (target < 0 || target >= cycle.length) return;
+    [cycle[index], cycle[target]] = [cycle[target], cycle[index]];
+    updateConfig('fugue_transform_cycle', cycle);
   };
 
   // ----- chord_templates: the chord-structure whitelist -----
@@ -849,22 +938,19 @@ function App() {
     updateConfig('harmony_matrix', DEFAULT_HARMONY_MATRIX.map(r => [...r]));
   };
 
-  // Start notes — the 5 seed pitches (high → low) for the generated voices.
-  // Always normalised to exactly 5 slots, filling gaps from the defaults.
-  const getStartNotes = (): number[] => {
-    const s = config?.start_notes;
-    return Array.from({ length: 5 }, (_, i) =>
-      Array.isArray(s) && Number.isFinite(s[i]) ? s[i] : DEFAULT_START_NOTES[i]
-    );
-  };
+  const defaultStartNote = (i: number): number =>
+    DEFAULT_START_NOTES[i] ?? Math.max(24, DEFAULT_START_NOTES.at(-1)! - 5 * (i - 4));
 
   const updateStartNote = (i: number, v: number) => {
-    const s = getStartNotes();
-    s[i] = Number.isFinite(v) ? Math.round(v) : DEFAULT_START_NOTES[i];
+    const s = Array.isArray(config?.start_notes) ? [...config.start_notes] : [...DEFAULT_START_NOTES];
+    while (s.length <= i) s.push(defaultStartNote(s.length));
+    s[i] = Number.isFinite(v) ? Math.round(v) : defaultStartNote(i);
     updateConfig('start_notes', s);
   };
 
   const resetStartNotes = () => {
+    // Extra fugue voices intentionally remain absent: the engine derives their
+    // seed from the imported subject and planned register.
     updateConfig('start_notes', [...DEFAULT_START_NOTES]);
     setChordMsg(null);
   };
@@ -884,8 +970,9 @@ function App() {
         setChordMsg({ text: 'Clip has no notes', error: true });
         return;
       }
-      const s = getStartNotes();
-      for (let i = 0; i < 5 && i < notes.length; i++) s[i] = Math.round(notes[i]);
+      const count = config?.fugue_mode ? fugueVoiceCount() : 5;
+      const s = Array.isArray(config?.start_notes) ? [...config.start_notes] : [...DEFAULT_START_NOTES];
+      for (let i = 0; i < count && i < notes.length; i++) s[i] = Math.round(notes[i]);
       updateConfig('start_notes', s);
       setChordMsg({
         text: `Loaded ${Math.min(notes.length, 5)} note(s): ${notes.slice(0, 5).map(midiName).join(' ')}`,
@@ -1468,8 +1555,25 @@ function App() {
     { id: 'melody_force', label: 'Melody Force', tip: 'Line-shaping pressure over time, applied to every voice. Penalizes recently-used pitches and rewards stepwise motion. 0=off, 2-3=strongly forces moving lines. Overrides the Melody Force number when drawn.' },
   ];
 
+  const workspaceNav = (
+    <nav className="flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950 px-5 py-2">
+      <span className="text-sm font-semibold tracking-wide text-slate-300">Rust Harmoniser</span>
+      <div className="flex rounded-lg border border-slate-800 bg-slate-900 p-1">
+        {(['compose', 'output'] as const).map(page => <button key={page} onClick={() => setWorkspace(page)} className={`rounded-md px-4 py-1.5 text-xs font-semibold uppercase tracking-wider ${workspace === page ? 'bg-cyan-700 text-white' : 'text-slate-500 hover:text-slate-200'}`}>{page}</button>)}
+      </div>
+    </nav>
+  );
+
+  if (workspace === 'output' && config && output) return (
+    <div className="h-screen w-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden selection:bg-cyan-900">
+      {workspaceNav}
+      <OutputPage output={output} onChange={updateOutput} config={config} onCompose={() => setWorkspace('compose')} />
+    </div>
+  );
+
   return (
     <div className="h-screen w-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden selection:bg-cyan-900">
+      {workspaceNav}
       {/* Top Header */}
       <header className="flex flex-col gap-3 p-4 bg-slate-900/80 border-b border-slate-800 shrink-0 shadow-lg">
         <div className="flex items-center gap-3 flex-wrap">
@@ -1722,12 +1826,101 @@ function App() {
 
             <ParamGroup label="Lead Clip">
               <div className="flex items-center gap-2">
-                <span className="text-xs uppercase tracking-wider text-slate-500" title="Use the pitches from an Ableton clip as the leading voice (channel 0). Pitches are cycled through voice_rhythm timing.">On:</span>
-                <input type="checkbox" checked={config.use_leading_voice ?? false} onChange={e => updateConfig('use_leading_voice', e.target.checked)} className="accent-cyan-500" />
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Use notes and timing from an Ableton clip as the source melody.">On:</span>
+                <input type="checkbox" checked={config.use_leading_voice ?? false} disabled={config.fugue_mode ?? false} onChange={e => updateConfig('use_leading_voice', e.target.checked)} className="accent-cyan-500" />
                 <NumberField integer value={config.leading_voice_track ?? 0} onChange={v => updateConfig('leading_voice_track', v)} title="Ableton track index" className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" disabled={!config.use_leading_voice} />
                 <span className="text-xs text-slate-600">/</span>
                 <NumberField integer value={config.leading_voice_clip ?? 1} onChange={v => updateConfig('leading_voice_clip', v)} title="Ableton clip index" className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" disabled={!config.use_leading_voice} />
               </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider text-slate-500" title="Three to eight voice exposition. Imported pitches, timing and repeated-note attacks are protected.">Fugue:</span>
+                <input
+                  type="checkbox"
+                  checked={config.fugue_mode ?? false}
+                  onChange={e => setConfig({ ...config, fugue_mode: e.target.checked, use_leading_voice: e.target.checked ? true : config.use_leading_voice })}
+                  className="accent-cyan-500"
+                />
+              </div>
+              {(config.fugue_mode ?? false) && (
+                <>
+                  <div className="flex items-center gap-2" title="Number of fugue parts. Entries begin in voices 1, 0, 2, then continue through the added lower voices.">
+                    <span className="text-xs uppercase tracking-wider text-slate-500">Voices:</span>
+                    <select value={fugueVoiceCount()} onChange={e => updateFugueVoiceCount(Number(e.target.value))} className="rounded border border-slate-700 bg-slate-900 px-1 py-0.5 text-xs">
+                      {[3, 4, 5, 6, 7, 8].map(count => <option key={count} value={count}>{count}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2" title="Beats between subject entries. 0 uses the source clip length.">
+                    <span className="text-xs uppercase tracking-wider text-slate-500">Entry Gap:</span>
+                    <NumberField value={config.fugue_entry_spacing ?? 0} onChange={v => updateConfig('fugue_entry_spacing', v)} className="w-14 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                  <div className="flex items-center gap-2" title="Literal semitone transposition for the upper real answer; +7 answers on the dominant.">
+                    <span className="text-xs uppercase tracking-wider text-slate-500">Answer:</span>
+                    <NumberField integer value={config.fugue_answer_interval ?? 7} onChange={v => updateConfig('fugue_answer_interval', v)} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                  <label
+                    className={`flex items-center gap-2 text-xs ${sch ? 'text-slate-400' : 'text-slate-600'}`}
+                    title={sch
+                      ? "Fits every subject and answer entry pitch — including the initial subject, repeats, inversions and stretched entries — to the nearest Schillinger scale tone for that voice and bar at the note's start. Ties choose downward. Note lengths stay unchanged, and held notes are not retuned when chords change."
+                      : 'Requires Schillinger progression. The saved setting is retained while Chromatic mode is active.'}
+                  >
+                    <input type="checkbox" checked={config.fugue_fit_to_scale ?? false} disabled={!sch} onChange={e => updateConfig('fugue_fit_to_scale', e.target.checked)} className="accent-cyan-500" />
+                    <span>Keep subject transformations in scale</span>
+                    {!sch && <span className="text-[10px] text-amber-700">Schillinger only</span>}
+                  </label>
+                  <div className="flex items-center gap-2" title="Register shift for the lowest voice. If its opening entry is an answer, the Answer interval is added to this shift.">
+                    <span className="text-xs uppercase tracking-wider text-slate-500">Bass Register:</span>
+                    <NumberField integer value={fugueRegisterShifts().at(-1) ?? -12} onChange={updateFugueBassShift} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                  <div className="flex items-center gap-2" title="Per-channel register offsets in semitones. Answer entries add the Answer interval. Missing values use a descending octave spread.">
+                    <span className="text-xs uppercase tracking-wider text-slate-500">Registers:</span>
+                    <IntListField value={fugueRegisterShifts()} onChange={updateFugueRegisterShifts} className="w-36 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                  <div className="flex items-center gap-2" title="Anticipate protected subject or answer notes that begin in another voice while a generated note is still sounding. Higher values avoid future clashes and crossings. 0 is off.">
+                    <span className="text-xs uppercase tracking-wider text-slate-500">Subject Ant.:</span>
+                    <NumberField value={config.fugue_subject_anticipation ?? 0} onChange={v => updateConfig('fugue_subject_anticipation', Math.max(0, v))} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                  <div className="flex items-center gap-2" title="Guide only the final generated note before this voice's next protected return toward its first sounding pitch. Leading rests are respected. 0 is off.">
+                    <span className="text-xs uppercase tracking-wider text-slate-500">Entry Approach:</span>
+                    <NumberField value={config.fugue_entry_approach ?? 0} onChange={v => updateConfig('fugue_entry_approach', Math.max(0, v))} className="w-12 bg-transparent text-sm focus:text-cyan-400 outline-none" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500" title="Continue after the opening exposition, cycling transformed subject entries through every voice until another complete entry no longer fits.">Repeat:</span>
+                    <input type="checkbox" checked={config.fugue_repeat_subject ?? false} onChange={e => setConfig({
+                      ...config,
+                      fugue_repeat_subject: e.target.checked,
+                      fugue_transform_cycle: e.target.checked ? fugueTransformCycle().map(step => ({ ...step })) : config.fugue_transform_cycle,
+                    })} className="accent-cyan-500" />
+                  </div>
+                  {(config.fugue_repeat_subject ?? false) && (
+                    <div className="flex flex-col gap-1 rounded border border-slate-800 bg-slate-950/60 p-2" title="Each repeat starts from the original subject. Inversion reflects chromatic semitone intervals around its first sounding pitch; speed scales the whole clip, including rests.">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] uppercase tracking-wider text-slate-500">Transform cycle</span>
+                        <button type="button" onClick={() => updateConfig('fugue_transform_cycle', [...fugueTransformCycle(), { invert: false, time_scale: 1 }])} className="px-1.5 py-0.5 rounded bg-slate-800 text-[10px] text-cyan-300 hover:bg-slate-700">+ Step</button>
+                      </div>
+                      {fugueTransformCycle().map((step, index) => (
+                        <div key={index} className="flex items-center gap-1">
+                          <span className="w-4 text-[10px] font-mono text-slate-600">{index + 1}</span>
+                          <select value={step.invert ? 'inverted' : 'normal'} onChange={e => updateFugueTransform(index, { invert: e.target.value === 'inverted' })} className="rounded border border-slate-700 bg-slate-900 px-1 py-0.5 text-[10px]">
+                            <option value="normal">Normal</option>
+                            <option value="inverted">Inverted</option>
+                          </select>
+                          <select value={step.time_scale} onChange={e => updateFugueTransform(index, { time_scale: Number(e.target.value) })} className="rounded border border-slate-700 bg-slate-900 px-1 py-0.5 text-[10px]">
+                            {[0.5, 1, 2, 4].map(scale => <option key={scale} value={scale}>{scale}× time</option>)}
+                          </select>
+                          <button type="button" disabled={index === 0} onClick={() => moveFugueTransform(index, -1)} className="px-1 text-[10px] text-slate-400 disabled:text-slate-800" title="Move earlier">←</button>
+                          <button type="button" disabled={index + 1 === fugueTransformCycle().length} onClick={() => moveFugueTransform(index, 1)} className="px-1 text-[10px] text-slate-400 disabled:text-slate-800" title="Move later">→</button>
+                          <button type="button" disabled={fugueTransformCycle().length === 1} onClick={() => updateConfig('fugue_transform_cycle', fugueTransformCycle().filter((_, i) => i !== index))} className="px-1 text-[10px] text-rose-400 disabled:text-slate-800" title="Remove step">×</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs uppercase tracking-wider text-slate-500">Clip routing:</span>
+                    <button type="button" onClick={() => setWorkspace('output')} className="rounded border border-cyan-800 bg-cyan-950/60 px-2.5 py-1 text-xs text-cyan-300 hover:border-cyan-500">Open Output page →</button>
+                  </div>
+                  <span className="text-[10px] text-slate-500">Entries: V1 subject → V0 answer → V2 subject{fugueVoiceCount() === 4 ? ', then an answer in V3' : fugueVoiceCount() > 4 ? `, then alternating entries in V3…V${fugueVoiceCount() - 1}` : ''}. Complete transformed repeats rotate through all voices.</span>
+                </>
+              )}
             </ParamGroup>
           </div>
 
@@ -1767,7 +1960,7 @@ function App() {
             </button>
             <button
               onClick={() => setShowStartNotes(true)}
-              title="Set the 5 starting seed notes for the generated voices, or fetch them from the last chord of an Ableton clip"
+              title="Set starting seed notes for the generated voices, or fetch them from the last chord of an Ableton clip"
               className="px-4 py-2 bg-teal-700 hover:bg-teal-600 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95"
             >
               Start Notes
@@ -2333,12 +2526,12 @@ function App() {
             <div className="flex items-center justify-between gap-4 px-5 py-3 border-b border-slate-800">
               <div>
                 <h2 className="text-lg font-bold text-teal-300">Start Notes</h2>
-                <p className="text-xs text-slate-500">Seed pitch for each of the 5 voices (high → low). Voice 0 is the leading voice.</p>
+                <p className="text-xs text-slate-500">Seed pitch for each generated voice (high → low). Extra fugue voices otherwise derive a seed from the subject register.</p>
               </div>
               <div className="flex gap-2 items-center">
                 <button
                   onClick={resetStartNotes}
-                  title="Restore the default seed pitches (70 65 60 50 34)"
+                  title="Restore default seeds and automatic subject-register seeds for extra fugue voices"
                   className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-bold rounded-lg transition-all active:scale-95"
                 >
                   Reset
@@ -2353,20 +2546,32 @@ function App() {
             </div>
             <div className="p-5 space-y-4">
               <div className="space-y-2">
-                {getStartNotes().map((n, i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <span className="text-xs uppercase tracking-wider text-slate-500 w-16">
-                      Voice {i}{i === 0 ? ' *' : ''}
-                    </span>
-                    <NumberField
-                      integer
-                      value={n}
-                      onChange={(v) => updateStartNote(i, v)}
-                      className="w-20 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-sm text-right font-mono text-teal-300 outline-none focus:border-teal-500"
-                    />
-                    <span className="text-sm font-mono text-slate-400 w-12">{midiName(n)}</span>
-                  </div>
-                ))}
+                {Array.from({ length: config?.fugue_mode ? fugueVoiceCount() : 5 }, (_, i) => {
+                  const explicit = Array.isArray(config?.start_notes) && Number.isFinite(config.start_notes[i]);
+                  const n = explicit ? Math.round(config.start_notes[i]) : defaultStartNote(i);
+                  return (
+                    <div key={i} className="flex items-center gap-3">
+                      <span className="text-xs uppercase tracking-wider text-slate-500 w-16">
+                        Voice {i}{i === 0 ? ' *' : ''}
+                      </span>
+                      {explicit ? (
+                        <>
+                          <NumberField
+                            integer
+                            value={n}
+                            onChange={(v) => updateStartNote(i, v)}
+                            className="w-20 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-sm text-right font-mono text-teal-300 outline-none focus:border-teal-500"
+                          />
+                          <span className="text-sm font-mono text-slate-400 w-12">{midiName(n)}</span>
+                        </>
+                      ) : (
+                        <button type="button" onClick={() => updateStartNote(i, n)} title="Create a fixed seed for this voice" className="w-36 rounded border border-slate-800 bg-slate-950 px-2 py-1 text-xs text-cyan-300 hover:border-cyan-700">
+                          Auto — subject register
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="border-t border-slate-800 pt-4">
