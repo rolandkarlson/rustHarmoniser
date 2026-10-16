@@ -5,10 +5,12 @@ import CodeMirror, { keymap, Prec, EditorView, type Extension } from '@uiw/react
 import { javascript } from '@codemirror/lang-javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
 import './index.css'
-import { CHORD_LIST, CHORD_NAMES, HARMONY_MATRIX_ROWS, HARMONY_MATRIX_COLS, DEFAULT_HARMONY_MATRIX } from './harmony'
+import { CHORD_LIST, CHORD_NAMES, MODE_NAMES, DEFAULT_MODE_SCALES, getModeScales, getChordStructures, isCustomRow, chordPitchClasses, HARMONY_MATRIX_ROWS, HARMONY_MATRIX_COLS, DEFAULT_HARMONY_MATRIX } from './harmony'
+import { HarmonyOverrides } from './HarmonyOverrides'
 import { createPreset, DEFAULT_FUGUE_TRANSFORM_CYCLE, PRESET_INFO, resizeFugueOutputTracks, resizeFugueRegisterShifts, type PresetName } from './presets'
 import { OutputPage } from './OutputPage'
 import { initialOutput, saveOutput, type OutputSettings } from './output'
+import { ProgressionGenerator } from './ProgressionGenerator'
 
 // Shared CodeMirror-based script editor. Used both docked at the bottom and
 // blown up to a fullscreen modal. `onRun` fires on ⌘/Ctrl+Enter.
@@ -56,19 +58,6 @@ function ScriptEditor({
       className="h-full text-sm rounded-lg overflow-hidden border border-slate-800 focus-within:border-cyan-500/50"
     />
   );
-}
-
-const MODE_NAMES = ['Ion', 'Dor', 'Phr', 'Lyd', 'Mix', 'Aeo', 'Loc'];
-
-function generateModeFromSteps(mode: number): number[] {
-  const stepPattern = [2, 2, 1, 2, 2, 2, 1];
-  const m = ((mode % 7) + 7) % 7;
-  const rotated = [...stepPattern.slice(m), ...stepPattern.slice(0, m)];
-  rotated.pop();
-  const notes = [0];
-  let current = 0;
-  for (const step of rotated) { current = (current + step) % 12; notes.push(current); }
-  return notes.sort((a, b) => a - b);
 }
 
 function sameChord(a: number[], b: number[]): boolean {
@@ -538,6 +527,7 @@ function App() {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [showMatrix, setShowMatrix] = useState(false);
+  const [showOverrides, setShowOverrides] = useState<'mode' | 'chord' | null>(null);
   const [showStartNotes, setShowStartNotes] = useState(false);
   const [showChords, setShowChords] = useState(false);
   // Pitch classes currently ticked in the modal's custom-chord builder.
@@ -642,6 +632,7 @@ function App() {
   // Global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (showOverrides) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
       switch (e.key) {
         case 'd': handleDuplicate(); break;
@@ -1365,6 +1356,8 @@ function App() {
     const seq: number[] = config.schillinger_sequence || [0];
     const res = config.voice_contour_resolution;
     const fallbackChord = config.chord_structure || [0,1,2,4,5];
+    const modeScales = getModeScales(config.mode_scales);
+    const chordStructures = getChordStructures(config.chord_structures);
     const steps = Math.ceil((config.pl * 4 * config.render_length) / res);
 
     const highlights: Array<{x: number, y: number, color: string}> = [];
@@ -1373,18 +1366,14 @@ function App() {
       const seqRoot = seq[barIdx % seq.length] ?? 0;
       const expansion = Math.round(exContour[xi] ?? 2);
       const csIdx = Math.round(chordContour[xi] ?? 0);
-      const chordStruct = (csIdx >= 0 && csIdx < CHORD_LIST.length) ? CHORD_LIST[csIdx] : fallbackChord;
+      const chordStruct = (csIdx >= 0 && csIdx < chordStructures.length) ? chordStructures[csIdx] : fallbackChord;
       const currentMode = ((Math.round(modeContour[xi] ?? config.mode) % 7) + 7) % 7;
 
-      const currentScale = generateModeFromSteps(currentMode);
-      const chordIndices = chordStruct.map((item: number) => (item * expansion) + seqRoot);
-      const modShim = (v: number, len: number) => ((v % len) + len) % len;
-      const currentChord = chordIndices.map((idx: number) => currentScale[modShim(idx, currentScale.length)] % 12);
+      const currentChord = chordPitchClasses(currentMode, seqRoot, expansion, chordStruct, modeScales);
 
       for (let m = 0; m < 7; m++) {
         if (m === currentMode) continue;
-        const otherScale = generateModeFromSteps(m);
-        const otherChord = chordIndices.map((idx: number) => otherScale[modShim(idx, otherScale.length)] % 12);
+        const otherChord = chordPitchClasses(m, seqRoot, expansion, chordStruct, modeScales);
         if (sameChord(currentChord, otherChord)) {
           highlights.push({ x: xi, y: m, color: 'rgba(253, 224, 71, 0.3)' });
         }
@@ -1394,6 +1383,9 @@ function App() {
   }, [config, activeTab, selectedVoice]);
 
   if (!config) return <div className="p-8 text-xl text-slate-400">Loading Configuration...</div>;
+
+  const modeScales = getModeScales(config.mode_scales);
+  const chordStructures = getChordStructures(config.chord_structures);
 
   const renderActiveEditor = () => {
     const xMax = config.pl * 4 * config.render_length;
@@ -1419,7 +1411,7 @@ function App() {
           pl={config.pl}
           onChange={(d) => updateConfig('mode_contour', d)}
           onResolutionChange={handleResolutionChange}
-          yLabelFormatter={(v) => MODE_NAMES[v] ?? String(v)}
+          yLabelFormatter={(v) => MODE_NAMES[v] ? MODE_NAMES[v] + (isCustomRow(modeScales[v], DEFAULT_MODE_SCALES[v]) ? '*' : '') : String(v)}
           cellHighlights={modeHighlights}
           color="#fde047"
         />;
@@ -1444,7 +1436,10 @@ function App() {
           resolution={config.voice_contour_resolution}
           pl={config.pl}
           onChange={(d) => updateConfig('chord_structure_contour', writeVoiceContour(config.chord_structure_contour, d))}
-          yLabelFormatter={(v) => CHORD_NAMES[Math.round(v)] ?? String(v)}
+          yLabelFormatter={(v) => {
+            const slot = Math.round(v);
+            return CHORD_NAMES[slot] ? CHORD_NAMES[slot] + (isCustomRow(chordStructures[slot], CHORD_LIST[slot]) ? '*' : '') : String(v);
+          }}
           onResolutionChange={handleResolutionChange}
           color="#86efac"
         />;
@@ -1493,7 +1488,7 @@ function App() {
           data={config.schillinger_sequence || []}
           yMin={0} yMax={6} xMax={xMax}
           resolution={4.0}
-          pl={1}
+          pl={config.pl}
           onChange={(d) => updateConfig('schillinger_sequence', d.map(n => Math.round(n)))}
           color="#fb923c"
           yLabelOffset={1}
@@ -1572,7 +1567,7 @@ function App() {
   );
 
   return (
-    <div className="h-screen w-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden selection:bg-cyan-900">
+    <div className="h-screen w-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-x-hidden overflow-y-auto selection:bg-cyan-900">
       {workspaceNav}
       {/* Top Header */}
       <header className="flex flex-col gap-3 p-4 bg-slate-900/80 border-b border-slate-800 shrink-0 shadow-lg">
@@ -1611,6 +1606,10 @@ function App() {
               </div>
               {sch ? (
                 <>
+                  <label className="flex items-center gap-2 text-xs text-slate-300" title="Try all seven modes independently for each chord bar at the same root and chord degree. Keep each change only if it improves the total progression score. One pass through the bars; up to six extra full renders per bar.">
+                    <input type="checkbox" checked={config.search_other_scales ?? false} onChange={e => updateConfig('search_other_scales', e.target.checked)} className="accent-cyan-500" />
+                    Try scales per chord
+                  </label>
                   <div className="flex items-center gap-2">
                     <span className="text-xs uppercase tracking-wider text-slate-500" title="Snap each Schillinger scale note UP to the nearest chord_structure pitch class (mod 12). Mutually exclusive with Floor.">Ceil:</span>
                     <input type="checkbox" checked={config.use_ceiling ?? false} onChange={e => updateConfig('use_ceiling', e.target.checked)} className="accent-cyan-500" />
@@ -1924,10 +1923,10 @@ function App() {
             </ParamGroup>
           </div>
 
-          <div className="flex gap-2 items-center ml-auto">
+          <div className="flex flex-wrap gap-2 items-center ml-auto">
             <button
               onClick={toggleGenerators}
-              title="Presets — Tonal Jazz, Modal Jazz, Classical, Bach-inspired, Ambient and Trance — plus reset and randomisers"
+              title="Chord progressions — functional Markov and Schillinger-inspired root cycles — plus presets, reset and randomisers"
               className={`px-4 py-2 font-bold rounded-lg shadow transition-all active:scale-95 border ${showGenerators ? 'bg-slate-800 border-cyan-500/50 text-cyan-300' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
             >
               {showGenerators ? '▾' : '▸'} Generators
@@ -1946,6 +1945,13 @@ function App() {
             >
               H. Matrix
             </button>
+            {sch && (['mode', 'chord'] as const).map(kind => (
+              <button key={kind} onClick={() => setShowOverrides(kind)}
+                title={kind === 'mode' ? 'Edit the scale degrees behind each Mode contour slot' : 'Edit the chord members behind each Chord contour slot'}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-100 font-bold rounded-lg shadow transition-all active:scale-95">
+                {kind === 'mode' ? 'Mode Overrides' : 'Chord Overrides'}
+              </button>
+            ))}
             <button
               onClick={() => setShowChords(true)}
               title="Restrict which chord structures may be built — the constraint the H-Matrix cannot express, since it scores voice pairs rather than the whole sonority"
@@ -2095,7 +2101,7 @@ function App() {
         </div>
 
         {/* Generators — presets & randomisers, folded away by default */}
-        {showGenerators && (
+        <div hidden={!showGenerators} className="space-y-2">
           <div className="flex gap-2 items-center flex-wrap bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-2">
             <span className="text-[10px] uppercase tracking-widest text-slate-600 select-none mr-1">Presets</span>
             {(Object.keys(PRESET_INFO) as PresetName[]).map(name => (
@@ -2139,7 +2145,12 @@ function App() {
               Settings
             </button>
           </div>
-        )}
+          <ProgressionGenerator config={config} onApply={(next, text) => {
+            setConfig(next);
+            setActiveTab('schillinger');
+            setMessage(text);
+          }} />
+        </div>
 
         {/* Tabs Row */}
         <div className="flex justify-between items-end">
@@ -2178,7 +2189,7 @@ function App() {
       </header>
 
       {/* Main Editor Canvas Full Screen */}
-      <div className="flex-1 overflow-hidden p-6 bg-slate-950 flex flex-col">
+      <div className="flex-1 min-h-80 shrink-0 overflow-hidden p-6 bg-slate-950 flex flex-col">
           {renderActiveEditor()}
       </div>
 
@@ -2452,6 +2463,12 @@ function App() {
       )}
 
       {/* Harmony Scoring Matrix Editor Modal */}
+      {showOverrides && (
+        <HarmonyOverrides kind={showOverrides}
+          value={showOverrides === 'mode' ? config.mode_scales : config.chord_structures}
+          onChange={rows => updateConfig(showOverrides === 'mode' ? 'mode_scales' : 'chord_structures', rows)}
+          onClose={() => setShowOverrides(null)} />
+      )}
       {showMatrix && (
         <div
           className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-6"

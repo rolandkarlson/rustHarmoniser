@@ -90,6 +90,7 @@ export function createPreset(kind: PresetName, previous: Record<string, unknown>
     leading_voice_clip: Math.round(finite(previous.leading_voice_clip, 1)),
     // Resets are explicit so a preset works after any manual experimentation.
     schillinger_progression: true,
+    search_other_scales: false,
     use_generated_progression: false,
     use_floor: false,
     use_ceiling: false,
@@ -111,6 +112,8 @@ export function createPreset(kind: PresetName, previous: Record<string, unknown>
     chord_templates: [] as number[][],
     chromatic_scale: [] as number[],
     harmony_matrix: DEFAULT_HARMONY_MATRIX.map(row => [...row]),
+    mode_scales: null,
+    chord_structures: null,
     harmony_matrix_contour: flat(0),
     harmony_distance_balance: 0.2,
     harmony_distance_contour: flat(0.2),

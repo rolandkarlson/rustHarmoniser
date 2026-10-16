@@ -21,6 +21,9 @@ pub struct Leading {
 /// Everything a render produces. `notes` already carry `config.main_pitch`,
 /// and so do the pitches inside `breakdown`, so both live in output space.
 pub struct RenderResult {
+    /// Chosen mode for each rendered bar when scale search is enabled.
+    /// Empty when search is off (or the engine is in Chromatic mode).
+    pub selected_scale_modes: Vec<i32>,
     pub notes: Vec<Note>,
     /// The named scoring story of every chosen chord — why the search picked
     /// what it picked, term by term.
@@ -46,6 +49,49 @@ pub fn try_render(
     config: &Config,
     leading: Option<&Leading>,
     progress: Option<&Sender<(usize, usize)>>,
+) -> Result<RenderResult, FugueError> {
+    let mut best = render_single(config, leading, progress, &[])?;
+    if config.schillinger_progression && config.search_other_scales {
+        let score = |r: &RenderResult| r.breakdown.iter().map(|g| g.score).sum::<f64>();
+        let mut best_score = score(&best);
+        let bars = best.breakdown.iter().map(|g| g.bar as usize + 1).max().unwrap_or(0);
+        let cycle = best.schillinger_notes.first().map_or(1, Vec::len).max(1);
+        let contours = Contours::from_config(config);
+        let mut modes: Vec<i32> = (0..bars).map(|bar| {
+            contours.mode.as_ref().map(|c| c.at((bar % cycle) as f64 * 4.0).round() as i32)
+                .unwrap_or(config.mode).rem_euclid(7)
+        }).collect();
+        // One deterministic coordinate-search sweep. Each accepted bar change
+        // improves the WHOLE progression, not just that bar's local voicing.
+        // Re-rendering also keeps protected fugue scale fitting and the trace
+        // consistent with the exact harmony under consideration.
+        for bar in 0..bars {
+            let original_mode = modes[bar];
+            let mut winning_mode = original_mode;
+            for mode in 0..7 {
+                if mode == original_mode { continue; }
+                modes[bar] = mode;
+                // A fitted fugue alternative can put a pitch outside MIDI range.
+                let Ok(candidate) = render_single(config, leading, progress, &modes) else { continue; };
+                let candidate_score = score(&candidate);
+                if candidate_score > best_score {
+                    best_score = candidate_score;
+                    winning_mode = mode;
+                    best = candidate;
+                }
+            }
+            modes[bar] = winning_mode;
+        }
+        best.selected_scale_modes = modes;
+    }
+    Ok(best)
+}
+
+fn render_single(
+    config: &Config,
+    leading: Option<&Leading>,
+    progress: Option<&Sender<(usize, usize)>>,
+    modes: &[i32],
 ) -> Result<RenderResult, FugueError> {
     utils::SeededRng::set_seed(config.rng_seed);
 
@@ -103,7 +149,7 @@ pub fn try_render(
 
     // Runs the Schillinger progression internally — must stay AFTER the voice
     // generation above so the seeded RNG stream keeps its historical order.
-    let mut state = HarmonizerState::new(config, contours);
+    let mut state = HarmonizerState::with_modes(config, contours, modes);
     if let Some(mut plan) = fugue_plan {
         if config.schillinger_progression && config.fugue_fit_to_scale {
             plan.fit_to_schillinger(&state.schillinger_notes)?;
@@ -147,7 +193,7 @@ pub fn try_render(
         }
     }
 
-    Ok(RenderResult { notes, breakdown, schillinger_notes: state.schillinger_notes })
+    Ok(RenderResult { selected_scale_modes: modes.to_vec(), notes, breakdown, schillinger_notes: state.schillinger_notes })
 }
 
 /// Phrase-shaped dynamics (`config.dynamics_weight`): deterministic velocities
@@ -210,6 +256,77 @@ mod tests {
         let mut c = Config::default();
         c.init_contours();
         c
+    }
+
+    #[test]
+    fn variable_length_mode_overrides_render_with_scale_search_and_resolve() {
+        for offsets in [vec![0], vec![0, 2, 4, 7, 9], vec![0, 2, 4, 6, 8, 10],
+            vec![0, 2, 3, 5, 6, 8, 9, 11], (0..12).collect()] {
+            let config = Config {
+                pl: 2, render_length: 1, beam_width: 1, lookahead_depth: 0,
+                root: 2, schillinger_sequence: vec![0, 6],
+                mode_scales: Some(vec![offsets.clone(); 7]),
+                use_resolve: true, search_other_scales: true,
+                ..Config::default()
+            };
+            let result = try_render(&config, None, None).unwrap();
+            assert!(!result.notes.is_empty());
+            assert_eq!(result.selected_scale_modes.len(), 2);
+            assert!(result.schillinger_notes.iter().flatten().flatten()
+                .all(|pc| offsets.contains(&(pc - 2).rem_euclid(12))));
+            assert_eq!(result.schillinger_notes[0][0][0], 2);
+        }
+    }
+
+    #[test]
+    fn scale_search_chooses_per_bar_and_never_worsens_total_score() {
+        let mut config = Config {
+            pl: 2, render_length: 1, beam_width: 1, lookahead_depth: 0,
+            voice_rhythm: vec![4.0], root: 2,
+            root_contour: Some(vec![2.0, 7.0]),
+            mode_contour: Some(vec![0.0, 5.0]),
+            schillinger_sequence: vec![0, 4],
+            ..Config::default()
+        };
+        let score = |r: &RenderResult| r.breakdown.iter().map(|g| g.score).sum::<f64>();
+        let baseline = render_single(&config, None, None, &[]).unwrap();
+        config.search_other_scales = true;
+        let actual = try_render(&config, None, None).unwrap();
+        assert_eq!(actual.selected_scale_modes.len(), 2);
+        assert_ne!(actual.selected_scale_modes[0], actual.selected_scale_modes[1],
+            "fixture should choose different modes in adjacent bars");
+        assert!(score(&actual) >= score(&baseline));
+        let expected = render_single(&config, None, None, &actual.selected_scale_modes).unwrap();
+        assert_eq!(score(&actual), score(&expected));
+        assert_eq!(actual.schillinger_notes, expected.schillinger_notes);
+        assert_eq!(serde_json::to_value(&actual.notes).unwrap(), serde_json::to_value(&expected.notes).unwrap());
+        let repeated = try_render(&config, None, None).unwrap();
+        assert_eq!(actual.selected_scale_modes, repeated.selected_scale_modes);
+        assert_eq!(serde_json::to_value(&actual.notes).unwrap(), serde_json::to_value(&repeated.notes).unwrap());
+        // No other mode for the last visited bar improves the total score.
+        for mode in 0..7 {
+            let mut modes = actual.selected_scale_modes.clone();
+            modes[1] = mode;
+            let alternative = render_single(&config, None, None, &modes).unwrap();
+            assert!(score(&alternative) <= score(&actual));
+        }
+    }
+
+    #[test]
+    fn scale_search_is_opt_in_and_ignored_in_chromatic_mode() {
+        let mut config = Config {
+            schillinger_progression: false, pl: 1, render_length: 1,
+            beam_width: 1, lookahead_depth: 0, voice_rhythm: vec![4.0],
+            ..Config::default()
+        };
+        let mut old = serde_json::to_value(&config).unwrap();
+        old.as_object_mut().unwrap().remove("search_other_scales");
+        assert!(!serde_json::from_value::<Config>(old).unwrap().search_other_scales);
+        let baseline = try_render(&config, None, None).unwrap();
+        config.search_other_scales = true;
+        let actual = try_render(&config, None, None).unwrap();
+        assert!(actual.selected_scale_modes.is_empty());
+        assert_eq!(serde_json::to_value(&actual.notes).unwrap(), serde_json::to_value(&baseline.notes).unwrap());
     }
 
     /// Share of bass notes (channel 4) sitting on the bar's chord root.

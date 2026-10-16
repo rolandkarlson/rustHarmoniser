@@ -188,6 +188,7 @@ async fn generate_music(
         Json(json!({
             "status": "success",
             "message": completed.message,
+            "selected_scale_modes": completed.result.selected_scale_modes,
             "breakdown": completed.result.breakdown,
             "output": { "settings": completed.output, "preview": preview, "export": export },
         })),

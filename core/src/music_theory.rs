@@ -104,6 +104,29 @@ pub fn get_harmonic_score_adjusted(note_a: i32, note_b: i32) -> f64 {
 }
 
 
+/// Semitone offsets in scale-degree order. Keep gui/src/harmony.ts in sync.
+pub const DEFAULT_MODE_SCALES: [[i32; 7]; 7] = [
+    [0, 2, 4, 5, 7, 9, 11],
+    [0, 2, 3, 5, 7, 9, 10],
+    [0, 1, 3, 5, 7, 8, 10],
+    [0, 2, 4, 6, 7, 9, 11],
+    [0, 2, 4, 5, 7, 9, 10],
+    [0, 2, 3, 5, 7, 8, 10],
+    [0, 1, 3, 5, 6, 8, 10],
+];
+
+/// Resolve one mode slot, falling back safely for old or malformed configs.
+pub fn mode_scale(mode: i32, custom: Option<&[Vec<i32>]>) -> &[i32] {
+    let index = mode.rem_euclid(7) as usize;
+    custom.filter(|rows| rows.len() == 7)
+        .and_then(|rows| rows.get(index))
+        .filter(|row| !row.is_empty() && row.len() <= 12 && row[0] == 0
+            && row.iter().all(|pc| (0..12).contains(pc))
+            && row.windows(2).all(|pair| pair[0] < pair[1]))
+        .map(Vec::as_slice)
+        .unwrap_or(&DEFAULT_MODE_SCALES[index])
+}
+
 /// Pitch classes of `mode` (0 = Ionian … 6 = Locrian) built on `root`, returned
 /// in SCALE ORDER: index 0 is the tonic, index n is scale degree n+1.
 ///
@@ -145,6 +168,27 @@ pub fn generate_mode_from_steps(root: i32, mode: &i32) -> Vec<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_override_defaults_match_existing_step_rotation() {
+        for mode in 0..7 {
+            assert_eq!(mode_scale(mode, None), generate_mode_from_steps(0, &mode));
+        }
+    }
+
+    #[test]
+    fn mode_override_rejects_malformed_rows_without_losing_valid_edits() {
+        let mut rows: Vec<Vec<i32>> = DEFAULT_MODE_SCALES.iter().map(|row| row.to_vec()).collect();
+        rows[0] = vec![0, 2, 3, 5, 7, 8, 11];
+        for invalid in [vec![], vec![0, 2, 3, 5, 7, 8, 12],
+            vec![0, 2, 3, 5, 7, 7, 11], vec![1, 2, 3, 5, 7, 8, 11],
+            vec![0, 3, 2, 5, 7, 8, 11], vec![0, -1, 3, 5, 7, 8, 11]] {
+            rows[1] = invalid;
+            assert_eq!(mode_scale(1, Some(&rows)), DEFAULT_MODE_SCALES[1]);
+            assert_eq!(mode_scale(0, Some(&rows)), rows[0]);
+        }
+        assert_eq!(mode_scale(0, Some(&rows[..6])), DEFAULT_MODE_SCALES[0]);
+    }
 
     #[test]
     fn mode_starts_on_the_tonic_for_every_root() {

@@ -1,6 +1,6 @@
 use crate::contour::Contours;
 use crate::utils::{mod_shim, SeededRng};
-use crate::music_theory::{generate_mode_from_steps};
+use crate::music_theory::{mode_scale, DEFAULT_MODE_SCALES};
 use crate::model::Config;
 
 // PL was 8 in JS, now passed via Config
@@ -18,6 +18,21 @@ pub const CHORD_STRUCTURES: [&[i32]; 6] = [
     &[0, 1, 2, 3, 4, 5],
     &[0, 1, 2, 3, 4, 5, 6],
 ];
+
+/// Chord-member overrides keep member 0 first: the scoring layer uses it as
+/// the chord root. Invalid slots fall back without discarding other edits.
+fn chord_structure(config: &Config, index: usize) -> &[i32] {
+    let Some(default) = CHORD_STRUCTURES.get(index) else {
+        return &config.chord_structure;
+    };
+    config.chord_structures.as_ref().filter(|rows| rows.len() == 6)
+        .and_then(|rows| rows.get(index))
+        .filter(|row| !row.is_empty() && row.len() <= 7 && row[0] == 0
+            && row.iter().all(|member| (0..7).contains(member))
+            && row.windows(2).all(|pair| pair[0] < pair[1]))
+        .map(Vec::as_slice)
+        .unwrap_or(default)
+}
 
 /// Penultimate degree of each mode's characteristic cadence (the caller
 /// appends the tonic). Indexed by mode 0=Ionian … 6=Locrian.
@@ -276,6 +291,12 @@ pub fn gen_cadenced_progression(config: &Config) -> Vec<i32> {
 }
 
 pub fn gen_schillinger_progression(config: &Config, contours: &Contours) -> Vec<Vec<Vec<i32>>> {
+    gen_schillinger_progression_with_modes(config, contours, &[])
+}
+
+/// Per-render bar overrides let repeated occurrences of a progression chord
+/// choose different modes. Other harmonic controls keep their original cycle.
+pub fn gen_schillinger_progression_with_modes(config: &Config, contours: &Contours, modes: &[i32]) -> Vec<Vec<Vec<i32>>> {
 
     let generated;
     let seq: &Vec<i32> = if config.use_generated_progression {
@@ -287,7 +308,7 @@ pub fn gen_schillinger_progression(config: &Config, contours: &Contours) -> Vec<
     } else {
         &config.schillinger_sequence
     };
-    let bars = seq.len();
+    let bars = if modes.is_empty() { seq.len() } else { modes.len() };
 
     let mut per_voice: Vec<Vec<Vec<i32>>> = Vec::with_capacity(NUM_VOICES);
 
@@ -295,11 +316,11 @@ pub fn gen_schillinger_progression(config: &Config, contours: &Contours) -> Vec<
         let mut chord_notes = Vec::with_capacity(bars);
 
         for i in 0..bars {
-            let start_time = i as f64 * 4.0;
+            let start_time = (i % seq.len()) as f64 * 4.0;
 
-            let current_mode = contours.mode.as_ref()
+            let current_mode = modes.get(i).copied().unwrap_or_else(|| contours.mode.as_ref()
                 .map(|c| mod_shim(c.at(start_time).round() as i32, 7))
-                .unwrap_or(config.mode);
+                .unwrap_or(config.mode));
 
             let current_root = contours.root.as_ref()
                 .map(|c| mod_shim(c.at(start_time).round() as i32, 12))
@@ -310,13 +331,11 @@ pub fn gen_schillinger_progression(config: &Config, contours: &Contours) -> Vec<
                 .map(|v| v.round() as usize)
                 .unwrap_or(0);
 
-            let n_struct = if chord_idx < CHORD_STRUCTURES.len() {
-                CHORD_STRUCTURES[chord_idx]
-            } else {
-                &config.chord_structure
-            };
-
-            let scale = generate_mode_from_steps(current_root, &current_mode);
+            let n_struct = chord_structure(config, chord_idx);
+            let offsets = mode_scale(current_mode, config.mode_scales.as_deref());
+            let scale: Vec<i32> = offsets.iter()
+                .map(|pc| (current_root.rem_euclid(12) + pc).rem_euclid(12))
+                .collect();
             let ex = contours.schillinger_ex.as_ref()
                 .and_then(|vc| vc.at_strict(voice, start_time))
                 .map(|v| v.round() as i32)
@@ -331,7 +350,9 @@ pub fn gen_schillinger_progression(config: &Config, contours: &Contours) -> Vec<
             // minor otherwise never produces. Non-dominant bars keep the
             // natural subtonic (♭VII stays modal mid-phrase).
             let degree = seq[i as usize % seq.len()];
-            let raise_leading_tone = current_mode == 5 && mod_shim(degree, 7) == 4;
+            // Edited scales are literal; don't silently alter their seventh.
+            let raise_leading_tone = current_mode.rem_euclid(7) == 5
+                && offsets == DEFAULT_MODE_SCALES[5] && mod_shim(degree, 7) == 4;
             let notes: Vec<i32> = n_struct.iter().map(|&itm| {
                  let idx = mod_shim((itm * ex) + degree, scale.len() as i32) as usize;
                  let pc = scale[idx];
@@ -354,6 +375,98 @@ pub fn gen_schillinger_progression(config: &Config, contours: &Contours) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::music_theory::generate_mode_from_steps;
+
+    #[test]
+    fn custom_scales_wrap_degrees_and_expansion_at_their_actual_length() {
+        let mut config = Config {
+            root: 2, schillinger_sequence: vec![0, 6, -1],
+            mode_scales: Some(vec![vec![0, 2, 4, 7, 9]; 7]),
+            ..Config::default()
+        };
+        let contours = Contours::from_config(&config);
+        let pentatonic = gen_schillinger_progression(&config, &contours);
+        assert_eq!(pentatonic[0], vec![vec![2, 6, 11], vec![4, 9, 2], vec![11, 4, 9]]);
+        config.mode_scales = Some(vec![vec![0, 2, 3, 5, 6, 8, 9, 11]; 7]);
+        let octatonic = gen_schillinger_progression(&config, &contours);
+        assert_eq!(octatonic[0], vec![vec![2, 5, 8], vec![11, 2, 5], vec![1, 4, 7]]);
+        config.mode_scales = Some(vec![vec![0]; 7]);
+        assert!(gen_schillinger_progression(&config, &contours).iter().flatten()
+            .all(|chord| chord == &vec![2, 2, 2]));
+    }
+
+    #[test]
+    fn custom_tables_follow_mode_root_chord_and_expansion_contours() {
+        let mut scales: Vec<Vec<i32>> = DEFAULT_MODE_SCALES.iter().map(|row| row.to_vec()).collect();
+        scales[0] = vec![0, 2, 3, 5, 7, 8, 11];
+        let mut chords: Vec<Vec<i32>> = CHORD_STRUCTURES.iter().map(|row| row.to_vec()).collect();
+        chords[0] = vec![0, 1, 3];
+        chords[1] = vec![0, 2];
+        let config = Config {
+            schillinger_sequence: vec![0, 1],
+            mode_scales: Some(scales), chord_structures: Some(chords),
+            mode_contour: Some(vec![0.0, 1.0]), root_contour: Some(vec![2.0, 7.0]),
+            chord_structure_contour: Some(vec![vec![0.0, 1.0], vec![1.0, 0.0]]),
+            schillinger_ex_contour: Some(vec![vec![2.0, 1.0], vec![1.0, 2.0]]),
+            ..Config::default()
+        };
+        let contours = Contours::from_config(&config);
+        let notes = gen_schillinger_progression(&config, &contours);
+        assert_eq!(notes[0], vec![vec![2, 5, 1], vec![9, 0]]);
+        assert_eq!(notes[1], vec![vec![2, 5], vec![9, 0, 7]]);
+        // Scale search uses the same custom tables, including repeated bars.
+        let searched = gen_schillinger_progression_with_modes(&config, &contours, &[0, 0, 0]);
+        assert_eq!(searched[0][1], vec![9, 0]);
+        assert_eq!(searched[1][1], vec![9, 0, 7]);
+        assert_eq!(searched[0][2], notes[0][0]);
+    }
+
+    #[test]
+    fn custom_aeolian_is_literal_but_default_keeps_dominant_inflection() {
+        let mut config = Config { mode: 5, schillinger_sequence: vec![4], ..Config::default() };
+        let contours = Contours::from_config(&config);
+        assert_eq!(gen_schillinger_progression(&config, &contours)[0][0], vec![7, 11, 2]);
+        let mut scales: Vec<Vec<i32>> = DEFAULT_MODE_SCALES.iter().map(|row| row.to_vec()).collect();
+        scales[5] = vec![0, 2, 3, 6, 7, 8, 10];
+        config.mode_scales = Some(scales);
+        assert_eq!(gen_schillinger_progression(&config, &contours)[0][0], vec![7, 10, 2]);
+    }
+
+    #[test]
+    fn invalid_chord_slots_fall_back_and_old_configs_still_load() {
+        let mut config = Config::default();
+        let mut chords: Vec<Vec<i32>> = CHORD_STRUCTURES.iter().map(|row| row.to_vec()).collect();
+        chords[0] = vec![0, 3];
+        for invalid in [vec![], vec![1, 2], vec![0, 7], vec![0, -1], vec![0, 2, 2], vec![0, 3, 1]] {
+            chords[1] = invalid;
+            config.chord_structures = Some(chords.clone());
+            assert_eq!(chord_structure(&config, 0), &[0, 3]);
+            assert_eq!(chord_structure(&config, 1), CHORD_STRUCTURES[1]);
+        }
+        config.chord_structures = Some(vec![vec![0]]);
+        assert_eq!(chord_structure(&config, 0), CHORD_STRUCTURES[0]);
+        assert_eq!(chord_structure(&config, 99), config.chord_structure);
+
+        config.mode_scales = Some(DEFAULT_MODE_SCALES.iter().map(|row| row.to_vec()).collect());
+        config.mode_scales.as_mut().unwrap()[0] = vec![0, 2, 4, 7, 9];
+        config.chord_structures = Some(chords);
+        let mut saved = serde_json::to_value(&config).unwrap();
+        let restored: Config = serde_json::from_value(saved.clone()).unwrap();
+        assert_eq!(restored.mode_scales, config.mode_scales);
+        assert_eq!(restored.chord_structures, config.chord_structures);
+        saved.as_object_mut().unwrap().remove("mode_scales");
+        saved.as_object_mut().unwrap().remove("chord_structures");
+        let old: Config = serde_json::from_value(saved).unwrap();
+        assert!(old.mode_scales.is_none() && old.chord_structures.is_none());
+    }
+
+    #[test]
+    fn mode_overrides_allow_different_scales_on_repeated_chord_blocks() {
+        let config = Config { schillinger_sequence: vec![0], root: 2, ..Config::default() };
+        let contours = Contours::from_config(&config);
+        let notes = gen_schillinger_progression_with_modes(&config, &contours, &[0, 5, 0]);
+        assert_eq!(notes[0], vec![vec![2, 6, 9], vec![2, 5, 9], vec![2, 6, 9]]);
+    }
 
     fn cfg(pl: i32, render_length: i32, mode: i32) -> Config {
         Config { pl, render_length, mode, use_generated_progression: true, ..Config::default() }

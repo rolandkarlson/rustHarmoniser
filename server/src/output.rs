@@ -280,10 +280,20 @@ pub fn run_render(
             String::new()
         }
     };
+    let scale_message = if config.schillinger_progression && config.search_other_scales {
+        let names = ["Ionian", "Dorian", "Phrygian", "Lydian", "Mixolydian", "Aeolian", "Locrian"];
+        let chosen = result.selected_scale_modes.iter().enumerate()
+            .map(|(bar, &mode)| format!("{}: {}", bar + 1, names[mode as usize]))
+            .collect::<Vec<_>>().join(", ");
+        format!(" — scales by bar: {chosen}")
+    } else {
+        String::new()
+    };
     let message = format!(
-        "Generated {} notes in {:?}{}",
+        "Generated {} notes in {:?}{}{}",
         result.notes.len(),
         start_time.elapsed(),
+        scale_message,
         archived
     );
     Ok(CompletedRender {
@@ -312,7 +322,7 @@ pub fn archive_render(
     let doc = serde_json::json!({
         "timestamp_unix_ms": ts,
         "input": { "config": config, "leading": leading.map(|l| serde_json::json!({"notes": l.notes, "clip_length": l.clip_length})), "output_settings": output },
-        "output": { "note_count": result.notes.len(), "notes": result.notes, "breakdown": result.breakdown, "clips": clips, "clip_plan_error": output_error },
+        "output": { "note_count": result.notes.len(), "notes": result.notes, "breakdown": result.breakdown, "selected_scale_modes": result.selected_scale_modes, "clips": clips, "clip_plan_error": output_error },
     });
     let mut file = File::create(&path)?;
     file.write_all(serde_json::to_string_pretty(&doc)?.as_bytes())?;
@@ -1039,6 +1049,7 @@ mod tests {
         let o = settings(OutputRoute::default());
         let clips = plan_clips(&notes(), &c, &o).unwrap();
         let result = RenderResult {
+            selected_scale_modes: vec![],
             notes: notes(),
             breakdown: vec![],
             schillinger_notes: vec![],

@@ -44,6 +44,10 @@ impl FugueTransformation {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     pub schillinger_progression: bool,
+    /// Try all seven modes for each chord bar, retaining changes that improve
+    /// the total render score. The existing root and degree sequence are kept.
+    #[serde(default)]
+    pub search_other_scales: bool,
     pub last_note_exist_in_voice: f64,
     pub same_direction: f64,
     pub consecutive_octav_fift: f64,
@@ -102,6 +106,15 @@ pub struct Config {
     /// None falls back to the built-in default in harmonizer::HARMONY_MATRIX.
     #[serde(default)]
     pub harmony_matrix: Option<Vec<Vec<f64>>>,
+    /// Seven mode slots, each with 1–12 ascending semitone offsets from the
+    /// tonic (0 first, all in 0..12). Missing/malformed rows use built-in modes.
+    #[serde(default)]
+    pub mode_scales: Option<Vec<Vec<i32>>>,
+    /// Six chord slots, each with ascending member indices in 0..7, starting
+    /// at 0. Indices are multiplied by the expansion before indexing the mode.
+    /// Missing/malformed rows use the built-in chord structures.
+    #[serde(default)]
+    pub chord_structures: Option<Vec<Vec<i32>>>,
     pub main_pitch: i32,
     #[serde(default)]
     pub use_floor: bool,
@@ -441,6 +454,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             schillinger_progression: true,
+            search_other_scales: false,
             // Rescaled for the normalized ([-1,1]) harmony/distance scoring.
             last_note_exist_in_voice: 1.0,
             same_direction: 1.0,
@@ -470,6 +484,8 @@ impl Default for Config {
             harmony_matrix_contour: None,
             melody_force_contour: None,
             harmony_matrix: None,
+            mode_scales: None,
+            chord_structures: None,
             main_pitch: 0,
             use_floor: false,
             use_ceiling: false,

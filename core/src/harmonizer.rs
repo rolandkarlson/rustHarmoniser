@@ -529,8 +529,12 @@ impl HarmonizerState {
     /// Schillinger progression, so call it at the same point in the seeded RNG
     /// stream the progression was always drawn at (after voice generation).
     pub fn new(config: &Config, contours: Contours) -> Self {
+        Self::with_modes(config, contours, &[])
+    }
+
+    pub fn with_modes(config: &Config, contours: Contours, modes: &[i32]) -> Self {
         HarmonizerState {
-            schillinger_notes: crate::schillinger::gen_schillinger_progression(config, &contours),
+            schillinger_notes: crate::schillinger::gen_schillinger_progression_with_modes(config, &contours, modes),
             contours,
             harmony_matrix: config.harmony_matrix.clone(),
             fixed_notes: FixedNoteConstraints::default(),
@@ -622,9 +626,10 @@ fn get_schillinger_scale(current_note: &Note, state: &HarmonizerState, config: &
             if current_note.channel == config.bass_voice {
                 vec![notes[0]]
             } else if current_note.channel == config.soprano_voice {
-                vec![notes[2]]
+                // Custom chord slots may contain only one or two members.
+                notes.get(2).or_else(|| notes.last()).copied().into_iter().collect()
             } else {
-                vec![notes[0], notes[1], notes[2]]
+                notes.iter().take(3).copied().collect()
             }
         } else if current_note.channel == config.bass_voice {
             vec![notes[0]]
@@ -3155,6 +3160,27 @@ mod tests {
     }
 
     // ----- get_modular_bound (tintinnabuli bound, pc-space semantics) -----
+
+    #[test]
+    fn resolve_supports_custom_one_and_two_member_chords() {
+        for members in [vec![0], vec![0, 2]] {
+            let mut config = Config {
+                use_resolve: true, schillinger_sequence: vec![0],
+                ..Config::default()
+            };
+            let mut structures: Vec<Vec<i32>> = crate::schillinger::CHORD_STRUCTURES.iter()
+                .map(|row| row.to_vec()).collect();
+            structures[0] = members.clone();
+            config.chord_structures = Some(structures);
+            let state = HarmonizerState::new(&config, Contours::from_config(&config));
+            for channel in 0..5 {
+                let note = Note::new(60, 0.0, 4.0, 80, 1, channel);
+                let scale = get_schillinger_scale(&note, &state, &config, vec![]);
+                assert!(!scale.is_empty());
+                assert!(scale.iter().all(|pc| if members.len() == 1 { *pc == 0 } else { [0, 7].contains(pc) }));
+            }
+        }
+    }
 
     #[test]
     fn modular_bound_snaps_to_nearest_anchor() {

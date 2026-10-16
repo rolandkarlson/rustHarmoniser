@@ -8,6 +8,7 @@ interface ContourEditorProps {
   yMax: number;
   xMax: number;
   resolution: number;
+  /** Phrase length in bars (four beats each), independent of grid resolution. */
   pl: number;
   snaps?: number[];
   /** Continuous snap granularity (e.g. 0.01). When set, values quantize to this
@@ -245,12 +246,41 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
   // Generate grid with X-axis quantization (note / halfbar / bar)
   const gridLines: React.ReactNode[] = [];
   const barBackgrounds: React.ReactNode[] = [];
+  const phraseBackgrounds: React.ReactNode[] = [];
+  const phraseEndLines: React.ReactNode[] = [];
+  const phraseLabels: React.ReactNode[] = [];
   const xLabels: React.ReactNode[] = [];
 
   const gridSpacingBeats = xQuantize === 'bar' ? 4 : xQuantize === 'halfbar' ? 2 : resolution;
-  const phraseBeats = pl * resolution;
+  const phraseBeats = pl * 4;
   const visibleGridPoints = (xMax / gridSpacingBeats) / zoom;
   const showAllLabels = visibleGridPoints < 50;
+
+  // Keep phrase endings fixed in musical time, even when a grid step spans
+  // a boundary. Draw the lines above the contour so filled cells cannot hide them.
+  if (Number.isFinite(phraseBeats) && phraseBeats > 0 && Number.isFinite(xMax) && xMax > 0) {
+    const phraseCount = Math.floor(xMax / phraseBeats);
+    for (let phrase = 1; phrase <= phraseCount; phrase++) {
+      const endBeat = phrase * phraseBeats;
+      const endX = endBeat / xMax * 100;
+      const finalBarX = (endBeat - Math.min(4, phraseBeats)) / xMax * 100;
+      phraseBackgrounds.push(
+        <rect key={`phrase-bg-${phrase}`} x={finalBarX} y="0" width={endX - finalBarX} height="100" fill="rgba(251,191,36,0.12)" />
+      );
+      phraseEndLines.push(
+        <line key={`phrase-end-${phrase}`} x1={endX} y1="0" x2={endX} y2="100" stroke="#fbbf24" strokeWidth="2" strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+      );
+      phraseLabels.push(
+        <div
+          key={`phrase-label-${phrase}`}
+          className="absolute bottom-5 overflow-hidden whitespace-nowrap text-right text-[10px] font-semibold text-amber-300 px-1"
+          style={{ left: `${(endBeat - phraseBeats) / xMax * 100}%`, width: `${phraseBeats / xMax * 100}%` }}
+        >
+          <span className="rounded bg-slate-950/80 px-1">P{phrase} end</span>
+        </div>
+      );
+    }
+  }
 
   // Alternating bar shading so the current bar is visible at any zoom on long pieces
   const totalBars = Math.ceil(xMax / 4);
@@ -268,11 +298,7 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
     const isPhrase = phraseBeats > 0 && xBeats > 0 && Math.abs(xBeats % phraseBeats) < 0.001;
     const isBar = xBeats > 0 && Math.abs(xBeats % 4) < 0.001;
 
-    if (isPhrase) {
-      gridLines.push(
-        <line key={`grid-x-phrase-${xBeats}`} x1={px} y1="0" x2={px} y2="100" stroke="#475569" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-      );
-    } else if (isBar) {
+    if (isBar) {
       gridLines.push(
         <line key={`grid-x-bar-${xBeats}`} x1={px} y1="0" x2={px} y2="100" stroke="#475569" strokeWidth="0.75" vectorEffect="non-scaling-stroke" />
       );
@@ -296,7 +322,7 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
 
     if (xBeats === 0 || isPhrase || (showAllLabels && xBeats > 0)) {
       xLabels.push(
-        <div key={`x-label-${xBeats}`} className={`absolute bottom-0 -translate-x-1/2 text-[10px] whitespace-nowrap select-none ${isPhrase ? 'text-slate-300 font-bold' : isBar ? 'text-slate-400' : 'text-slate-500'}`} style={{ left: `${px}%` }}>
+        <div key={`x-label-${xBeats}`} className={`absolute bottom-0 -translate-x-1/2 text-[10px] whitespace-nowrap select-none ${isPhrase ? 'text-amber-300 font-bold' : isBar ? 'text-slate-400' : 'text-slate-500'}`} style={{ left: `${px}%` }}>
           {labelText}
         </div>
       );
@@ -360,8 +386,14 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
 
   return (
     <div className="flex flex-col gap-2 w-full h-full select-none min-h-0">
-      <div className="flex justify-between items-center text-sm font-semibold text-slate-300 shrink-0">
+      <div className="flex flex-wrap justify-between items-center gap-2 text-sm font-semibold text-slate-300 shrink-0">
         <span>{label}</span>
+        {phraseEndLines.length > 0 && (
+          <span className="flex items-center gap-1.5 text-xs text-amber-300 font-normal" title="The amber band marks the final bar of each phrase; the dashed line marks its end.">
+            <span aria-hidden="true" className="inline-block h-3 w-4 bg-amber-400/15 border-r-2 border-dashed border-amber-400" />
+            Phrase end · every {pl} {pl === 1 ? 'bar' : 'bars'}
+          </span>
+        )}
         <span className="text-xs text-slate-500 font-normal bg-slate-900 border border-slate-700 px-2 py-0.5 rounded">
           {stepString}
         </span>
@@ -421,9 +453,14 @@ export const ContourEditor: React.FC<ContourEditorProps> = ({
               <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
                 {barBackgrounds}
                 {gridLines}
+                {phraseBackgrounds}
                 {highlightRects}
                 {contourBoxes}
+                {phraseEndLines}
               </svg>
+              <div className="absolute inset-0 pointer-events-none">
+                {phraseLabels}
+              </div>
               
               {/* X Axis DAW formatting overlaying bottom grid */}
               <div className="absolute bottom-0 w-full h-5 pointer-events-none opacity-50 group-hover:opacity-100 transition-opacity">
